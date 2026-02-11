@@ -1,9 +1,6 @@
-text
-
-# Zora
-
 ![Zora LCARS Header](specs/v5/assets/zora_lcars_header.png)
 
+# Zora
 **A long-running, autonomous AI agent for macOS.**
 
 Zora gets shit done. It executes complex, multi-step tasks without constant permission prompts, using Claude as its primary brain and Gemini as a secondary/failover engine. No chatbot UI. No cloud transcripts. Just a local agent that works for you like a tireless, trusted employee.
