@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="28" viewBox="0 0 1200 28" role="img" aria-label="LCARS divider">
+  <rect width="1200" height="28" fill="none"/>
+  <rect x="0" y="11" width="520" height="6" rx="3" fill="#24C7C0"/>
+  <rect x="540" y="11" width="320" height="6" rx="3" fill="#7FE7FF"/>
+  <rect x="880" y="11" width="200" height="6" rx="3" fill="#F2A84A"/>
+  <circle cx="1120" cy="14" r="6" fill="#24C7C0"/>
+  <circle cx="1144" cy="14" r="5" fill="#7FE7FF"/>
+  <circle cx="1166" cy="14" r="4" fill="#F2A84A"/>
+</svg>

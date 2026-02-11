@@ -8,6 +8,8 @@ Zora gets shit done. It executes complex, multi-step tasks without constant perm
 
 ---
 
+![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+
 ## What Makes Zora Different
 
 | Feature | Zora | OpenClaw | Nanobot |
@@ -60,7 +62,7 @@ pnpm zora status
 pnpm zora routine create --file examples/routines/content-pipeline.toml
 ```
 
-See [docs/QUICK_START.md](docs/QUICK_START.md) for the full setup guide.
+See [specs/v5/docs/QUICK_START.md](specs/v5/docs/QUICK_START.md) for the full setup guide.
 
 ## Architecture
 
@@ -83,13 +85,16 @@ See [docs/QUICK_START.md](docs/QUICK_START.md) for the full setup guide.
 └───────────────────────────────────────────────┘
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design with diagrams.
+See [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) for the full system design with diagrams.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [ZORA_AGENT_SPEC.md](ZORA_AGENT_SPEC.md) | Full technical specification (start here for deep understanding) |
-| [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | WSJF-prioritized build plan with realistic time estimates |
-| [docs/QUICK_START.md](docs/QUICK_START.md) | 5-minute setup guide |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture with M
+| [specs/v5/ZORA_AGENT_SPEC.md](specs/v5/ZORA_AGENT_SPEC.md) | Full technical specification (start here for deep understanding) |
+| [specs/v5/IMPLEMENTATION_PLAN.md](specs/v5/IMPLEMENTATION_PLAN.md) | WSJF-prioritized build plan with realistic time estimates |
+| [specs/v5/docs/QUICK_START.md](specs/v5/docs/QUICK_START.md) | 5-minute setup guide |
+| [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) | System architecture overview |
+| [specs/v5/docs/SECURITY_DEFAULTS.md](specs/v5/docs/SECURITY_DEFAULTS.md) | Security defaults and safe policy baseline |
+| [specs/v5/docs/CONFIGURATION.md](specs/v5/docs/CONFIGURATION.md) | Config and provider registry reference |
+| [specs/v5/docs/POLICY_REFERENCE.md](specs/v5/docs/POLICY_REFERENCE.md) | Capability policy reference |
