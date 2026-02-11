@@ -1,0 +1,72 @@
+# OS / editor
+.DS_Store
+.DS_Store?
+.Spotlight-V100
+.Trashes
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Node / JS
+node_modules/
+.pnpm-store/
+.pnp/
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# Build artifacts
+/dist/
+/build/
+/out/
+/coverage/
+/.turbo/
+/.cache/
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.*
+.envrc
+.direnv/
+
+# Secrets / credentials
+secrets/
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdb
+*.crt
+*.csr
+*.der
+*.gpg
+*.asc
+*.age
+
+# Cloud / auth creds
+.aws/
+.gcloud/
+.azure/
+
+# Zora local state (never commit)
+.zora/
+state/
+/tmp/
+
+# Test artifacts
+/tmp/
+/test-results/
+/playwright-report/
