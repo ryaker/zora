@@ -29,11 +29,17 @@ export class MemoryManager {
     await fs.mkdir(dailyNotesDir, { recursive: true, mode: 0o700 });
     
     const longTermFile = this._getLongTermPath();
+    const longTermDir = path.dirname(longTermFile);
+    await fs.mkdir(longTermDir, { recursive: true, mode: 0o700 });
+
     try {
-      await fs.access(longTermFile);
-    } catch {
       const defaultContent = '# Zora Long-term Memory\n\n- No persistent memories yet.\n';
-      await fs.writeFile(longTermFile, defaultContent, { mode: 0o600 });
+      // Use 'wx' to atomically fail if the file already exists (preventing race conditions)
+      await fs.writeFile(longTermFile, defaultContent, { mode: 0o600, flag: 'wx' });
+    } catch (err: any) {
+      if (err.code !== 'EEXIST') {
+        throw err;
+      }
     }
   }
 
@@ -66,28 +72,45 @@ export class MemoryManager {
     
     try {
       await fs.appendFile(filePath, entry, { mode: 0o600 });
-    } catch {
-      await fs.writeFile(filePath, `# Daily Notes: ${today}\n${entry}`, { mode: 0o600 });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        // Create file with header if it doesn't exist
+        await fs.writeFile(filePath, `# Daily Notes: ${today}\n${entry}`, { mode: 0o600 });
+      } else {
+        throw err;
+      }
     }
   }
 
+  private _resolvePath(p: string): string {
+    if (p.startsWith('~/')) {
+      return path.join(os.homedir(), p.slice(2));
+    }
+    return p;
+  }
+
   private _getLongTermPath(): string {
-    return path.isAbsolute(this._config.long_term_file)
-      ? this._config.long_term_file
-      : path.join(this._baseDir, this._config.long_term_file);
+    const resolved = this._resolvePath(this._config.long_term_file);
+    return path.isAbsolute(resolved)
+      ? resolved
+      : path.join(this._baseDir, resolved);
   }
 
   private _getDailyNotesPath(): string {
-    return path.isAbsolute(this._config.daily_notes_dir)
-      ? this._config.daily_notes_dir
-      : path.join(this._baseDir, this._config.daily_notes_dir);
+    const resolved = this._resolvePath(this._config.daily_notes_dir);
+    return path.isAbsolute(resolved)
+      ? resolved
+      : path.join(this._baseDir, resolved);
   }
 
   private async _readLongTerm(): Promise<string | null> {
     try {
       return await fs.readFile(this._getLongTermPath(), 'utf8');
-    } catch {
-      return null;
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        return null;
+      }
+      throw err;
     }
   }
 
@@ -107,7 +130,11 @@ export class MemoryManager {
         const content = await fs.readFile(path.join(dir, file), 'utf8');
         notes.push(`--- ${file} ---\n${content}`);
       }
-    } catch {}
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        throw err;
+      }
+    }
 
     return notes;
   }
