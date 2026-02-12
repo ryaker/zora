@@ -15,18 +15,14 @@ export class NotificationTools {
    * Sends a macOS native notification using AppleScript.
    */
   async notify(title: string, message: string): Promise<void> {
-    // To prevent AppleScript injection, we must escape backslashes first, then double quotes.
-    // In AppleScript strings, a quote is escaped as \" and a backslash as \\.
-    const escapeForAppleScript = (str: string) => 
-      str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-    const escapedTitle = escapeForAppleScript(title);
-    const escapedMessage = escapeForAppleScript(message);
-    
-    const script = `display notification "${escapedMessage}" with title "Zora" subtitle "${escapedTitle}"`;
+    // Safer approach: pass strings as arguments to the script
+    // This avoids manual escaping and prevents injection.
+    const script = 'on run argv\n' +
+                   '  display notification (item 2 of argv) with title "Zora" subtitle (item 1 of argv)\n' +
+                   'end run';
     
     try {
-      await execFileAsync('osascript', ['-e', script]);
+      await execFileAsync('osascript', ['-e', script, title, message]);
     } catch (err) {
       // If notification fails (e.g. not on macOS or headless), we log to console
       console.log(`[Notification] ${title}: ${message}`);
