@@ -64,6 +64,13 @@ describe('FilesystemTools', () => {
       expect(result.success).toBe(true);
       expect(fs.writeFileSync).toHaveBeenCalled();
     });
+
+    it('denies writing to critical system files', () => {
+      const result = tools.writeFile('/tmp/allowed/config.toml', 'malicious config');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('critical system file');
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
   });
 
   describe('editFile', () => {

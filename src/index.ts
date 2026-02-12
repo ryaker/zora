@@ -11,3 +11,4 @@ export * from './config/index.js';
 export * from './security/policy-engine.js';
 export * from './tools/index.js';
 export * from './orchestrator/index.js';
+export * from './utils/fs.js';
