@@ -79,6 +79,11 @@ export const DEFAULT_STEERING: SteeringConfig = {
   flag_timeout: '10m',
   auto_approve_low_risk: true,
   always_flag_irreversible: true,
+  telegram: {
+    enabled: false,
+    allowed_users: [],
+    rate_limit_per_min: 20
+  }
 };
 
 export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
