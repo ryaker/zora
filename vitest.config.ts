@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     root: '.',
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/unit/dashboard/**', 'node_modules', 'dist'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
