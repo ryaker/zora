@@ -26,6 +26,12 @@ export interface ExecutionLoopOptions {
   maxTurns?: number;
 }
 
+interface ToolCallContent {
+  tool: string;
+  arguments: Record<string, any>;
+  toolCallId: string;
+}
+
 export class ExecutionLoop {
   private readonly _provider: LLMProvider;
   private readonly _engine: PolicyEngine;
@@ -34,6 +40,9 @@ export class ExecutionLoop {
   private readonly _shellTools: ShellTools;
   private readonly _webTools: WebTools;
   private readonly _maxTurns: number;
+
+  /** Map of tool names to their handler functions for scalable dispatch */
+  private readonly _toolHandlers: Map<string, (args: any) => any>;
 
   constructor(options: ExecutionLoopOptions) {
     this._provider = options.provider;
@@ -45,6 +54,16 @@ export class ExecutionLoop {
     this._fsTools = new FilesystemTools(this._engine);
     this._shellTools = new ShellTools(this._engine);
     this._webTools = new WebTools();
+
+    // Register tool handlers (Spec §5.3)
+    this._toolHandlers = new Map<string, (args: any) => any>([
+      ['read_file', (args) => this._fsTools.readFile(args.path)],
+      ['write_file', (args) => this._fsTools.writeFile(args.path, args.content)],
+      ['edit_file', (args) => this._fsTools.editFile(args.path, args.oldString, args.newString)],
+      ['list_directory', (args) => this._fsTools.listDirectory(args.path)],
+      ['shell_exec', (args) => this._shellTools.execute(args.command)],
+      ['web_fetch', (args) => this._webTools.fetch(args.url)],
+    ] as [string, (args: any) => any][]);
   }
 
   /**
@@ -54,26 +73,21 @@ export class ExecutionLoop {
     let turnCount = 0;
     const maxTurns = task.maxTurns ?? this._maxTurns;
 
-    // The execution is handled by the provider's execute generator
-    // which yields events (thinking, text, tool_call, tool_result, error, done).
-    // The ExecutionLoop's job is to intercept tool_calls, run them, and feed
-    // results back to the provider if it's an interactive multi-turn provider.
-    
-    // NOTE: For v1, we assume the provider (Claude SDK) handles its own
-    // internal tool loop if it's an embedded agent.
-    // However, for consistency with the spec, we track and persist everything.
-
     try {
       for await (const event of this._provider.execute(task)) {
         // 1. Persist the event
         await this._sessionManager.appendEvent(task.jobId, event);
 
-        // 2. Handle specific event types if needed
+        // 2. Handle specific event types
         if (event.type === 'tool_call') {
-          // If the provider expects us to execute the tool (standard multi-turn)
-          // we would do it here. The Claude SDK handles this internally, 
-          // but other providers (Gemini CLI) might not.
+          // A tool call represents a significant agentic action, count it as a turn
+          turnCount++;
           await this._handleToolCall(task.jobId, event);
+        }
+
+        if (event.type === 'text') {
+          // A text response is a logical turn
+          turnCount++;
         }
 
         if (event.type === 'done') {
@@ -84,12 +98,11 @@ export class ExecutionLoop {
           break;
         }
 
-        turnCount++;
         if (turnCount >= maxTurns) {
           await this._sessionManager.appendEvent(task.jobId, {
             type: 'error',
             timestamp: new Date(),
-            content: { message: 'Maximum turns exceeded' },
+            content: { message: `Maximum turns exceeded (${maxTurns})` },
           });
           break;
         }
@@ -108,31 +121,17 @@ export class ExecutionLoop {
    * Dispatches a tool call to the appropriate tool implementation.
    */
   private async _handleToolCall(jobId: string, event: AgentEvent): Promise<void> {
-    const { tool, arguments: args, toolCallId } = event.content as any;
+    const content = event.content as ToolCallContent;
+    const { tool, arguments: args, toolCallId } = content;
+    
     let result: any;
 
     try {
-      switch (tool) {
-        case 'read_file':
-          result = this._fsTools.readFile(args.path);
-          break;
-        case 'write_file':
-          result = this._fsTools.writeFile(args.path, args.content);
-          break;
-        case 'edit_file':
-          result = this._fsTools.editFile(args.path, args.oldString, args.newString);
-          break;
-        case 'list_directory':
-          result = this._fsTools.listDirectory(args.path);
-          break;
-        case 'shell_exec':
-          result = this._shellTools.execute(args.command);
-          break;
-        case 'web_fetch':
-          result = await this._webTools.fetch(args.url);
-          break;
-        default:
-          result = { success: false, error: `Unknown tool: ${tool}` };
+      const handler = this._toolHandlers.get(tool);
+      if (handler) {
+        result = await handler(args);
+      } else {
+        result = { success: false, error: `Unknown tool: ${tool}` };
       }
 
       // Record the result
@@ -149,7 +148,7 @@ export class ExecutionLoop {
       await this._sessionManager.appendEvent(jobId, {
         type: 'error',
         timestamp: new Date(),
-        content: { message: `Tool execution failed: ${msg}` },
+        content: { message: `Tool execution failed (${tool}): ${msg}` },
       });
     }
   }

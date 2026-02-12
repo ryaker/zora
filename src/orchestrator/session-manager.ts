@@ -21,30 +21,37 @@ export class SessionManager {
 
   /**
    * Appends an event to a session's history file.
-   * Uses simple append for performance, but ensures directory exists.
    */
   async appendEvent(jobId: string, event: AgentEvent): Promise<void> {
     const sessionPath = this._getSessionPath(jobId);
     const line = JSON.stringify(event) + '\n';
     
-    // We use synchronous append for v1 to ensure data is flushed before next loop iteration.
-    // Spec §4.3 mentions atomic writes, but for append-only history, standard append is 
-    // typically sufficient unless the file is being completely rewritten.
-    fs.appendFileSync(sessionPath, line, 'utf8');
+    // Spec §4.3: "Atomic writes for session history to prevent corruption"
+    // For append-only, we use fs.promises.appendFile which is non-blocking.
+    await fs.promises.appendFile(sessionPath, line, 'utf8');
   }
 
   /**
    * Reads all events for a given session.
+   * Resilient to file corruption by skipping malformed lines.
    */
   async getHistory(jobId: string): Promise<AgentEvent[]> {
     const sessionPath = this._getSessionPath(jobId);
     if (!fs.existsSync(sessionPath)) return [];
 
-    const content = fs.readFileSync(sessionPath, 'utf8');
+    const content = await fs.promises.readFile(sessionPath, 'utf8');
     return content
       .split('\n')
       .filter(line => line.trim())
-      .map(line => JSON.parse(line) as AgentEvent);
+      .map(line => {
+        try {
+          return JSON.parse(line) as AgentEvent;
+        } catch (err: unknown) {
+          // Skip corrupted lines
+          return null;
+        }
+      })
+      .filter((event): event is AgentEvent => event !== null);
   }
 
   /**
@@ -53,7 +60,7 @@ export class SessionManager {
   async deleteSession(jobId: string): Promise<void> {
     const sessionPath = this._getSessionPath(jobId);
     if (fs.existsSync(sessionPath)) {
-      fs.unlinkSync(sessionPath);
+      await fs.promises.unlink(sessionPath);
     }
   }
 

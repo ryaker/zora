@@ -45,6 +45,23 @@ describe('SessionManager', () => {
     expect(new Date(history[0]!.timestamp).toISOString()).toBe(event.timestamp.toISOString());
   });
 
+  it('skips corrupted lines in history', async () => {
+    const sessionPath = path.join(testDir, 'sessions', 'corrupt-job.jsonl');
+    const validEvent = { type: 'text', timestamp: new Date(), content: { text: 'valid' } };
+    
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, 
+      JSON.stringify(validEvent) + '\n' + 
+      '{"invalid": json}\n' + 
+      JSON.stringify(validEvent) + '\n'
+    );
+
+    const history = await manager.getHistory('corrupt-job');
+    expect(history).toHaveLength(2);
+    expect(history[0]!.content).toEqual({ text: 'valid' });
+    expect(history[1]!.content).toEqual({ text: 'valid' });
+  });
+
   it('handles non-existent sessions gracefully', async () => {
     const history = await manager.getHistory('ghost-job');
     expect(history).toEqual([]);
@@ -54,7 +71,7 @@ describe('SessionManager', () => {
     const event: AgentEvent = { type: 'done', timestamp: new Date(), content: {} };
     await manager.appendEvent('../../etc/passwd', event);
     
-    const sessions = fs.readdirSync(path.join(testDir, 'sessions'));
+    const sessions = await fs.promises.readdir(path.join(testDir, 'sessions'));
     expect(sessions[0]).not.toContain('..');
     expect(sessions[0]).toBe('______etc_passwd.jsonl');
   });
