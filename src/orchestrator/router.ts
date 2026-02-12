@@ -41,13 +41,13 @@ export class Router {
   async selectProvider(task: TaskContext): Promise<LLMProvider> {
     // 1. Handle explicit overrides
     if (this._mode === 'provider_only' && this._providerOnlyName) {
-      const fixed = this._providers.find((p) => p.name === this._providerOnlyName);
-      if (fixed && (await fixed.isAvailable())) return fixed;
+      const fixed = await this._findAvailableProviderByName(this._providerOnlyName);
+      if (fixed) return fixed;
     }
 
     if (task.modelPreference) {
-      const preferred = this._providers.find((p) => p.name === task.modelPreference);
-      if (preferred && (await preferred.isAvailable())) return preferred;
+      const preferred = await this._findAvailableProviderByName(task.modelPreference);
+      if (preferred) return preferred;
     }
 
     // 2. Map task classification to required capabilities
