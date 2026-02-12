@@ -13,6 +13,7 @@ import { loadConfig } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
 import { SteeringManager } from '../steering/steering-manager.js';
+import { MemoryManager } from '../memory/memory-manager.js';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import type { TaskContext, ZoraPolicy } from '../types.js';
@@ -67,6 +68,9 @@ async function setupContext() {
   const sessionManager = new SessionManager(configDir);
   const steeringManager = new SteeringManager(configDir);
   await steeringManager.init();
+
+  const memoryManager = new MemoryManager(config.memory, configDir);
+  await memoryManager.init();
   
   // Pick the primary provider (Claude for now)
   const claudeConfig = config.providers.find(p => p.type === 'claude-sdk' && p.enabled);
@@ -78,7 +82,7 @@ async function setupContext() {
   const provider = new ClaudeProvider({ config: claudeConfig });
   const loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager });
 
-  return { config, policy, engine, sessionManager, steeringManager, loop };
+  return { config, policy, engine, sessionManager, steeringManager, memoryManager, loop };
 }
 
 program
@@ -86,8 +90,11 @@ program
   .description('Send a task to the agent and wait for completion')
   .argument('<prompt>', 'The task or question for the agent')
   .action(async (prompt) => {
-    const { loop } = await setupContext();
+    const { loop, memoryManager } = await setupContext();
     
+    // Load context from memory tiers
+    const memoryContext = await memoryManager.loadContext();
+
     const task: TaskContext = {
       jobId: `job_${Date.now()}`,
       task: prompt,
@@ -95,12 +102,16 @@ program
       complexity: 'moderate',
       resourceType: 'mixed',
       systemPrompt: 'You are Zora, a helpful agent.',
-      memoryContext: [],
+      memoryContext,
       history: [],
     };
 
     console.log(`🚀 Starting task: ${task.jobId}`);
     await loop.run(task);
+    
+    // Record task in daily notes
+    await memoryManager.appendDailyNote(`Completed task: ${prompt}`);
+    
     console.log('✅ Task complete.');
   });
 
