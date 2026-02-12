@@ -59,7 +59,8 @@ export type AgentEventType =
   | 'tool_result'
   | 'text'
   | 'error'
-  | 'done';
+  | 'done'
+  | 'steering';
 
 export interface AgentEvent {
   type: AgentEventType;
@@ -244,6 +245,12 @@ export interface SteeringConfig {
   flag_timeout: string;
   auto_approve_low_risk: boolean;
   always_flag_irreversible: boolean;
+  telegram?: {
+    enabled: boolean;
+    bot_token?: string;
+    allowed_users: string[];
+    rate_limit_per_min?: number;
+  };
 }
 
 export interface NotificationsConfig {
@@ -267,6 +274,25 @@ export interface ZoraConfig {
   security: SecurityConfig;
   steering: SteeringConfig;
   notifications: NotificationsConfig;
+}
+
+// ─── Routine Types ───────────────────────────────────────────────────
+
+export interface RoutineTask {
+  prompt: string;
+}
+
+export interface RoutineConfig {
+  name: string;
+  schedule: string; // Cron expression
+  model_preference?: string;
+  timeout?: string;
+  enabled?: boolean;
+}
+
+export interface RoutineDefinition {
+  routine: RoutineConfig;
+  task: RoutineTask;
 }
 
 // ─── Policy Types ────────────────────────────────────────────────────
