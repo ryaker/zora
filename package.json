@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "test": "vitest run",
+    "test": "npm run test:unit && npm run test:browser",
+    "test:unit": "vitest run",
+    "test:browser": "playwright test tests/unit/dashboard/dashboard-browser.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
