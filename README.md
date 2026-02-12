@@ -101,3 +101,4 @@ See [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) for the full 
 | [specs/v5/docs/POLICY_PRESETS.md](specs/v5/docs/POLICY_PRESETS.md) | Safe/Balanced/Power policy presets |
 | [specs/v5/docs/WEB_ONBOARDING_SPEC.md](specs/v5/docs/WEB_ONBOARDING_SPEC.md) | Local web onboarding wizard spec |
 | [specs/v5/addenda/README_ADDENDA_INDEX.md](specs/v5/addenda/README_ADDENDA_INDEX.md) | v0.5 addenda: acceptance criteria, test plan, schemas |
+| [specs/v6/README.md](specs/v6/README.md) | v0.6 addenda: web dashboard + Telegram gateway |

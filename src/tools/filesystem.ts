@@ -53,8 +53,15 @@ export class FilesystemTools {
       return { success: false, error: validation.reason };
     }
 
+    const resolvedPath = validation.resolvedPath!;
+    if (this._isCriticalFile(resolvedPath)) {
+      return { 
+        success: false, 
+        error: `Access denied: ${path.basename(resolvedPath)} is a critical system file and is read-only to the agent tool layer. Changes must be made by the human via CLI.` 
+      };
+    }
+
     try {
-      const resolvedPath = validation.resolvedPath!;
       // Ensure directory exists
       fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
       fs.writeFileSync(resolvedPath, content, 'utf8');
@@ -109,5 +116,21 @@ export class FilesystemTools {
 
     const updatedContent = content.replace(oldString, newString);
     return this.writeFile(filePath, updatedContent);
+  }
+
+  // ─── Private Helpers ──────────────────────────────────────────────
+
+  /**
+   * Checks if a path points to a critical system file.
+   */
+  private _isCriticalFile(resolvedPath: string): boolean {
+    const criticalFiles = [
+      'config.toml',
+      'policy.toml',
+      'SOUL.md',
+      'MEMORY.md'
+    ];
+    const fileName = path.basename(resolvedPath);
+    return criticalFiles.includes(fileName);
   }
 }
