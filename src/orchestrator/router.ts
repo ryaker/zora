@@ -159,4 +159,15 @@ export class Router {
       return a.rank - b.rank; // Tie-breaker by rank
     });
   }
+
+  /**
+   * Finds a provider by name and checks if it's available.
+   */
+  private async _findAvailableProviderByName(name: string): Promise<LLMProvider | undefined> {
+    const provider = this._providers.find((p) => p.name === name);
+    if (provider && (await provider.isAvailable())) {
+      return provider;
+    }
+    return undefined;
+  }
 }
