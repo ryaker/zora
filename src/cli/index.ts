@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { loadConfig } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
+import { SteeringManager } from '../steering/steering-manager.js';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import type { TaskContext, ZoraPolicy } from '../types.js';
@@ -64,6 +65,8 @@ async function setupContext() {
 
   const engine = new PolicyEngine(policy);
   const sessionManager = new SessionManager(configDir);
+  const steeringManager = new SteeringManager(configDir);
+  await steeringManager.init();
   
   // Pick the primary provider (Claude for now)
   const claudeConfig = config.providers.find(p => p.type === 'claude-sdk' && p.enabled);
@@ -73,9 +76,9 @@ async function setupContext() {
   }
 
   const provider = new ClaudeProvider({ config: claudeConfig });
-  const loop = new ExecutionLoop({ provider, engine, sessionManager });
+  const loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager });
 
-  return { config, policy, engine, sessionManager, loop };
+  return { config, policy, engine, sessionManager, steeringManager, loop };
 }
 
 program
