@@ -35,13 +35,22 @@ Expected outcomes:
 
 If Gemini is not available, Zora will run Claude-only until you add Gemini.
 
-## Step 2: Initialize with safe defaults
+## Step 2: Choose a safety preset
+
+Zora is pre-authorized. The preset is your first safety decision.
+
+Presets (see `POLICY_PRESETS.md` for exact TOML):
+- `Safe`: read-only + no shell
+- `Balanced`: read/write in `~/Projects` + safe shell allowlist
+- `Power`: expanded access with explicit warnings
+
+## Step 3: Initialize with your preset
 
 ```bash
 pnpm zora init
 ```
 
-Recommended answers for a safe first run:
+Recommended answers for a safe first run (Balanced):
 - Workspace path: `~/.zora`
 - Read access: `~/Projects`
 - Write access: `~/Projects`
@@ -54,7 +63,37 @@ Zora will:
 - Compute integrity baselines for critical files
 - Create a default `SOUL.md` and memory structure
 
-## Step 3: Review the policy
+## Step 4: Scope selection (read/write boundaries)
+
+During init, Zora will ask what it can read and write. Keep this small on day one.
+
+Default recommendation:
+- Read: `~/Projects`
+- Write: `~/Projects`
+- Deny: `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Library`, `/`
+
+## Step 5: Shell permissions (allowlist)
+
+Zora does not prompt per command. You must choose the allowlist intentionally.
+
+Default recommendation:
+- Allow: `git`, `node`, `pnpm`, `npm`, `rg`
+- Deny: `sudo`, `rm`, `chmod`, `chown`, `curl`, `wget`
+
+## Step 6: Dry-run preview (simulation mode)
+
+Before activation, run a safe dry-run to see exactly what Zora would do.
+
+```bash
+pnpm zora simulate "Summarize my repos in ~/Projects"
+```
+
+The simulator should show:
+- Tools that would be called
+- Paths that would be read/written
+- Any policy violations
+
+## Step 7: Review the policy
 
 Zora uses pre-authorized execution. Review the policy once, then let it work.
 
@@ -68,7 +107,7 @@ If you need more access later, edit deliberately:
 pnpm zora policy edit
 ```
 
-## Step 4: Provider ordering (v0.5)
+## Step 8: Provider ordering (v0.5)
 
 v0.5 introduces a provider registry with ranked preferences. Confirm that Claude is ranked first and Gemini second.
 
@@ -78,7 +117,7 @@ pnpm zora providers list
 
 If needed, adjust priority in `~/.zora/config.toml` under `[[providers]]` entries.
 
-## Step 5: Run a safe first task
+## Step 9: Run a safe first task
 
 Use a read-only request to validate the tool loop:
 
@@ -86,7 +125,7 @@ Use a read-only request to validate the tool loop:
 pnpm zora ask "List my repos in ~/Projects and summarize the most recent commit in each"
 ```
 
-## Step 6: Start the daemon
+## Step 10: Start the daemon
 
 ```bash
 pnpm zora start
@@ -106,6 +145,25 @@ Examples:
 - Enable additional providers (OpenAI/Codex, local models)
 
 Make these changes explicitly in `policy.toml` and `config.toml`, then restart Zora.
+
+---
+
+## Optional: Local web onboarding wizard (planned)
+
+A local-only wizard can make the pre-authorization model clearer and safer.
+
+Proposed endpoint:
+- `http://localhost:7070/onboarding`
+
+Wizard steps:
+1. Prereqs check (doctor)
+2. Choose preset (Safe / Balanced / Power)
+3. Select read/write paths
+4. Choose shell allowlist
+5. Dry-run simulation
+6. Final confirmation with policy summary
+
+All UI state is local. No cloud calls.
 
 ---
 

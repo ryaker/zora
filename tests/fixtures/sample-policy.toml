@@ -1,0 +1,24 @@
+# Test fixture — sample policy
+
+[filesystem]
+allowed_paths = ["/tmp/zora-test/projects", "/tmp/zora-test/workspace"]
+denied_paths = ["/tmp/zora-test/secrets"]
+resolve_symlinks = true
+follow_symlinks = false
+
+[shell]
+mode = "allowlist"
+allowed_commands = ["git", "node", "npm", "ls", "cat", "grep"]
+denied_commands = ["sudo", "rm"]
+split_chained_commands = true
+max_execution_time = "2m"
+
+[actions]
+reversible = ["write_file", "edit_file", "mkdir"]
+irreversible = ["git_push"]
+always_flag = ["git_push"]
+
+[network]
+allowed_domains = ["*"]
+denied_domains = []
+max_request_size = "10MB"
