@@ -29,6 +29,15 @@ export class ShellTools {
    * Executes a shell command if allowed by policy.
    */
   execute(command: string): ShellResult {
+    // Prevent shell command-substitution constructs from bypassing the allowlist,
+    // e.g. "npm $(rm -rf /)" or "npm `rm -rf /`" would otherwise be seen as just "npm".
+    if (/`/.test(command) || /\$\(/.test(command)) {
+      return {
+        success: false,
+        error: 'Command substitution syntax (`..` or $()) is not allowed by security policy',
+      };
+    }
+
     const validation = this._engine.validateCommand(command);
     if (!validation.allowed) {
       return { success: false, error: validation.reason };
@@ -48,13 +57,14 @@ export class ShellTools {
         stdout: stdout.trim(),
         exitCode: 0,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const e = err as any; // Still need to access stdout/stderr/status
       return {
         success: false,
-        stdout: err.stdout?.toString().trim(),
-        stderr: err.stderr?.toString().trim(),
-        error: err.message,
-        exitCode: err.status ?? 1,
+        stdout: e.stdout?.toString().trim(),
+        stderr: e.stderr?.toString().trim(),
+        error: e.message || String(err),
+        exitCode: e.status ?? 1,
       };
     }
   }

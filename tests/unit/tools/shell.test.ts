@@ -49,6 +49,16 @@ describe('ShellTools', () => {
     expect(result.error).toContain('not in the allowlist');
   });
 
+  it('denies command substitution syntax', () => {
+    const result = tools.execute('npm $(rm -rf /)');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('substitution syntax');
+    
+    const result2 = tools.execute('npm `rm -rf /`');
+    expect(result2.success).toBe(false);
+    expect(result2.error).toContain('substitution syntax');
+  });
+
   it('handles execution error', () => {
     const error = new Error('Command failed');
     (error as any).status = 1;

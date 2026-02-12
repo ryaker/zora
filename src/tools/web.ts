@@ -39,10 +39,11 @@ export class WebTools {
         content,
         url,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       return {
         success: false,
-        error: `Failed to fetch URL: ${err.message}`,
+        error: `Failed to fetch URL: ${msg}`,
         url,
       };
     }

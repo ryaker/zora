@@ -40,18 +40,32 @@ export class PolicyEngine {
 
     // 2. Symlink check (Spec §5.3: "Don't follow symlinks outside allowed boundaries")
     if (!fsPolicy.follow_symlinks && this._isSymlink(absolutePath)) {
-      // If target is a symlink and we don't follow, we must ensure the symlink 
-      // target itself is also within bounds.
       try {
         const realPath = fs.realpathSync(absolutePath);
+        
+        // Deny symlinks that resolve into explicitly denied paths
+        if (this._isWithinDeniedPaths(realPath, fsPolicy)) {
+          return {
+            allowed: false,
+            reason: `Symlink target ${realPath} is explicitly denied by security policy`,
+          };
+        }
+
         if (!this._isWithinAllowedPaths(realPath, fsPolicy)) {
           return {
             allowed: false,
             reason: `Symlink target ${realPath} is outside allowed boundaries`,
           };
         }
-      } catch (err) {
-        // If file doesn't exist yet (e.g. for write_file), we skip realpath check
+      } catch (err: unknown) {
+        // If file doesn't exist yet (e.g. for write_file), we skip realpath check,
+        // but other errors should lead to failure.
+        if (!(err instanceof Error && 'code' in err && (err as any).code === 'ENOENT')) {
+          return {
+            allowed: false,
+            reason: `Error resolving symlink ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
       }
     }
 
@@ -80,6 +94,14 @@ export class PolicyEngine {
    */
   validateCommand(command: string): ValidationResult {
     const shellPolicy = this._policy.shell;
+
+    // In deny_all mode, no shell commands should be executed at all.
+    if (shellPolicy.mode === 'deny_all') {
+      return {
+        allowed: false,
+        reason: 'Shell command execution is disabled by security policy',
+      };
+    }
 
     if (shellPolicy.mode === 'allowlist') {
       const commandsToValidate = shellPolicy.split_chained_commands 
@@ -151,22 +173,66 @@ export class PolicyEngine {
   }
 
   /**
-   * Splits command chains (&&, ||, ;, |)
+   * Splits command chains (&&, ||, ;, |) while respecting quoted strings.
    */
   private _splitChainedCommands(command: string): string[] {
-    // This is a naive split. A robust implementation would handle quoted strings.
-    // For v1, we split on common operators.
-    return command.split(/[&|;]+/).map(c => c.trim()).filter(Boolean);
+    // Simple but more robust parser that respects quotes
+    const commands: string[] = [];
+    let current = '';
+    let inQuote: string | null = null;
+
+    for (let i = 0; i < command.length; i++) {
+      const char = command[i]!;
+      const nextChar = command[i + 1];
+
+      if ((char === '"' || char === "'") && command[i - 1] !== '\\') {
+        if (inQuote === char) {
+          inQuote = null;
+        } else if (!inQuote) {
+          inQuote = char;
+        }
+        current += char;
+      } else if (!inQuote && (char === ';' || (char === '&' && nextChar === '&') || (char === '|' && nextChar === '|'))) {
+        if (current.trim()) commands.push(current.trim());
+        current = '';
+        if (char !== ';') i++; // Skip the second char of && or ||
+      } else if (!inQuote && char === '|') {
+        if (current.trim()) commands.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) commands.push(current.trim());
+    return commands;
   }
 
   /**
-   * Extracts the base binary name from a command string.
-   * e.g. "npm install" -> "npm"
+   * Extracts the base binary name from a command string, respecting quotes.
    */
   private _extractBaseCommand(command: string): string {
-    const parts = command.trim().split(/\s+/);
-    const cmd = parts[0] ?? '';
-    // Handle relative/absolute paths to binaries (extract just the name)
-    return path.basename(cmd);
+    const trimmed = command.trim();
+    let firstPart = '';
+    let inQuote: string | null = null;
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i]!;
+      if ((char === '"' || char === "'") && trimmed[i - 1] !== '\\') {
+        if (inQuote === char) {
+          inQuote = null;
+        } else if (!inQuote) {
+          inQuote = char;
+        }
+      } else if (!inQuote && /\s/.test(char)) {
+        break;
+      } else {
+        firstPart += char;
+      }
+    }
+
+    // Remove surrounding quotes from the binary path if they exist
+    const binaryPath = firstPart.replace(/^["']|["']$/g, '');
+    return path.basename(binaryPath);
   }
 }

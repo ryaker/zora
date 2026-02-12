@@ -99,6 +99,13 @@ describe('PolicyEngine', () => {
       expect(result.reason).toContain('not in the allowlist');
     });
 
+    it('denies all commands in deny_all mode', () => {
+      policy.shell.mode = 'deny_all';
+      const result = engine.validateCommand('ls');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('disabled by security policy');
+    });
+
     it('denies explicitly forbidden commands', () => {
       const result = engine.validateCommand('sudo su');
       expect(result.allowed).toBe(false);
@@ -107,6 +114,17 @@ describe('PolicyEngine', () => {
 
     it('validates chained commands correctly', () => {
       const result = engine.validateCommand('npm test && rm -rf /');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("'rm' is explicitly forbidden");
+    });
+
+    it('allows separators inside quoted strings', () => {
+      const result = engine.validateCommand('ls "foo; bar"');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('denies injection after quoted strings', () => {
+      const result = engine.validateCommand('ls "foo"; rm -rf /');
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("'rm' is explicitly forbidden");
     });

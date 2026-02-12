@@ -38,8 +38,9 @@ export class FilesystemTools {
     try {
       const content = fs.readFileSync(validation.resolvedPath!, 'utf8');
       return { success: true, content, path: validation.resolvedPath };
-    } catch (err: any) {
-      return { success: false, error: `Failed to read file: ${err.message}` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to read file: ${msg}` };
     }
   }
 
@@ -58,8 +59,9 @@ export class FilesystemTools {
       fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
       fs.writeFileSync(resolvedPath, content, 'utf8');
       return { success: true, path: resolvedPath };
-    } catch (err: any) {
-      return { success: false, error: `Failed to write file: ${err.message}` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to write file: ${msg}` };
     }
   }
 
@@ -75,8 +77,9 @@ export class FilesystemTools {
     try {
       const items = fs.readdirSync(validation.resolvedPath!);
       return { success: true, content: items.join('\n'), path: validation.resolvedPath };
-    } catch (err: any) {
-      return { success: false, error: `Failed to list directory: ${err.message}` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to list directory: ${msg}` };
     }
   }
 

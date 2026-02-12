@@ -249,11 +249,9 @@ export class ClaudeProvider implements LLMProvider {
       cwd: this._cwd,
       permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
+      // Prefer the per-task system prompt, falling back to the provider default.
+      systemPrompt: task.systemPrompt || this._systemPrompt,
     };
-
-    if (this._systemPrompt) {
-      sdkOptions['systemPrompt'] = this._systemPrompt;
-    }
 
     if (this._allowedTools.length > 0) {
       sdkOptions['allowedTools'] = this._allowedTools;
