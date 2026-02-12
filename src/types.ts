@@ -269,6 +269,25 @@ export interface ZoraConfig {
   notifications: NotificationsConfig;
 }
 
+// ─── Routine Types ───────────────────────────────────────────────────
+
+export interface RoutineTask {
+  prompt: string;
+}
+
+export interface RoutineConfig {
+  name: string;
+  schedule: string; // Cron expression
+  model_preference?: string;
+  timeout?: string;
+  enabled?: boolean;
+}
+
+export interface RoutineDefinition {
+  routine: RoutineConfig;
+  task: RoutineTask;
+}
+
 // ─── Policy Types ────────────────────────────────────────────────────
 
 export interface FilesystemPolicy {

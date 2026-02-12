@@ -13,3 +13,4 @@ export * from './tools/index.js';
 export * from './orchestrator/index.js';
 export * from './utils/fs.js';
 export * from './steering/index.js';
+export * from './routines/index.js';
