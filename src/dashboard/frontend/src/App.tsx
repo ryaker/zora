@@ -101,7 +101,7 @@ const App: React.FC = () => {
                 value={steerMsg}
                 onChange={(e) => setSteerMsg(e.target.value)}
                 placeholder="INPUT COMMAND..."
-                className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:outline-none"
+                className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:ring-2 focus:ring-zora-cyan focus:outline-none"
               />
               <button 
                 onClick={handleSteer}

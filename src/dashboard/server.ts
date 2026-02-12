@@ -9,6 +9,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Server } from 'node:http';
 import type { ExecutionLoop } from '../orchestrator/execution-loop.js';
 import type { SessionManager } from '../orchestrator/session-manager.js';
 import type { SteeringManager } from '../steering/steering-manager.js';
@@ -27,7 +28,7 @@ export interface DashboardOptions {
 export class DashboardServer {
   private readonly _app: express.Application;
   private readonly _options: DashboardOptions;
-  private _server: any;
+  private _server: Server | undefined;
 
   constructor(options: DashboardOptions) {
     this._options = options;
@@ -58,7 +59,8 @@ export class DashboardServer {
           }))
         });
       } catch (err) {
-        res.status(500).json({ ok: false, error: String(err) });
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ ok: false, error: message });
       }
     });
 
@@ -74,8 +76,9 @@ export class DashboardServer {
     /** POST /api/steer — Inject a steering message */
     this._app.post('/api/steer', async (req, res) => {
       const { jobId, message, author, source } = req.body;
-      if (!jobId || !message) {
-        return res.status(400).json({ ok: false, error: 'jobId and message required' });
+      
+      if (typeof jobId !== 'string' || !jobId.trim() || typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({ ok: false, error: 'jobId and message must be non-empty strings' });
       }
 
       try {
@@ -89,7 +92,8 @@ export class DashboardServer {
         });
         res.json({ ok: true });
       } catch (err) {
-        res.status(500).json({ ok: false, error: String(err) });
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ ok: false, error: errorMessage });
       }
     });
 

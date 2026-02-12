@@ -9,7 +9,7 @@ import { PolicyEngine } from '../../../src/security/policy-engine.js';
 import { NotificationTools } from '../../../src/tools/notifications.js';
 import path from 'node:path';
 import os from 'node:os';
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 
 test.describe('Zora Tactical Dashboard', () => {
   let server: DashboardServer;
@@ -17,7 +17,7 @@ test.describe('Zora Tactical Dashboard', () => {
   const port = 7071;
 
   test.beforeAll(async () => {
-    if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+    await fs.mkdir(testDir, { recursive: true });
 
     const provider = new MockProvider();
     const engine = new PolicyEngine({
