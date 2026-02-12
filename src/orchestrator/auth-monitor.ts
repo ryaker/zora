@@ -34,32 +34,35 @@ export class AuthMonitor {
    */
   async checkAll(): Promise<Map<string, AuthStatus>> {
     const results = new Map<string, AuthStatus>();
+    const MS_PER_HOUR = 3600000;
 
-    for (const provider of this._providers) {
-      try {
-        const auth = await provider.checkAuth();
-        results.set(provider.name, auth);
+    await Promise.all(
+      this._providers.map(async (provider) => {
+        try {
+          const auth = await provider.checkAuth();
+          results.set(provider.name, auth);
 
-        if (!auth.valid && auth.requiresInteraction) {
-          await this._notifications.notify(
-            'Authentication Required',
-            `${provider.name} auth expired. Please re-authenticate in the desktop app or CLI.`
-          );
-          // In a full implementation, we would call checkpointActiveJobs(provider.name) here
-        } else if (auth.valid && auth.expiresAt) {
-          const hoursRemaining = (auth.expiresAt.getTime() - Date.now()) / 3600000;
-          if (hoursRemaining > 0 && hoursRemaining < this._preExpiryWarningHours) {
+          if (!auth.valid && auth.requiresInteraction) {
             await this._notifications.notify(
-              'Token Near Expiry',
-              `${provider.name} token expires in ~${Math.round(hoursRemaining)}h.`
+              'Authentication Required',
+              `${provider.name} auth expired. Please re-authenticate in the desktop app or CLI.`
             );
+            // In a full implementation, we would call checkpointActiveJobs(provider.name) here
+          } else if (auth.valid && auth.expiresAt) {
+            const hoursRemaining = (auth.expiresAt.getTime() - Date.now()) / MS_PER_HOUR;
+            if (hoursRemaining > 0 && hoursRemaining < this._preExpiryWarningHours) {
+              await this._notifications.notify(
+                'Token Near Expiry',
+                `${provider.name} token expires in ~${Math.round(hoursRemaining)}h.`
+              );
+            }
           }
+        } catch (err) {
+          // Unexpected error during auth check
+          console.error(`Error checking auth for ${provider.name}:`, err);
         }
-      } catch (err) {
-        // Unexpected error during auth check
-        console.error(`Error checking auth for ${provider.name}:`, err);
-      }
-    }
+      })
+    );
 
     return results;
   }

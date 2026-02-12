@@ -41,7 +41,7 @@ describe('AuthMonitor', () => {
 
   it('notifies when token is near expiry', async () => {
     // 1 hour remaining (within the 2 hour warning threshold)
-    const expiresAt = new Date(Date.now() + 3600000);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
     p2.reset();
     vi.spyOn(p2, 'checkAuth').mockResolvedValue({
       valid: true,
@@ -60,7 +60,7 @@ describe('AuthMonitor', () => {
 
   it('does not notify if token is far from expiry', async () => {
     // 5 hours remaining
-    const expiresAt = new Date(Date.now() + 5 * 3600000);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 60 * 1000);
     p2.reset();
     vi.spyOn(p2, 'checkAuth').mockResolvedValue({
       valid: true,
