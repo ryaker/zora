@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/zora/auditEvent.schema.json",
+  "title": "AuditEvent",
+  "type": "object",
+  "required": ["event_id", "job_id", "event_type", "timestamp"],
+  "properties": {
+    "event_id": {"type": "string"},
+    "job_id": {"type": "string"},
+    "event_type": {
+      "type": "string",
+      "enum": ["tool_invocation", "tool_result", "policy_violation", "handoff", "auth_error", "notification"]
+    },
+    "timestamp": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object"}
+  }
+}

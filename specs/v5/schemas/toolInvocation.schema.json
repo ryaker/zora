@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/zora/toolInvocation.schema.json",
+  "title": "ToolInvocation",
+  "type": "object",
+  "required": ["tool_call_id", "tool", "arguments", "timestamp"],
+  "properties": {
+    "tool_call_id": {"type": "string"},
+    "tool": {"type": "string"},
+    "arguments": {"type": "object"},
+    "timestamp": {"type": "string", "format": "date-time"}
+  }
+}

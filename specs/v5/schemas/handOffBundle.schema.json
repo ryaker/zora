@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/zora/handOffBundle.schema.json",
+  "title": "HandoffBundle",
+  "type": "object",
+  "required": ["job_id", "from_provider", "to_provider", "created_at", "task", "context"],
+  "properties": {
+    "job_id": {"type": "string"},
+    "from_provider": {"type": "string"},
+    "to_provider": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "task": {"type": "string"},
+    "context": {
+      "type": "object",
+      "required": ["summary", "progress", "artifacts"],
+      "properties": {
+        "summary": {"type": "string"},
+        "progress": {"type": "string"},
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "path", "description"],
+            "properties": {
+              "type": {"type": "string"},
+              "path": {"type": "string"},
+              "description": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "tool_history": {
+      "type": "array",
+      "items": {"type": "object"}
+    }
+  }
+}

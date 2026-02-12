@@ -97,3 +97,4 @@ See [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) for the full 
 | [specs/v5/docs/SECURITY_DEFAULTS.md](specs/v5/docs/SECURITY_DEFAULTS.md) | Security defaults and safe policy baseline |
 | [specs/v5/docs/CONFIGURATION.md](specs/v5/docs/CONFIGURATION.md) | Config and provider registry reference |
 | [specs/v5/docs/POLICY_REFERENCE.md](specs/v5/docs/POLICY_REFERENCE.md) | Capability policy reference |
+| [specs/v5/addenda/README_ADDENDA_INDEX.md](specs/v5/addenda/README_ADDENDA_INDEX.md) | v0.5 addenda: acceptance criteria, test plan, schemas |

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/zora/toolResult.schema.json",
+  "title": "ToolResult",
+  "type": "object",
+  "required": ["tool_call_id", "status", "timestamp"],
+  "properties": {
+    "tool_call_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["ok", "error"]},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "output": {"type": ["string", "object", "array", "null"]},
+    "error": {
+      "type": "object",
+      "properties": {
+        "error_type": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}
