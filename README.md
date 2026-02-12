@@ -9,96 +9,88 @@ Zora gets shit done. It executes complex, multi-step tasks without constant perm
 
 ![LCARS Divider](specs/v5/assets/lcars_divider.svg)
 
-## What Makes Zora Different
+## Core Capabilities (Now Functional)
 
-| Feature | Zora | OpenClaw | Nanobot |
-|---------|------|----------|---------|
-| **Purpose** | Local task automation | Multi-channel assistant | Lightweight agent |
-| **LLM architecture** | Dual-LLM with mid-task failover | Single provider | Single provider |
-| **Permission model** | Pre-authorized (no approval prompts) | Human-in-the-loop blocking | Workspace sandbox |
-| **Memory** | Salience-scored 3-tier hierarchy | SQLite | Basic markdown |
-| **Auth degradation** | Auto-promotes secondary provider | Fails | Fails |
-| **Human interaction** | Async steering (never blocks) | Approval dialogs (blocks) | None |
-| **Designed for** | Recurring workflows, content pipelines | Chat conversations | Single tasks |
+🚀 **Dual-LLM with Automatic Failover** — Fully integrated Claude SDK (Primary) and Gemini CLI (Secondary). When Claude hits quota limits or auth expires, the **Failover Controller** handles a full context handoff to Gemini mid-task. Work never stops.
 
-## Core Features
+🛡️ **Policy-Enforced Autonomy** — Work freely within secure boundaries. The **Security Policy Engine** enforces strict allow/deny rules for filesystem, shell, and network access. No constant approval prompts; the agent self-corrects based on policy feedback.
 
-**Dual-LLM with Automatic Failover** — Claude handles complex reasoning and creative work. Gemini handles structured tasks and large-context processing. When Claude hits quota limits or auth expires, Gemini takes over mid-task with full context handoff. Work never stops.
+🧠 **Hierarchical Memory** — A two-tier memory system provides persistent context.
+- **Tier 1 (Long-term):** `MEMORY.md` stores permanent goals and brand guidelines.
+- **Tier 2 (Rolling):** Daily Notes provide a moving window of recent activities and outcomes.
 
-**Pre-Authorized Execution** — Set your capability policy once. The agent works within those boundaries freely. No "Do you want to allow this?" dialogs. Policy violations are fed back to the LLM as errors — it self-corrects without bothering you.
+🕹️ **Tactical Dashboard** — A retro-futuristic (LCARS-inspired) local web interface for monitoring and async steering.
+- **Real-time Health:** Live provider link status.
+- **Neural Steering:** Inject course-corrections into running tasks without interrupting the flow.
+- **Browser-Verified:** Tested with Playwright for reliable local operation.
 
-**Async Steering (Never Blocks)** — Observe and redirect running tasks at any time. The agent flags uncertain decisions but proceeds with its best judgment. Your input is advisory, not mandatory. Work is never stuck waiting for you.
+⏰ **Scheduled Routines & Heartbeat** — Define recurring tasks in TOML. The **Routine Manager** executes them via cron, while the **Heartbeat System** proactively pulses every 30 minutes to check for pending maintenance tasks in `HEARTBEAT.md`.
 
-**Salience-Scored Memory** — Three-tier memory system inspired by [memU](https://github.com/NevaMind-AI/memU). Frequently-used context (brand guidelines, project conventions) automatically surfaces higher. Source tagging prevents memory poisoning from untrusted content.
-
-**Scheduled Routines** — Content pipelines, job searches, repo cleanup, daily standup summaries — define them once in TOML, they run on schedule with the right model for the job.
-
-**Auth Degradation Handling** — When Claude's Mac session token expires and you're not home to re-authenticate, the agent notifies you, checkpoints active work, and continues on Gemini. When you re-auth, Claude jobs resume.
+🔄 **Persistent Retry Queue** — High resilience to 429/transient errors. Failed tasks are persisted to disk and retried with a secure quadratic backoff strategy.
 
 ## Quick Start
 
 ```bash
-# Install
+# 1. Install Dependencies
 git clone https://github.com/ryaker/zora.git
-cd zora && pnpm install
+cd zora
+npm install
 
-# Configure (creates ~/.zora/ with defaults)
-pnpm zora init
+# 2. Build the System
+npm run build
 
-# Review and customize your capability policy
-$EDITOR ~/.zora/policy.toml
+# 3. Configure (requires ~/.zora/config.toml and policy.toml)
+# Templates available in tests/fixtures/ for now. 
+# Automatic 'init' command coming soon.
 
-# Start the agent daemon
-pnpm zora start
+# 4. Run the Integrated Test Suite (Unit + Browser)
+npm test
 
-# Give it work
-pnpm zora ask "Research the top 5 headless CMS platforms and write a comparison doc"
+# 5. Start a Task
+# This loads memory, checks auth, and routes the task to the best provider.
+node dist/cli/index.js ask "Summarize my recent work from daily notes into MEMORY.md"
 
-# Check status
-pnpm zora status
-
-# Set up a recurring routine
-pnpm zora routine create --file examples/routines/content-pipeline.toml
+# 6. Monitor via Tactical Dashboard
+# Starts at http://localhost:7070 (in a separate terminal)
+# (Integration into 'zora start' daemon coming soon)
 ```
-
-See [specs/v5/docs/QUICK_START.md](specs/v5/docs/QUICK_START.md) for the full setup guide.
 
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────┐
-│              ORCHESTRATOR CORE                │
-│  Router → Scheduler → Failover Controller     │
-│              Execution Loop                   │
-├───────────────────────────────────────────────┤
-│           LLM PROVIDER LAYER                  │
-│  Claude (Primary)  │  Gemini (Secondary)      │
-│  Agent SDK + Mac   │  CLI + Workspace SSO     │
-│  session token     │  auto-refresh tokens     │
-├───────────────────────────────────────────────┤
-│  Tools    │  Memory (memU)  │  Security       │
-│  Shell    │  3-tier + sal.  │  Policy engine  │
-│  Files    │  Categories     │  Integrity guard│
-│  Web      │  Extraction     │  Audit (hashed) │
-│  MCP      │  Salience rank  │  JIT secrets    │
-└───────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│                ORCHESTRATOR CORE                │
+│  Router → Execution Loop → Failover Controller  │
+│         Retry Queue  │  Session Manager         │
+├─────────────────────────────────────────────────┤
+│             LLM PROVIDER REGISTRY               │
+│  Claude (Primary)    │    Gemini (Secondary)    │
+│  Agent SDK (Native)  │    CLI (Subprocess)      │
+├─────────────────────────────────────────────────┤
+│  Tools      │  Memory         │  Security       │
+│  Shell      │  MEMORY.md      │  Policy Engine  │
+│  Filesystem │  Daily Notes    │  Audit Log      │
+│  Web        │  Context Loader │  Restrictive FS │
+└─────────────────────────────────────────────────┘
 ```
 
-See [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) for the full system design with diagrams.
+## Project Status: v0.5.0 (Tier 2 Complete)
+
+| Milestone | Status | Description |
+|-----------|--------|-------------|
+| **Tier 1: Foundation** | ✅ | Scaffolding, CLI, Basic Tools, execution loop. |
+| **Tier 2: Intelligence** | ✅ | Multi-provider, Routing, Failover, Memory, Routines. |
+| **Tier 3: Interfaces** | 🚧 | Web Dashboard (Done), Telegram Gateway (Next), Hardening. |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [specs/v5/ZORA_AGENT_SPEC.md](specs/v5/ZORA_AGENT_SPEC.md) | Full technical specification (start here for deep understanding) |
-| [specs/v5/IMPLEMENTATION_PLAN.md](specs/v5/IMPLEMENTATION_PLAN.md) | WSJF-prioritized build plan with realistic time estimates |
-| [specs/v5/docs/QUICK_START.md](specs/v5/docs/QUICK_START.md) | 5-minute setup guide |
-| [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) | System architecture overview |
-| [specs/v5/docs/SECURITY_DEFAULTS.md](specs/v5/docs/SECURITY_DEFAULTS.md) | Security defaults and safe policy baseline |
-| [specs/v5/docs/CONFIGURATION.md](specs/v5/docs/CONFIGURATION.md) | Config and provider registry reference |
-| [specs/v5/docs/POLICY_REFERENCE.md](specs/v5/docs/POLICY_REFERENCE.md) | Capability policy reference |
-| [specs/v5/docs/ONBOARDING_INSTALL.md](specs/v5/docs/ONBOARDING_INSTALL.md) | Onboarding flow (pre-authorization, presets, dry-run) |
-| [specs/v5/docs/POLICY_PRESETS.md](specs/v5/docs/POLICY_PRESETS.md) | Safe/Balanced/Power policy presets |
-| [specs/v5/docs/WEB_ONBOARDING_SPEC.md](specs/v5/docs/WEB_ONBOARDING_SPEC.md) | Local web onboarding wizard spec |
-| [specs/v5/addenda/README_ADDENDA_INDEX.md](specs/v5/addenda/README_ADDENDA_INDEX.md) | v0.5 addenda: acceptance criteria, test plan, schemas |
-| [specs/v6/README.md](specs/v6/README.md) | v0.6 addenda: web dashboard + Telegram gateway |
+| [specs/v5/ZORA_AGENT_SPEC.md](specs/v5/ZORA_AGENT_SPEC.md) | Full technical specification. |
+| [specs/v5/IMPLEMENTATION_PLAN.md](specs/v5/IMPLEMENTATION_PLAN.md) | WSJF-prioritized build plan. |
+| [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) | System architecture overview. |
+| [specs/v6/WEB_DASHBOARD_SPEC.md](specs/v6/WEB_DASHBOARD_SPEC.md) | Local UI and steering specification. |
+
+---
+
+*Build fast. Ship real output. Local first.*
