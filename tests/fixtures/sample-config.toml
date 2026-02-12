@@ -1,0 +1,91 @@
+# Test fixture — minimal valid config
+
+[agent]
+name = "zora-test"
+workspace = "/tmp/zora-test/workspace"
+max_parallel_jobs = 2
+default_timeout = "1h"
+heartbeat_interval = "15m"
+log_level = "debug"
+
+[agent.identity]
+soul_file = "/tmp/zora-test/SOUL.md"
+
+[agent.resources]
+cpu_throttle_percent = 80
+memory_limit_mb = 2048
+throttle_check_interval = "10s"
+
+[[providers]]
+name = "claude"
+type = "claude-sdk"
+rank = 1
+capabilities = ["reasoning", "coding", "creative"]
+cost_tier = "included"
+enabled = true
+auth_method = "mac_session"
+model = "claude-sonnet-4-5"
+max_turns = 200
+
+[[providers]]
+name = "gemini"
+type = "gemini-cli"
+rank = 2
+capabilities = ["search", "structured-data", "large-context", "coding"]
+cost_tier = "included"
+enabled = true
+auth_method = "workspace_sso"
+cli_path = "gemini"
+model = "gemini-2.5-pro"
+max_turns = 100
+
+[routing]
+mode = "respect_ranking"
+
+[failover]
+enabled = true
+auto_handoff = true
+max_handoff_context_tokens = 50000
+retry_after_cooldown = true
+max_retries = 3
+checkpoint_on_auth_failure = true
+notify_on_failover = true
+
+[memory]
+long_term_file = "/tmp/zora-test/memory/MEMORY.md"
+daily_notes_dir = "/tmp/zora-test/memory/daily"
+items_dir = "/tmp/zora-test/memory/items"
+categories_dir = "/tmp/zora-test/memory/categories"
+context_days = 7
+max_context_items = 20
+max_category_summaries = 5
+auto_extract_interval = 10
+
+[security]
+policy_file = "/tmp/zora-test/policy.toml"
+audit_log = "/tmp/zora-test/audit/audit.jsonl"
+audit_hash_chain = true
+audit_single_writer = true
+integrity_check = true
+integrity_interval = "30m"
+integrity_includes_tool_registry = true
+leak_detection = true
+sanitize_untrusted_content = true
+jit_secret_decryption = true
+
+[steering]
+enabled = false
+poll_interval = "5s"
+dashboard_port = 7070
+notify_on_flag = true
+flag_timeout = "10m"
+auto_approve_low_risk = true
+always_flag_irreversible = true
+
+[notifications]
+enabled = false
+on_task_complete = false
+on_error = true
+on_failover = true
+on_auth_expiry = true
+on_all_providers_down = true

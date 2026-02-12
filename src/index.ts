@@ -1,0 +1,8 @@
+/**
+ * Zora — Long-running autonomous personal AI agent for macOS
+ *
+ * Entry point. This module initializes the agent daemon.
+ * Implementation in Tier 1, Item 7 (execution loop).
+ */
+
+export { type ZoraConfig, type ZoraPolicy, type LLMProvider } from './types.js';
