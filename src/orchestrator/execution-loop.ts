@@ -18,11 +18,13 @@ import type {
 import { FilesystemTools, ShellTools, WebTools } from '../tools/index.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from './session-manager.js';
+import { SteeringManager } from '../steering/steering-manager.js';
 
 export interface ExecutionLoopOptions {
   provider: LLMProvider;
   engine: PolicyEngine;
   sessionManager: SessionManager;
+  steeringManager: SteeringManager;
   maxTurns?: number;
 }
 
@@ -36,6 +38,7 @@ export class ExecutionLoop {
   private readonly _provider: LLMProvider;
   private readonly _engine: PolicyEngine;
   private readonly _sessionManager: SessionManager;
+  private readonly _steeringManager: SteeringManager;
   private readonly _fsTools: FilesystemTools;
   private readonly _shellTools: ShellTools;
   private readonly _webTools: WebTools;
@@ -48,6 +51,7 @@ export class ExecutionLoop {
     this._provider = options.provider;
     this._engine = options.engine;
     this._sessionManager = options.sessionManager;
+    this._steeringManager = options.steeringManager;
     this._maxTurns = options.maxTurns ?? 200;
 
     // Initialize tools
@@ -72,39 +76,80 @@ export class ExecutionLoop {
   async run(task: TaskContext): Promise<void> {
     let turnCount = 0;
     const maxTurns = task.maxTurns ?? this._maxTurns;
+    let shouldRestart = false;
 
     try {
-      for await (const event of this._provider.execute(task)) {
-        // 1. Persist the event
-        await this._sessionManager.appendEvent(task.jobId, event);
-
-        // 2. Handle specific event types
-        if (event.type === 'tool_call') {
-          // A tool call represents a significant agentic action, count it as a turn
-          turnCount++;
-          await this._handleToolCall(task.jobId, event);
+      while (turnCount < maxTurns) {
+        // 1. Check for steering messages before starting or between turns
+        const pendingSteering = await this._steeringManager.getPendingMessages(task.jobId);
+        
+        if (pendingSteering.length > 0) {
+          for (const msg of pendingSteering) {
+            if (msg.type === 'steer') {
+              const steerEvent: AgentEvent = {
+                type: 'steering',
+                timestamp: new Date(),
+                content: { 
+                  text: msg.message,
+                  source: msg.source,
+                  author: msg.author
+                },
+              };
+              task.history.push(steerEvent);
+              await this._sessionManager.appendEvent(task.jobId, steerEvent);
+              
+              // Acknowledge message
+              await this._steeringManager.archiveMessage(task.jobId, msg.id);
+              
+              shouldRestart = true;
+            }
+          }
         }
 
-        if (event.type === 'text') {
-          // A text response is a logical turn
-          turnCount++;
+        if (shouldRestart) {
+          shouldRestart = false;
         }
 
-        if (event.type === 'done') {
-          break;
+        // 2. Start provider execution
+        for await (const event of this._provider.execute(task)) {
+          // Persist the event
+          await this._sessionManager.appendEvent(task.jobId, event);
+          task.history.push(event);
+
+          // Handle specific event types
+          if (event.type === 'tool_call') {
+            turnCount++;
+            await this._handleToolCall(task, event);
+          }
+
+          if (event.type === 'text') {
+            turnCount++;
+          }
+
+          if (event.type === 'done' || event.type === 'error') {
+            return; // Task complete
+          }
+
+          // Periodic check for steering during long provider runs
+          const midTaskSteering = await this._steeringManager.getPendingMessages(task.jobId);
+          if (midTaskSteering.some(m => m.type === 'steer')) {
+            await this._provider.abort(task.jobId);
+            shouldRestart = true;
+            break; // Break the generator loop to restart with new history
+          }
+
+          if (turnCount >= maxTurns) {
+            await this._sessionManager.appendEvent(task.jobId, {
+              type: 'error',
+              timestamp: new Date(),
+              content: { message: `Maximum turns exceeded (${maxTurns})` },
+            });
+            return;
+          }
         }
 
-        if (event.type === 'error') {
-          break;
-        }
-
-        if (turnCount >= maxTurns) {
-          await this._sessionManager.appendEvent(task.jobId, {
-            type: 'error',
-            timestamp: new Date(),
-            content: { message: `Maximum turns exceeded (${maxTurns})` },
-          });
-          break;
+        if (!shouldRestart) {
+          break; // Exit while loop if generator finished and no restart requested
         }
       }
     } catch (err: unknown) {
@@ -120,7 +165,7 @@ export class ExecutionLoop {
   /**
    * Dispatches a tool call to the appropriate tool implementation.
    */
-  private async _handleToolCall(jobId: string, event: AgentEvent): Promise<void> {
+  private async _handleToolCall(task: TaskContext, event: AgentEvent): Promise<void> {
     const content = event.content as ToolCallContent;
     const { tool, arguments: args, toolCallId } = content;
     
@@ -134,22 +179,28 @@ export class ExecutionLoop {
         result = { success: false, error: `Unknown tool: ${tool}` };
       }
 
-      // Record the result
-      await this._sessionManager.appendEvent(jobId, {
+      const resultEvent: AgentEvent = {
         type: 'tool_result',
         timestamp: new Date(),
         content: {
           toolCallId,
           result,
         },
-      });
+      };
+
+      // Record the result
+      await this._sessionManager.appendEvent(task.jobId, resultEvent);
+      // Ensure history is consistent for restarts
+      task.history.push(resultEvent);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      await this._sessionManager.appendEvent(jobId, {
+      const errorEvent: AgentEvent = {
         type: 'error',
         timestamp: new Date(),
         content: { message: `Tool execution failed (${tool}): ${msg}` },
-      });
+      };
+      await this._sessionManager.appendEvent(task.jobId, errorEvent);
+      task.history.push(errorEvent);
     }
   }
 }

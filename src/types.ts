@@ -59,7 +59,8 @@ export type AgentEventType =
   | 'tool_result'
   | 'text'
   | 'error'
-  | 'done';
+  | 'done'
+  | 'steering';
 
 export interface AgentEvent {
   type: AgentEventType;

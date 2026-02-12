@@ -35,6 +35,9 @@ export class GeminiProvider implements LLMProvider {
   private _lastAuthStatus: AuthStatus | null = null;
   private _lastQuotaStatus: QuotaStatus | null = null;
 
+  /** Active child processes indexed by jobId for abort support */
+  private readonly _activeProcesses: Map<string, any> = new Map();
+
   constructor(options: GeminiProviderOptions) {
     const { config } = options;
     this.name = config.name;
@@ -94,20 +97,38 @@ export class GeminiProvider implements LLMProvider {
     }
 
     const child = spawn(this._cliPath, args);
+    this._activeProcesses.set(task.jobId, child);
     
     let buffer = '';
+
+    // Track spawn/execution errors
+    let spawnError: Error | null = null;
+    child.on('error', (err) => {
+      spawnError = err;
+    });
 
     // Track exit via promise
     const exitPromise = new Promise<{ code: number | null }>((resolve) => {
       child.on('close', (code) => resolve({ code }));
     });
 
-    // Helper to process streams
+    // Safe stream access (Spec §4.2: subprocess wrapper resilience)
+    if (!child.stdout || !child.stderr) {
+      yield {
+        type: 'error',
+        timestamp: new Date(),
+        content: { message: `Failed to open stdio streams for ${this._cliPath}` },
+      };
+      this._activeProcesses.delete(task.jobId);
+      return;
+    }
+
     const stdoutLines = this._streamToLines(child.stdout);
     const stderrContent = this._collectStderr(child.stderr);
 
     try {
       for await (const line of stdoutLines) {
+        if (spawnError) throw spawnError;
         buffer += line + '\n';
         yield {
           type: 'text',
@@ -117,6 +138,8 @@ export class GeminiProvider implements LLMProvider {
       }
 
       const { code } = await exitPromise;
+      if (spawnError) throw spawnError;
+      
       const stderr = await stderrContent;
 
       if (code !== 0) {
@@ -163,22 +186,57 @@ export class GeminiProvider implements LLMProvider {
         timestamp: new Date(),
         content: { message: `Gemini execution failed: ${msg}` },
       };
+    } finally {
+      this._activeProcesses.delete(task.jobId);
     }
   }
 
-  async abort(_jobId: string): Promise<void> {
-    // PID tracking needed for subprocess abort
+  async abort(jobId: string): Promise<void> {
+    const child = this._activeProcesses.get(jobId);
+    if (child) {
+      child.kill();
+      this._activeProcesses.delete(jobId);
+    }
   }
 
   private _buildPrompt(task: TaskContext): string {
     const parts: string[] = [];
     if (task.systemPrompt) parts.push(`System: ${task.systemPrompt}`);
+    
     if (task.memoryContext.length > 0) {
       parts.push('<context>');
       parts.push(...task.memoryContext);
       parts.push('</context>');
     }
-    parts.push(task.task);
+
+    if (task.history.length > 0) {
+      parts.push('<history>');
+      for (const event of task.history) {
+        if (event.type === 'text') {
+          parts.push('  <assistant>');
+          parts.push((event.content as any).text);
+          parts.push('  </assistant>');
+        } else if (event.type === 'tool_call') {
+          const c = event.content as any;
+          parts.push(`  <tool_call name="${c.tool}" id="${c.toolCallId}">`);
+          parts.push(JSON.stringify(c.arguments));
+          parts.push('  </tool_call>');
+        } else if (event.type === 'tool_result') {
+          const c = event.content as any;
+          parts.push(`  <tool_result id="${c.toolCallId}">`);
+          parts.push(JSON.stringify(c.result));
+          parts.push('  </tool_result>');
+        } else if (event.type === 'steering') {
+          const c = event.content as any;
+          parts.push('  <human_steering>');
+          parts.push(c.text);
+          parts.push('  </human_steering>');
+        }
+      }
+      parts.push('</history>');
+    }
+
+    parts.push(`Task: ${task.task}`);
     return parts.join('\n\n');
   }
 
