@@ -245,6 +245,12 @@ export interface SteeringConfig {
   flag_timeout: string;
   auto_approve_low_risk: boolean;
   always_flag_irreversible: boolean;
+  telegram?: {
+    enabled: boolean;
+    bot_token?: string;
+    allowed_users: string[];
+    rate_limit_per_min?: number;
+  };
 }
 
 export interface NotificationsConfig {
