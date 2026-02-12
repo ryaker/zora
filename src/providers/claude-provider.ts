@@ -436,7 +436,7 @@ export class ClaudeProvider implements LLMProvider {
 
   /**
    * Build a prompt string from task context.
-   * Includes memory context and system prompt elements.
+   * Includes memory context, history, and system prompt elements.
    */
   private _buildPrompt(task: TaskContext): string {
     const parts: string[] = [];
@@ -449,8 +449,29 @@ export class ClaudeProvider implements LLMProvider {
       parts.push('');
     }
 
+    // History (if any) — helps with restarts and steering
+    if (task.history.length > 0) {
+      parts.push('<execution_history>');
+      for (const event of task.history) {
+        if (event.type === 'text') {
+          parts.push(`Assistant: ${(event.content as any).text}`);
+        } else if (event.type === 'tool_call') {
+          const c = event.content as any;
+          parts.push(`Assistant (Tool Call): ${c.tool}(${JSON.stringify(c.arguments)})`);
+        } else if (event.type === 'tool_result') {
+          const c = event.content as any;
+          parts.push(`Tool Result: ${JSON.stringify(c.result)}`);
+        } else if (event.type === 'steering') {
+          const c = event.content as any;
+          parts.push(`[HUMAN INTERVENTION from ${c.source}/${c.author}]: ${c.text}`);
+        }
+      }
+      parts.push('</execution_history>');
+      parts.push('');
+    }
+
     // The actual task
-    parts.push(task.task);
+    parts.push(`Current Task: ${task.task}`);
 
     return parts.join('\n');
   }

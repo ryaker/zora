@@ -97,7 +97,7 @@ describe('ExecutionLoop', () => {
 
     // 3. Verify steering was injected into history
     const history = await sessionManager.getHistory('loop-job-1');
-    expect(history.some(e => e.type === 'text' && (e.content as any).text.includes('Steering from web/rich'))).toBe(true);
+    expect(history.some(e => e.type === 'steering' && (e.content as any).text.includes('Stop being so helpful'))).toBe(true);
     
     // 4. Verify steering was archived
     const pending = await steeringManager.getPendingMessages('loop-job-1');

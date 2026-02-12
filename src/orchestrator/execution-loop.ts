@@ -87,9 +87,13 @@ export class ExecutionLoop {
           for (const msg of pendingSteering) {
             if (msg.type === 'steer') {
               const steerEvent: AgentEvent = {
-                type: 'text',
+                type: 'steering',
                 timestamp: new Date(),
-                content: { text: `[Steering from ${msg.source}/${msg.author}]: ${msg.message}` },
+                content: { 
+                  text: msg.message,
+                  source: msg.source,
+                  author: msg.author
+                },
               };
               task.history.push(steerEvent);
               await this._sessionManager.appendEvent(task.jobId, steerEvent);
@@ -97,18 +101,14 @@ export class ExecutionLoop {
               // Acknowledge message
               await this._steeringManager.archiveMessage(task.jobId, msg.id);
               
-              // Signal restart to the provider loop
               shouldRestart = true;
             }
-            // Handle flag_decision in future phases
           }
         }
 
         if (shouldRestart) {
-          // Reset turn count or just continue? 
-          // For now, we continue but the next iteration will call provider.execute again
-          // Actually, we need to break the inner loop and re-run execute
           shouldRestart = false;
+          // Restarting the provider loop happens naturally by continuing the while loop
         }
 
         // 2. Start provider execution
@@ -132,7 +132,6 @@ export class ExecutionLoop {
           }
 
           // Periodic check for steering during long provider runs
-          // (Requires provider support for abort, or we check here)
           const midTaskSteering = await this._steeringManager.getPendingMessages(task.jobId);
           if (midTaskSteering.some(m => m.type === 'steer')) {
             await this._provider.abort(task.jobId);
