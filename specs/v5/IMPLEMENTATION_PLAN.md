@@ -1,10 +1,10 @@
 # Zora — WSJF Implementation Plan
 
-> **Version:** 1.2
+> **Version:** 1.3
 > **Date:** 2026-02-12
 > **Companion to:** ZORA_AGENT_SPEC.md v0.5.0
 > **Methodology:** Weighted Shortest Job First (WSJF)
-> **Changes in 1.2:** Integrated v0.6 addenda items (Web UI, Telegram, Async Steering) into the prioritization matrix.
+> **Changes in 1.3:** Removed routine definitions (20, 21) from dev plan. Elevated Web Dashboard and Steering Controller.
 
 ---
 
@@ -21,96 +21,56 @@ Each work item is scored on four dimensions:
 
 **WSJF Score = (Business Value + Time Criticality + Risk Reduction) / Job Size**
 
-Higher score = do first.
-
 ---
 
 ## Priority-Ordered Work Items
 
 ### Tier 1: Foundation (COMPLETED)
+Items 1-11 covering scaffolding, config, providers, tools, and execution loop foundation.
 
-| # | Work Item | WSJF | Status |
-|---|-----------|------|--------|
-| 1 | **Project scaffolding** | 8.0 | ✅ |
-| 2 | **Config system** | 5.0 | ✅ |
-| 3 | **LLMProvider interface** | 9.0 | ✅ |
-| 4 | **Claude Provider** | 4.0 | ✅ |
-| 5 | **Core tools** | 5.5 | ✅ |
-| 6 | **Capability policy engine** | 6.5 | ✅ |
-| 7 | **Execution loop** | 6.0 | ✅ |
-| 8 | **JSONL session persistence** | 9.0 | ✅ |
-| 9 | **CLI basics** | 5.0 | ✅ |
-| 10 | **Critical file protection** | 10.0 | ✅ |
-| 11 | **Atomic writes for shared state** | 9.0 | ✅ |
+### Tier 2: Intelligence & Interactivity (WSJF ≥ 3.0)
 
----
-
-### Tier 2: Intelligence & Steering (WSJF ≥ 3.0)
-
-| # | Work Item | BV | TC | RR | Size | WSJF | Est. Hours |
-|---|-----------|----|----|-----|------|------|------------|
-| 12 | **Gemini Provider** — CLI subprocess wrapper, multi-format output parser | 4 | 4 | 3 | 3 | **3.7** | 3 |
-| 13 | **Router** — Task classification heuristic, routing matrix, user override | 4 | 4 | 2 | 2 | **5.0** | 2 |
-| 14 | **Failover Controller** — Quota detection, auth failure detection, HandoffBundle | 4 | 3 | 4 | 3 | **3.7** | 3 |
-| 15 | **Auth health monitoring** — Heartbeat auth checks, pre-expiry warnings | 3 | 3 | 5 | 2 | **5.5** | 2 |
-| 16 | **Async Steering Protocol (v0.6)** — Message schemas, routing contract, source tagging | 4 | 3 | 3 | 2 | **5.0** | 2 |
-| 17 | **Routines + cron** — node-cron, TOML definitions, heartbeat system | 5 | 3 | 1 | 2 | **4.5** | 2 |
-| 18 | **macOS notifications** — `osascript` for task complete, errors, auth expiry | 4 | 2 | 1 | 1 | **7.0** | 0.5 |
-| 19 | **Retry queue** — Exponential backoff for quota-exhausted tasks | 3 | 2 | 3 | 2 | **4.0** | 1.5 |
-| 20 | **Content pipeline routine** — MyMoneyCoach weekly blog + social posts | 5 | 3 | 0 | 2 | **4.0** | 2 |
-| 21 | **Job search routine** — Daily job scan + cover letter generation | 4 | 2 | 0 | 2 | **3.0** | 2 |
+| # | Work Item | BV | TC | RR | Size | WSJF | Est |
+|---|-----------|----|----|-----|------|------|-----|
+| 12 | **Gemini Provider** | 4 | 4 | 3 | 3 | **3.7** | ✅ |
+| 13 | **Router** | 4 | 4 | 2 | 2 | **5.0** | ✅ |
+| 14 | **Failover Controller** | 4 | 3 | 4 | 3 | **3.7** | ✅ |
+| 15 | **Auth health monitoring** | 3 | 3 | 5 | 2 | **5.5** | ✅ |
+| 16 | **Async Steering Protocol** | 4 | 3 | 3 | 2 | **5.0** | ✅ |
+| 17 | **Routines + cron** | 5 | 3 | 1 | 2 | **4.5** | ✅ |
+| 18 | **macOS notifications** | 4 | 2 | 1 | 1 | **7.0** | ✅ |
+| 19 | **Retry Queue** — Persistence for 429/Transient errors | 3 | 3 | 3 | 2 | **4.5** | 1.5h |
+| 20 | **Steering Controller** — Active course-correction in loop | 5 | 4 | 2 | 2 | **5.5** | 2h |
+| 21 | **Memory Tier 1+2** — `MEMORY.md` + Daily Notes context | 4 | 3 | 1 | 2 | **4.0** | 2h |
 
 ---
 
-### Tier 3: Memory & Remote UI (WSJF 1.0-2.9)
+### Tier 3: Interfaces & Hardening (WSJF 1.0-2.9)
 
-| # | Work Item | BV | TC | RR | Size | WSJF | Est. Hours |
-|---|-----------|----|----|-----|------|------|------------|
-| 22 | **Memory Tier 1+2** — MEMORY.md loading, daily notes read/write | 4 | 2 | 1 | 2 | **3.5** | 2 |
-| 23 | **Web Dashboard (v0.6)** — Local UI, status cards, steering input, flag review | 4 | 2 | 2 | 4 | **2.0** | 6 |
-| 24 | **Telegram Gateway (v0.6)** — Long-poll bot, pairing flow, remote steering ingress | 3 | 2 | 2 | 3 | **2.3** | 4 |
-| 25 | **Memory Tier 3** — Structured items (JSON), six memory types, source tagging | 3 | 2 | 2 | 2 | **3.5** | 2 |
-| 26 | **Salience scoring** — Retrieval ranking (reinforcement + recency decay + relevance) | 3 | 1 | 1 | 2 | **2.5** | 1.5 |
-| 27 | **Memory extraction pipeline** — Schema-guided extraction, correction loop | 3 | 1 | 1 | 3 | **1.7** | 3 |
-| 28 | **Category auto-organization** — Category assignment, summary generation | 3 | 1 | 1 | 3 | **1.7** | 3 |
-| 29 | **Secrets management** — AES-256-GCM, Keychain, JIT decryption | 2 | 2 | 5 | 2 | **4.5** | 2 |
-| 30 | **Audit logging** — Hash-chained append-only log, serialized writer queue | 2 | 1 | 4 | 2 | **3.5** | 1.5 |
-| 31 | **Integrity Guardian** — SHA-256 baselines, heartbeat checks | 2 | 1 | 5 | 2 | **4.0** | 1.5 |
-| 32 | **Prompt injection defense** — Input sanitizer, output validator | 1 | 1 | 4 | 2 | **3.0** | 2 |
-| 33 | **Leak detection** — Scan LLM outputs for secret patterns | 1 | 1 | 4 | 1 | **6.0** | 1 |
-| 34 | **Worker capability tokens** — Scoped permission subsets per job | 2 | 1 | 3 | 2 | **3.0** | 2 |
-| 35 | **`zora memory` CLI** | 3 | 1 | 0 | 1 | **4.0** | 1 |
-| 36 | **`zora audit` CLI** | 1 | 1 | 2 | 1 | **4.0** | 0.5 |
-| 37 | **`zora config/policy edit` CLI** | 2 | 1 | 2 | 1 | **5.0** | 0.5 |
-
----
-
-### Tier 4: Teams & Advanced (WSJF < 1.0)
-
-| # | Work Item | BV | TC | RR | Size | WSJF | Est. Hours |
-|---|-----------|----|----|-----|------|------|------------|
-| 38 | **Cross-agent mailbox infrastructure** | 3 | 1 | 1 | 3 | **1.7** | 3 |
-| 39 | **Gemini Bridge** — Background process polling mailbox → CLI | 3 | 1 | 1 | 3 | **1.7** | 3 |
-| 40 | **Bridge Watchdog** | 1 | 1 | 3 | 1 | **5.0** | 1 |
-| 41 | **Team lifecycle commands** | 2 | 1 | 0 | 2 | **1.5** | 2 |
-| 42 | **MCP server support** | 3 | 1 | 0 | 3 | **1.3** | 3 |
-| 43 | **WASM sandbox spike** | 2 | 1 | 3 | 3 | **2.0** | 4 |
+| # | Work Item | BV | TC | RR | Size | WSJF | Est |
+|---|-----------|----|----|-----|------|------|-----|
+| 22 | **Web Dashboard (v0.6)** — Local UI, Onboarding, Policy UI | 4 | 3 | 3 | 4 | **2.5** | 6h |
+| 23 | **Telegram Gateway (v0.6)** — Remote steering bot | 3 | 2 | 2 | 3 | **2.3** | 4h |
+| 24 | **Hardening Stack** — Secrets, Audit, Integrity | 2 | 2 | 5 | 3 | **3.0** | 4h |
+| 25 | **Memory Tier 3+** — Salience, Extraction, Categories | 3 | 2 | 2 | 4 | **1.7** | 6h |
+| 26 | **Worker Sandbox** — Capability tokens + protections | 2 | 1 | 4 | 2 | **2.3** | 2h |
+| 27 | **CLI Refinements** — Memory/Audit/Config commands | 3 | 1 | 0 | 2 | **2.0** | 2h |
 
 ---
 
 ## Session Roadmap
 
-### Session 2: Intelligence & Steering (Current)
-**Target:** Items 12-18
-**Deliverable:** Dual-provider agent with smart routing, failover, and async steering protocol foundation.
+### Session 2: Steering & Resilience (Current)
+**Target:** Items 19-20
+**Deliverable:** Agent that can survive quota limits and be redirected mid-task.
 
-### Session 3: Persistence & Workflows
-**Target:** Items 19-21
-**Deliverable:** Retry resilience and real MyMoneyCoach content routines.
+### Session 3: Memory & Dashboard
+**Target:** Items 21-22
+**Deliverable:** Knowledge-aware agent with local control UI.
 
-### Session 4: Memory & Dashboard
-**Target:** Items 22-24
-**Deliverable:** Hierarchical memory and local web dashboard for monitoring.
+### Session 4: Remote & Hardening
+**Target:** Items 23-24
+**Deliverable:** Telegram steering and full security stack.
 
 ---
 
