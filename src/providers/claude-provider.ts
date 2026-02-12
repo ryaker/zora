@@ -454,16 +454,24 @@ export class ClaudeProvider implements LLMProvider {
       parts.push('<execution_history>');
       for (const event of task.history) {
         if (event.type === 'text') {
-          parts.push(`Assistant: ${(event.content as any).text}`);
+          parts.push('  <assistant_response>');
+          parts.push((event.content as any).text);
+          parts.push('  </assistant_response>');
         } else if (event.type === 'tool_call') {
           const c = event.content as any;
-          parts.push(`Assistant (Tool Call): ${c.tool}(${JSON.stringify(c.arguments)})`);
+          parts.push(`  <tool_call name="${c.tool}" id="${c.toolCallId}">`);
+          parts.push(JSON.stringify(c.arguments, null, 2));
+          parts.push('  </tool_call>');
         } else if (event.type === 'tool_result') {
           const c = event.content as any;
-          parts.push(`Tool Result: ${JSON.stringify(c.result)}`);
+          parts.push(`  <tool_result id="${c.toolCallId}">`);
+          parts.push(JSON.stringify(c.result, null, 2));
+          parts.push('  </tool_result>');
         } else if (event.type === 'steering') {
           const c = event.content as any;
-          parts.push(`[HUMAN INTERVENTION from ${c.source}/${c.author}]: ${c.text}`);
+          parts.push(`  <human_steering source="${c.source}" author="${c.author}">`);
+          parts.push(c.text);
+          parts.push('  </human_steering>');
         }
       }
       parts.push('</execution_history>');
