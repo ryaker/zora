@@ -10,3 +10,4 @@ export * from './providers/index.js';
 export * from './config/index.js';
 export * from './security/policy-engine.js';
 export * from './tools/index.js';
+export * from './orchestrator/index.js';

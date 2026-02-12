@@ -46,6 +46,7 @@ export class MockProvider implements LLMProvider {
   private _failAfterEvents: number;
   private _responseText: string;
   private _latencyMs: number;
+  private _mockEvents: AgentEvent[] | null = null;
 
   // Tracking for assertions
   public executeCalls: TaskContext[] = [];
@@ -98,6 +99,13 @@ export class MockProvider implements LLMProvider {
 
     if (this._latencyMs > 0) {
       await new Promise((r) => setTimeout(r, this._latencyMs));
+    }
+
+    if (this._mockEvents) {
+      for (const event of this._mockEvents) {
+        yield event;
+      }
+      return;
     }
 
     if (this._shouldFail) {
@@ -156,6 +164,10 @@ export class MockProvider implements LLMProvider {
 
   // ─── Test helpers ────────────────────────────────────────────────
 
+  setMockEvents(events: AgentEvent[]): void {
+    this._mockEvents = events;
+  }
+
   setAvailable(v: boolean): void {
     this._available = v;
   }
@@ -181,5 +193,6 @@ export class MockProvider implements LLMProvider {
     this.abortCalls = [];
     this.authCheckCount = 0;
     this.quotaCheckCount = 0;
+    this._mockEvents = null;
   }
 }
