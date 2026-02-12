@@ -49,7 +49,7 @@ name = "test-routine"
 schedule = "* * * * *"
 enabled = true
 
-[routine.task]
+[task]
 prompt = "say hello"
     `, 'utf8');
 

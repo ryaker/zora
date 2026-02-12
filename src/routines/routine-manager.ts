@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
 import type { RoutineDefinition, TaskContext } from '../types.js';
@@ -31,7 +32,9 @@ export class RoutineManager {
   async init(): Promise<void> {
     try {
       await fs.mkdir(this._routinesDir, { recursive: true });
-    } catch (err) {}
+    } catch (err) {
+      console.error(`Failed to create routines directory at ${this._routinesDir}:`, err);
+    }
 
     await this.loadAll();
   }
@@ -40,11 +43,15 @@ export class RoutineManager {
    * Loads all routine definitions from the routines directory.
    */
   async loadAll(): Promise<void> {
-    const files = await fs.readdir(this._routinesDir);
-    for (const file of files) {
-      if (file.endsWith('.toml')) {
-        await this.loadRoutine(path.join(this._routinesDir, file));
+    try {
+      const files = await fs.readdir(this._routinesDir);
+      for (const file of files) {
+        if (file.endsWith('.toml')) {
+          await this.loadRoutine(path.join(this._routinesDir, file));
+        }
       }
+    } catch (err) {
+      console.error(`Failed to read routines directory:`, err);
     }
   }
 
@@ -52,12 +59,21 @@ export class RoutineManager {
    * Loads a single routine from a TOML file and schedules it.
    */
   async loadRoutine(filePath: string): Promise<void> {
-    const content = await fs.readFile(filePath, 'utf8');
-    const definition = smol.parse(content) as unknown as RoutineDefinition;
-    
-    if (definition.routine.enabled === false) return;
-
-    this.scheduleRoutine(definition);
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const raw = smol.parse(content) as any;
+      
+      if (this._isValidRoutine(raw)) {
+        const definition = raw as RoutineDefinition;
+        if (definition.routine.enabled !== false) {
+          this.scheduleRoutine(definition);
+        }
+      } else {
+        console.error(`Invalid routine definition in ${filePath}`);
+      }
+    } catch (err) {
+      console.error(`Failed to load routine from ${filePath}:`, err);
+    }
   }
 
   /**
@@ -72,7 +88,7 @@ export class RoutineManager {
     }
 
     const scheduledTask = cron.schedule(routine.schedule, async () => {
-      const jobId = `routine_${routine.name}_${Date.now()}`;
+      const jobId = `routine_${routine.name}_${randomUUID()}`;
       
       const context: TaskContext = {
         jobId,
@@ -94,6 +110,20 @@ export class RoutineManager {
     });
 
     this._scheduledTasks.set(routine.name, scheduledTask);
+  }
+
+  /**
+   * Basic validation for RoutineDefinition.
+   */
+  private _isValidRoutine(raw: any): raw is RoutineDefinition {
+    return (
+      raw &&
+      typeof raw.routine === 'object' &&
+      typeof raw.routine.name === 'string' &&
+      typeof raw.routine.schedule === 'string' &&
+      typeof raw.task === 'object' &&
+      typeof raw.task.prompt === 'string'
+    );
   }
 
   /**
