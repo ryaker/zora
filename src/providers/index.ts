@@ -16,3 +16,8 @@ export {
   type SDKSystemMessage,
   type SDKUserMessage,
 } from './claude-provider.js';
+
+export {
+  GeminiProvider,
+  type GeminiProviderOptions,
+} from './gemini-provider.js';
