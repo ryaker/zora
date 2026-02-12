@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-tactical overflow-hidden;
+  }
+}
+
+@layer components {
+  .lcars-bar {
+    @apply bg-zora-amber h-8 rounded-l-full relative flex items-center px-6 text-black font-bold uppercase tracking-widest text-sm;
+  }
+  
+  .lcars-panel {
+    @apply bg-zora-gray/50 border-l-4 border-zora-amber p-4 relative overflow-hidden;
+  }
+
+  .scanline {
+    @apply pointer-events-none absolute inset-0 z-50;
+    background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%,
+      rgba(0, 0, 0, 0.25) 50%
+    ), linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.06),
+      rgba(0, 255, 0, 0.02),
+      rgba(0, 0, 255, 0.06)
+    );
+    background-size: 100% 4px, 3px 100%;
+  }
+}
