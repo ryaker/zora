@@ -44,7 +44,7 @@ describe('RetryQueue', () => {
     expect(state[0].retryCount).toBe(1);
   });
 
-  it('implements exponential backoff', async () => {
+  it('implements quadratic backoff', async () => {
     const now = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(now);

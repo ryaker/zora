@@ -34,7 +34,8 @@ export class RetryQueue {
   async init(): Promise<void> {
     try {
       const dir = path.dirname(this._stateFile);
-      await fs.mkdir(dir, { recursive: true });
+      // Spec §4.3: Secure directory creation with restrictive permissions (0o700)
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       
       const content = await fs.readFile(this._stateFile, 'utf8');
       const raw = JSON.parse(content) as any[];
@@ -42,8 +43,15 @@ export class RetryQueue {
         ...entry,
         nextRunAt: new Date(entry.nextRunAt)
       }));
-    } catch (err) {
-      this._queue = [];
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        // File doesn't exist, which is fine on first run.
+        this._queue = [];
+      } else {
+        // For corruption or other errors, log it and start fresh.
+        console.warn(`[RetryQueue] Failed to load state from ${this._stateFile}, starting fresh. Error:`, err);
+        this._queue = [];
+      }
     }
   }
 
@@ -63,7 +71,7 @@ export class RetryQueue {
       }
     }
 
-    // Exponential backoff: 1m, 4m, 9m... (index^2 minutes)
+    // Quadratic backoff: 1m, 4m, 9m... (retryCount^2 minutes)
     const delayMs = Math.pow(retryCount, 2) * 60 * 1000;
     const nextRunAt = new Date(Date.now() + delayMs);
 
