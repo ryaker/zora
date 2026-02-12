@@ -279,7 +279,7 @@ export interface FilesystemPolicy {
 }
 
 export interface ShellPolicy {
-  mode: 'allowlist' | 'denylist';
+  mode: 'allowlist' | 'denylist' | 'deny_all';
   allowed_commands: string[];
   denied_commands: string[];
   split_chained_commands: boolean;
