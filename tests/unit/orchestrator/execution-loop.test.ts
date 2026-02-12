@@ -103,4 +103,50 @@ describe('ExecutionLoop', () => {
     const pending = await steeringManager.getPendingMessages('loop-job-1');
     expect(pending).toHaveLength(0);
   });
+
+  it('interrupts execution when a steering message arrives mid-task', async () => {
+    // 1. Create a provider that yields slowly
+    let yieldCount = 0;
+    const slowExecute = async function* () {
+      yield { type: 'thinking', timestamp: new Date(), content: { text: 'Thinking...' } };
+      yieldCount++;
+      
+      // Wait for steering to be injected
+      while (yieldCount < 2) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+
+      yield { type: 'text', timestamp: new Date(), content: { text: 'I should not reach this' } };
+    };
+
+    vi.spyOn(provider, 'execute').mockImplementation(slowExecute as any);
+    vi.spyOn(provider, 'abort').mockImplementation(async () => {
+      yieldCount = 100; // Stop the slow generator
+    });
+
+    // 2. Start the loop in background
+    const runPromise = loop.run(task);
+
+    // 3. Wait for first yield, then inject steering
+    await new Promise(r => setTimeout(r, 50));
+    await steeringManager.init();
+    await steeringManager.injectMessage({
+      type: 'steer',
+      jobId: 'loop-job-1',
+      source: 'web',
+      author: 'rich',
+      message: 'Change of plans',
+      timestamp: new Date(),
+    });
+
+    // 4. Trigger the generator to "continue" (it will be interrupted by the loop check)
+    yieldCount = 2;
+
+    await runPromise;
+
+    // 5. Verify abort was called and history contains steering
+    expect(provider.abort).toHaveBeenCalledWith('loop-job-1');
+    const history = await sessionManager.getHistory('loop-job-1');
+    expect(history.some(e => e.type === 'steering' && (e.content as any).text === 'Change of plans')).toBe(true);
+  });
 });

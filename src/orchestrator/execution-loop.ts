@@ -108,7 +108,6 @@ export class ExecutionLoop {
 
         if (shouldRestart) {
           shouldRestart = false;
-          // Restarting the provider loop happens naturally by continuing the while loop
         }
 
         // 2. Start provider execution
@@ -120,7 +119,7 @@ export class ExecutionLoop {
           // Handle specific event types
           if (event.type === 'tool_call') {
             turnCount++;
-            await this._handleToolCall(task.jobId, event);
+            await this._handleToolCall(task, event);
           }
 
           if (event.type === 'text') {
@@ -166,7 +165,7 @@ export class ExecutionLoop {
   /**
    * Dispatches a tool call to the appropriate tool implementation.
    */
-  private async _handleToolCall(jobId: string, event: AgentEvent): Promise<void> {
+  private async _handleToolCall(task: TaskContext, event: AgentEvent): Promise<void> {
     const content = event.content as ToolCallContent;
     const { tool, arguments: args, toolCallId } = content;
     
@@ -180,22 +179,28 @@ export class ExecutionLoop {
         result = { success: false, error: `Unknown tool: ${tool}` };
       }
 
-      // Record the result
-      await this._sessionManager.appendEvent(jobId, {
+      const resultEvent: AgentEvent = {
         type: 'tool_result',
         timestamp: new Date(),
         content: {
           toolCallId,
           result,
         },
-      });
+      };
+
+      // Record the result
+      await this._sessionManager.appendEvent(task.jobId, resultEvent);
+      // Ensure history is consistent for restarts
+      task.history.push(resultEvent);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      await this._sessionManager.appendEvent(jobId, {
+      const errorEvent: AgentEvent = {
         type: 'error',
         timestamp: new Date(),
         content: { message: `Tool execution failed (${tool}): ${msg}` },
-      });
+      };
+      await this._sessionManager.appendEvent(task.jobId, errorEvent);
+      task.history.push(errorEvent);
     }
   }
 }
