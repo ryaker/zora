@@ -67,7 +67,7 @@ describe('MemoryManager', () => {
   it('respects rolling context window (days)', async () => {
     await manager.init();
     const dnDir = path.join(testDir, config.daily_notes_dir);
-    
+
     // Create notes for 3 different days
     await fs.writeFile(path.join(dnDir, '2026-02-10.md'), 'Day 10');
     await fs.writeFile(path.join(dnDir, '2026-02-11.md'), 'Day 11');
@@ -78,5 +78,77 @@ describe('MemoryManager', () => {
     expect(context.some(c => c.includes('2026-02-12'))).toBe(true);
     expect(context.some(c => c.includes('2026-02-11'))).toBe(true);
     expect(context.some(c => c.includes('2026-02-10'))).toBe(false);
+  });
+
+  // ── Tier 3 integration tests ──────────────────────────────────
+
+  it('initializes Tier 3 directories (items + categories)', async () => {
+    await manager.init();
+    const itemsDir = path.join(testDir, config.items_dir);
+    const catsDir = path.join(testDir, config.categories_dir);
+
+    const itemsStats = await fs.stat(itemsDir);
+    expect(itemsStats.isDirectory()).toBe(true);
+
+    const catsStats = await fs.stat(catsDir);
+    expect(catsStats.isDirectory()).toBe(true);
+  });
+
+  it('searchMemory returns salience-ranked results', async () => {
+    await manager.init();
+    const sm = manager.structuredMemory;
+
+    await sm.createItem({
+      type: 'knowledge', summary: 'TypeScript strict mode benefits',
+      source: 's', source_type: 'user_instruction', tags: ['typescript'], category: 'coding/ts',
+    });
+    await sm.createItem({
+      type: 'knowledge', summary: 'Python list comprehensions',
+      source: 's', source_type: 'agent_analysis', tags: ['python'], category: 'coding/py',
+    });
+
+    const results = await manager.searchMemory('typescript');
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    // TypeScript item should be top-ranked
+    expect(results[0]!.score).toBeGreaterThan(0);
+  });
+
+  it('forgetItem removes a structured memory item', async () => {
+    await manager.init();
+    const sm = manager.structuredMemory;
+
+    const item = await sm.createItem({
+      type: 'event', summary: 'Temp event',
+      source: 's', source_type: 'tool_output', tags: [], category: 'events/tmp',
+    });
+
+    const deleted = await manager.forgetItem(item.id);
+    expect(deleted).toBe(true);
+
+    const gone = await sm.getItem(item.id);
+    expect(gone).toBeNull();
+  });
+
+  it('getCategories returns category summaries', async () => {
+    await manager.init();
+
+    // Initially empty
+    const empty = await manager.getCategories();
+    expect(empty).toHaveLength(0);
+  });
+
+  it('loadContext includes Tier 3 memory items', async () => {
+    await manager.init();
+    const sm = manager.structuredMemory;
+
+    await sm.createItem({
+      type: 'knowledge', summary: 'Important fact about Zora architecture',
+      source: 's', source_type: 'user_instruction', tags: ['architecture'], category: 'coding/zora',
+    });
+
+    const context = await manager.loadContext(1);
+    // Should include memory items section
+    expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(true);
+    expect(context.some(c => c.includes('Important fact about Zora architecture'))).toBe(true);
   });
 });
