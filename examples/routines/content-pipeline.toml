@@ -1,0 +1,19 @@
+[routine]
+name = "content-pipeline"
+schedule = "0 8 * * 2"
+model_preference = "claude"
+timeout = "30m"
+
+[routine.task]
+prompt = """
+It's Tuesday — time for the weekly MyMoneyCoach.ai content pipeline.
+
+1. Check the content calendar for this week's blog topic
+2. Write a blog post using the StoryBrand framework with Sophia's voice
+3. Generate a Sophia coaching image for the blog header
+4. Create social media soundbites for Wednesday through Monday
+5. Schedule all content in the content calendar
+
+Use the PEACE framework (Plan, Educate, Act, Coach, Empower) for messaging.
+Write blog to ~/.zora/workspace/content/{date}-blog.md
+"""
