@@ -14,6 +14,7 @@ import type {
   SteeringConfig,
   NotificationsConfig,
   ProviderConfig,
+  McpConfig,
 } from '../types.js';
 
 export const DEFAULT_AGENT: AgentConfig = {
@@ -95,6 +96,10 @@ export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
   on_all_providers_down: true,
 };
 
+export const DEFAULT_MCP: McpConfig = {
+  servers: {},
+};
+
 export const DEFAULT_CONFIG: ZoraConfig = {
   agent: DEFAULT_AGENT,
   providers: [],
@@ -104,6 +109,7 @@ export const DEFAULT_CONFIG: ZoraConfig = {
   security: DEFAULT_SECURITY,
   steering: DEFAULT_STEERING,
   notifications: DEFAULT_NOTIFICATIONS,
+  mcp: DEFAULT_MCP,
 };
 
 /**
