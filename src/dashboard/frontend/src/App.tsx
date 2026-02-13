@@ -10,6 +10,8 @@ interface ProviderStatus {
   canAutoRefresh: boolean;
 }
 
+const ZORA_VERSION = 'v0.6.0';
+
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [steerMsg, setSteerMsg] = useState('');
@@ -22,7 +24,7 @@ const App: React.FC = () => {
         const res = await axios.get('/api/health');
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
-        console.error('Health check failed');
+        console.error('Health check failed', err);
       }
     };
 
@@ -43,7 +45,7 @@ const App: React.FC = () => {
       setLogs(prev => [`Message sent: ${steerMsg}`, ...prev].slice(0, 10));
       setSteerMsg('');
     } catch (err) {
-      setLogs(prev => ['Failed to send message', ...prev]);
+      setLogs(prev => ['Failed to send message', ...prev].slice(0, 10));
     }
   };
 
@@ -54,7 +56,7 @@ const App: React.FC = () => {
       {/* Header Bar */}
       <div className="flex items-center gap-4 mb-6">
         <div className="lcars-bar flex-1 bg-zora-amber">
-          ZORA // DASHBOARD
+          {'ZORA // DASHBOARD'}
         </div>
         <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
       </div>
@@ -146,7 +148,7 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
-        <div>Zora v0.6.0</div>
+        <div>Zora {ZORA_VERSION}</div>
         <div>Dashboard</div>
       </div>
     </div>
