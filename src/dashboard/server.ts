@@ -19,7 +19,7 @@ import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export interface DashboardOptions {
-  loop: ExecutionLoop;
+  loop?: ExecutionLoop;
   sessionManager: SessionManager;
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
@@ -52,15 +52,26 @@ export class DashboardServer {
   /**
    * Simple in-memory rate limiter (no external dependency).
    * Limits to 100 requests per 15 minutes per IP.
+   * Prunes expired entries periodically to prevent unbounded memory growth.
    */
   private _createRateLimiter(): express.RequestHandler {
     const windowMs = 15 * 60 * 1000;
     const maxRequests = 100;
     const clients = new Map<string, { count: number; resetAt: number }>();
+    let lastCleanup = Date.now();
 
     return (req, res, next) => {
       const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
       const now = Date.now();
+
+      // Prune expired entries every 5 minutes
+      if (now - lastCleanup > 5 * 60 * 1000) {
+        for (const [key, rec] of clients) {
+          if (rec.resetAt <= now) clients.delete(key);
+        }
+        lastCleanup = now;
+      }
+
       const record = clients.get(ip);
 
       if (!record || now > record.resetAt) {
@@ -159,7 +170,13 @@ export class DashboardServer {
       res.write('data: {"type":"connected"}\n\n');
       this._sseClients.add(res);
 
+      // Keep-alive comment every 30s to prevent proxy/firewall timeouts
+      const keepAlive = setInterval(() => {
+        res.write(': keepalive\n\n');
+      }, 30_000);
+
       req.on('close', () => {
+        clearInterval(keepAlive);
         this._sseClients.delete(res);
       });
     });
@@ -196,7 +213,7 @@ export class DashboardServer {
   /**
    * Stops the dashboard server.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     // Close all SSE connections
     for (const client of this._sseClients) {
       client.end();
@@ -204,7 +221,12 @@ export class DashboardServer {
     this._sseClients.clear();
 
     if (this._server) {
-      this._server.close();
+      await new Promise<void>((resolve, reject) => {
+        this._server!.close((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
     }
   }
 }

@@ -69,8 +69,8 @@ export class Orchestrator {
   private _routineManager: RoutineManager | null = null;
 
   // Background intervals
-  private _authCheckInterval: ReturnType<typeof setInterval> | null = null;
-  private _retryPollInterval: ReturnType<typeof setInterval> | null = null;
+  private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _retryPollTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private _booted = false;
 
@@ -123,31 +123,41 @@ export class Orchestrator {
       preExpiryWarningHours: 2,
     });
 
-    // R4: Schedule periodic auth checks (every 5 minutes)
-    this._authCheckInterval = setInterval(async () => {
-      try {
-        await this._authMonitor.checkAll();
-      } catch (err) {
-        console.error('[Orchestrator] AuthMonitor check failed:', err);
-      }
-    }, 5 * 60 * 1000);
-
-    // R5: Poll RetryQueue (every 30 seconds)
-    this._retryPollInterval = setInterval(async () => {
-      try {
-        const readyTasks = this._retryQueue.getReadyTasks();
-        for (const task of readyTasks) {
-          await this._retryQueue.remove(task.jobId);
-          try {
-            await this.submitTask({ prompt: task.task, jobId: task.jobId });
-          } catch (err) {
-            console.error(`[Orchestrator] Retry failed for ${task.jobId}:`, err);
-          }
+    // R4: Schedule periodic auth checks (every 5 minutes) using self-rescheduling
+    // setTimeout to avoid overlapping async executions
+    const scheduleAuthCheck = () => {
+      this._authCheckTimeout = setTimeout(async () => {
+        try {
+          await this._authMonitor.checkAll();
+        } catch (err) {
+          console.error('[Orchestrator] AuthMonitor check failed:', err);
         }
-      } catch (err) {
-        console.error('[Orchestrator] RetryQueue poll failed:', err);
-      }
-    }, 30 * 1000);
+        scheduleAuthCheck();
+      }, 5 * 60 * 1000);
+    };
+    scheduleAuthCheck();
+
+    // R5: Poll RetryQueue (every 30 seconds) — remove task only after successful re-submission
+    const scheduleRetryPoll = () => {
+      this._retryPollTimeout = setTimeout(async () => {
+        try {
+          const readyTasks = this._retryQueue.getReadyTasks();
+          for (const task of readyTasks) {
+            try {
+              await this.submitTask({ prompt: task.task, jobId: task.jobId });
+              await this._retryQueue.remove(task.jobId);
+            } catch (err) {
+              console.error(`[Orchestrator] Retry failed for ${task.jobId}:`, err);
+              // Leave task in queue for next poll cycle
+            }
+          }
+        } catch (err) {
+          console.error('[Orchestrator] RetryQueue poll failed:', err);
+        }
+        scheduleRetryPoll();
+      }, 30 * 1000);
+    };
+    scheduleRetryPoll();
 
     // R9: Start HeartbeatSystem and RoutineManager
     const defaultLoop = new ExecutionLoop({
@@ -176,14 +186,14 @@ export class Orchestrator {
   async shutdown(): Promise<void> {
     if (!this._booted) return;
 
-    // Stop background intervals
-    if (this._authCheckInterval) {
-      clearInterval(this._authCheckInterval);
-      this._authCheckInterval = null;
+    // Stop background timers
+    if (this._authCheckTimeout) {
+      clearTimeout(this._authCheckTimeout);
+      this._authCheckTimeout = null;
     }
-    if (this._retryPollInterval) {
-      clearInterval(this._retryPollInterval);
-      this._retryPollInterval = null;
+    if (this._retryPollTimeout) {
+      clearTimeout(this._retryPollTimeout);
+      this._retryPollTimeout = null;
     }
 
     // Stop heartbeat and routines
@@ -247,6 +257,12 @@ export class Orchestrator {
     return this._executeWithProvider(selectedProvider, taskContext, options.onEvent);
   }
 
+  /** Symbol used to mark errors that have already been through the failover path */
+  private static readonly _FAILOVER_SENTINEL = Symbol.for('zora.failoverSentinel');
+
+  /** Maximum depth of failover recursion to prevent unbounded re-execution */
+  private static readonly MAX_FAILOVER_DEPTH = 3;
+
   /**
    * Executes a task with a specific provider, handling failover and event persistence.
    */
@@ -254,6 +270,7 @@ export class Orchestrator {
     provider: LLMProvider,
     taskContext: TaskContext,
     onEvent?: (event: AgentEvent) => void,
+    failoverDepth = 0,
   ): Promise<string> {
     let result = '';
 
@@ -298,6 +315,11 @@ export class Orchestrator {
           const errorContent = event.content as any;
           const error = new Error(errorContent.message ?? 'Unknown provider error');
 
+          // Guard: skip failover if depth exceeded
+          if (failoverDepth >= Orchestrator.MAX_FAILOVER_DEPTH) {
+            throw error;
+          }
+
           // R3: Connect FailoverController to error path
           const failoverResult = await this._failoverController.handleFailure(
             taskContext,
@@ -306,8 +328,8 @@ export class Orchestrator {
           );
 
           if (failoverResult) {
-            // Re-execute with the failover provider
-            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent);
+            // Re-execute with the failover provider (increment depth)
+            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
           }
 
           // R5: Enqueue for retry if no failover available
@@ -321,7 +343,9 @@ export class Orchestrator {
         }
       }
     } catch (err) {
-      if (err instanceof Error && err.message !== 'Unknown provider error') {
+      // Skip failover for errors already marked by the failover path
+      const isFailoverError = err instanceof Error && (err as any)[Orchestrator._FAILOVER_SENTINEL];
+      if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
         // R3: Try failover on execution exceptions
         const failoverResult = await this._failoverController.handleFailure(
           taskContext,
@@ -330,7 +354,9 @@ export class Orchestrator {
         );
 
         if (failoverResult) {
-          return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent);
+          // Mark the error so downstream doesn't re-trigger failover
+          (err as any)[Orchestrator._FAILOVER_SENTINEL] = true;
+          return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
         }
 
         // R5: Enqueue for retry
@@ -366,35 +392,46 @@ export class Orchestrator {
 
   // ─── Public accessors ──────────────────────────────────────────────
 
+  private _assertBooted(): void {
+    if (!this._booted) throw new Error('Orchestrator.boot() must be called before accessing subsystems');
+  }
+
   get isBooted(): boolean {
     return this._booted;
   }
 
   get router(): Router {
+    this._assertBooted();
     return this._router;
   }
 
   get sessionManager(): SessionManager {
+    this._assertBooted();
     return this._sessionManager;
   }
 
   get steeringManager(): SteeringManager {
+    this._assertBooted();
     return this._steeringManager;
   }
 
   get memoryManager(): MemoryManager {
+    this._assertBooted();
     return this._memoryManager;
   }
 
   get authMonitor(): AuthMonitor {
+    this._assertBooted();
     return this._authMonitor;
   }
 
   get retryQueue(): RetryQueue {
+    this._assertBooted();
     return this._retryQueue;
   }
 
   get policyEngine(): PolicyEngine {
+    this._assertBooted();
     return this._policyEngine;
   }
 

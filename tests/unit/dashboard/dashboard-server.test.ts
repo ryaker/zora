@@ -4,7 +4,7 @@
  * Tests API routes, auth middleware behavior, and SSE connections.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createAuthMiddleware } from '../../../src/dashboard/auth-middleware.js';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -32,6 +32,10 @@ describe('Auth Middleware (R26)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    delete process.env['TEST_ZORA_TOKEN'];
   });
 
   it('should skip auth for /health endpoint', () => {
@@ -127,6 +131,5 @@ describe('Auth Middleware (R26)', () => {
     middleware(req as Request, res as Response, mockNext);
 
     expect(mockNext).toHaveBeenCalled();
-    delete process.env['TEST_ZORA_TOKEN'];
   });
 });

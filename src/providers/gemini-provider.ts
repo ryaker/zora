@@ -64,6 +64,7 @@ export class GeminiProvider implements LLMProvider {
     if (this._lastAuthStatus?.valid) return this._lastAuthStatus;
 
     return new Promise((resolve) => {
+      let resolved = false;
       // Try `gemini auth status` first for real auth verification
       const child = spawn(this._cliPath, ['auth', 'status']);
       let stdout = '';
@@ -75,14 +76,19 @@ export class GeminiProvider implements LLMProvider {
       }
 
       child.on('error', () => {
+        if (resolved) return;
         // CLI binary not found — fall back to --version check
         const fallback = spawn(this._cliPath, ['--version']);
         fallback.on('error', () => {
+          if (resolved) return;
+          resolved = true;
           const status = { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true };
           this._lastAuthStatus = status;
           resolve(status);
         });
         fallback.on('close', (code) => {
+          if (resolved) return;
+          resolved = true;
           const valid = code === 0;
           const status = { valid, expiresAt: null, canAutoRefresh: true, requiresInteraction: !valid };
           this._lastAuthStatus = status;
@@ -91,6 +97,8 @@ export class GeminiProvider implements LLMProvider {
       });
 
       child.on('close', (code) => {
+        if (resolved) return;
+        resolved = true;
         const valid = code === 0;
         const isAuthenticated = valid && !stdout.toLowerCase().includes('not authenticated');
         const status = {

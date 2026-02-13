@@ -254,7 +254,7 @@ program
 program
   .command('stop')
   .description('Stop the agent daemon')
-  .action(() => {
+  .action(async () => {
     const pidFile = getPidFilePath();
 
     if (!fs.existsSync(pidFile)) {
@@ -267,25 +267,36 @@ program
 
       // Send SIGTERM for graceful shutdown
       process.kill(pid, 'SIGTERM');
-      console.log(`Sent SIGTERM to Zora daemon (PID: ${pid}).`);
+      console.log(`Sent SIGTERM to Zora daemon (PID: ${pid}). Waiting for graceful shutdown...`);
 
-      // Wait briefly for process to exit, then clean up pidfile
-      setTimeout(() => {
+      // Poll for process exit (up to 5 seconds), then escalate to SIGKILL
+      const maxWaitMs = 5000;
+      const pollIntervalMs = 200;
+      let waited = 0;
+      let stopped = false;
+
+      while (waited < maxWaitMs) {
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+        waited += pollIntervalMs;
         try {
-          process.kill(pid, 0);
-          // Process still alive, send SIGKILL
-          process.kill(pid, 'SIGKILL');
-          console.log('Daemon did not stop gracefully, sent SIGKILL.');
+          process.kill(pid, 0); // Check if still alive
         } catch {
-          // Process exited
+          stopped = true;
+          break;
         }
-        try {
-          fs.unlinkSync(pidFile);
-        } catch {
-          // Pidfile already removed
-        }
-        console.log('Daemon stopped.');
-      }, 3000);
+      }
+
+      if (!stopped) {
+        process.kill(pid, 'SIGKILL');
+        console.log('Daemon did not stop gracefully, sent SIGKILL.');
+      }
+
+      try {
+        fs.unlinkSync(pidFile);
+      } catch {
+        // Pidfile already removed by daemon
+      }
+      console.log('Daemon stopped.');
     } catch (err: unknown) {
       // Process doesn't exist, clean up stale pidfile
       try {

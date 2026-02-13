@@ -93,7 +93,7 @@ async function main() {
 
   // Start dashboard server
   const dashboard = new DashboardServer({
-    loop: null as any, // ExecutionLoop provided via Orchestrator
+    // loop is optional — the Orchestrator owns the execution loop directly
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
@@ -106,8 +106,12 @@ async function main() {
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`[Daemon] Received ${signal}, shutting down...`);
-    dashboard.stop();
-    await orchestrator.shutdown();
+    try {
+      await dashboard.stop();
+      await orchestrator.shutdown();
+    } catch (err) {
+      console.error(`[Daemon] Error during shutdown:`, err instanceof Error ? err.message : String(err));
+    }
 
     // Remove pidfile
     const pidFile = path.join(configDir, 'state', 'daemon.pid');
@@ -120,8 +124,8 @@ async function main() {
     process.exit(0);
   };
 
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => { shutdown('SIGTERM').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
+  process.on('SIGINT', () => { shutdown('SIGINT').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
 }
 
 main().catch((err) => {

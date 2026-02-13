@@ -76,7 +76,7 @@ export class SessionManager {
       const files = await fs.promises.readdir(this._sessionsDir);
       for (const file of files) {
         if (!file.endsWith('.jsonl')) continue;
-        const jobId = file.replace('.jsonl', '');
+        const jobId = file.replace(/\.jsonl$/, '');
         const filePath = path.join(this._sessionsDir, file);
 
         try {
