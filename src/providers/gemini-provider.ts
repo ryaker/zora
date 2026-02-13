@@ -55,25 +55,49 @@ export class GeminiProvider implements LLMProvider {
     return auth.valid;
   }
 
+  /**
+   * R19: Verify actual auth status, not just binary existence.
+   * Runs `gemini auth status` (or falls back to `--version`) to verify
+   * the user is authenticated, not just that the CLI binary exists.
+   */
   async checkAuth(): Promise<AuthStatus> {
     if (this._lastAuthStatus?.valid) return this._lastAuthStatus;
 
     return new Promise((resolve) => {
-      const child = spawn(this._cliPath, ['--version']);
-      
+      // Try `gemini auth status` first for real auth verification
+      const child = spawn(this._cliPath, ['auth', 'status']);
+      let stdout = '';
+
+      if (child.stdout) {
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString();
+        });
+      }
+
       child.on('error', () => {
-        const status = { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true };
-        this._lastAuthStatus = status;
-        resolve(status);
+        // CLI binary not found — fall back to --version check
+        const fallback = spawn(this._cliPath, ['--version']);
+        fallback.on('error', () => {
+          const status = { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true };
+          this._lastAuthStatus = status;
+          resolve(status);
+        });
+        fallback.on('close', (code) => {
+          const valid = code === 0;
+          const status = { valid, expiresAt: null, canAutoRefresh: true, requiresInteraction: !valid };
+          this._lastAuthStatus = status;
+          resolve(status);
+        });
       });
 
       child.on('close', (code) => {
         const valid = code === 0;
-        const status = { 
-          valid, 
-          expiresAt: null, 
+        const isAuthenticated = valid && !stdout.toLowerCase().includes('not authenticated');
+        const status = {
+          valid: isAuthenticated,
+          expiresAt: null,
           canAutoRefresh: true,
-          requiresInteraction: !valid 
+          requiresInteraction: !isAuthenticated
         };
         this._lastAuthStatus = status;
         resolve(status);
@@ -253,7 +277,10 @@ export class GeminiProvider implements LLMProvider {
           tool: match[1],
           arguments: JSON.parse(match[2]!.trim()),
         });
-      } catch (e) {}
+      } catch (e) {
+        // R18: Log malformed XML tool calls instead of silently swallowing
+        console.warn(`[GeminiProvider] Failed to parse XML tool call: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     // 2. Markdown JSON pattern if no XML
@@ -269,17 +296,31 @@ export class GeminiProvider implements LLMProvider {
               arguments: data.arguments,
             });
           }
-        } catch (e) {}
+        } catch (e) {
+          // R18: Log malformed JSON tool calls instead of silently swallowing
+          console.warn(`[GeminiProvider] Failed to parse JSON tool call: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
     }
 
     return toolCalls;
   }
 
+  /** R28: Max buffer size to prevent unbounded memory consumption (50MB) */
+  private static readonly MAX_BUFFER_SIZE = 50 * 1024 * 1024;
+
   private async * _streamToLines(stream: NodeJS.ReadableStream): AsyncGenerator<string> {
     let buffer = '';
+    let totalBytes = 0;
     for await (const chunk of stream) {
-      buffer += chunk.toString();
+      const str = chunk.toString();
+      totalBytes += str.length;
+      if (totalBytes > GeminiProvider.MAX_BUFFER_SIZE) {
+        console.warn(`[GeminiProvider] Output exceeded ${GeminiProvider.MAX_BUFFER_SIZE} bytes, truncating stream.`);
+        yield '[Output truncated: exceeded maximum buffer size]';
+        break;
+      }
+      buffer += str;
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
       for (const line of lines) {
