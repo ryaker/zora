@@ -355,9 +355,9 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2 mb-2 font-bold uppercase">
               <Info size={14} /> System Info
             </div>
-            UPTIME: 04:20:12<br/>
-            MEMORY: 128MB / 512MB<br/>
-            THREADS: 04 ACTIVE
+            UPTIME: {system ? formatUptime(system.uptime) : '--:--:--'}<br/>
+            MEMORY: {system ? `${system.memory.used}MB / ${system.memory.total}MB` : '-- / --'}<br/>
+            TASKS: {system ? `${system.activeJobs} ACTIVE / ${system.totalJobs} TOTAL` : '-- / --'}
           </div>
         </div>
 
