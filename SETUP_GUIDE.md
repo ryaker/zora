@@ -645,7 +645,9 @@ This file controls what Zora is and isn't allowed to do:
 
 ## What's Next?
 
-Once you've got Zora running, here are some things to explore:
+Once you've got Zora running, **read the [Beginner's Guide](docs/BEGINNERS_GUIDE.md)** to learn what Zora can do and how to use it day-to-day.
+
+Then explore the deeper docs:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
