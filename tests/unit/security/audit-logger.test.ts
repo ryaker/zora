@@ -151,3 +151,62 @@ describe('AuditLogger', () => {
     expect(entries).toEqual([]);
   });
 });
+
+describe('createPostToolUseHook', () => {
+  it('logs tool execution via hook callback', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'audit-hook-'));
+    const logPath = path.join(tmpDir, 'audit.jsonl');
+    const logger = new AuditLogger(logPath);
+    const hook = logger.createPostToolUseHook();
+
+    const signal = new AbortController().signal;
+    const result = await hook(
+      {
+        hook_event_name: 'PostToolUse',
+        session_id: 'test-session',
+        tool_name: 'Read',
+        tool_input: { file_path: '/home/user/test.txt' },
+        tool_response: 'file contents here',
+        transcript_path: '/tmp/transcript',
+        cwd: '/home/user',
+      },
+      'tool-use-123',
+      { signal },
+    );
+
+    expect(result).toEqual({});
+
+    // Verify the entry was logged
+    const entries = await logger.readEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.toolName).toBe('Read');
+    expect(entries[0]!.parameters).toEqual({ file_path: '/home/user/test.txt' });
+    expect(entries[0]!.provider).toBe('claude-agent-sdk');
+    expect(entries[0]!.jobId).toBe('test-session');
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does not throw on audit failure', async () => {
+    const logger = new AuditLogger('/nonexistent/path/that/cannot/be/created/audit.jsonl');
+    const hook = logger.createPostToolUseHook();
+
+    const signal = new AbortController().signal;
+    // Should not throw
+    const result = await hook(
+      {
+        hook_event_name: 'PostToolUse',
+        session_id: 'test',
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+        tool_response: 'output',
+        transcript_path: '/tmp/t',
+        cwd: '/',
+      },
+      undefined,
+      { signal },
+    );
+
+    expect(result).toEqual({});
+  });
+});
