@@ -13,6 +13,7 @@ import type { Mailbox } from './mailbox.js';
 export interface GeminiBridgeOptions {
   pollIntervalMs: number;
   geminiCliPath: string;
+  onPollComplete?: () => void | Promise<void>;
 }
 
 export class GeminiBridge {
@@ -20,7 +21,9 @@ export class GeminiBridge {
   private readonly _mailbox: Mailbox;
   private readonly _pollIntervalMs: number;
   private readonly _geminiCliPath: string;
+  private _onPollComplete?: () => void | Promise<void>;
   private _running = false;
+  private _polling = false;
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
   private _activeProcess: ChildProcess | null = null;
 
@@ -33,6 +36,7 @@ export class GeminiBridge {
     this._mailbox = mailbox;
     this._pollIntervalMs = options.pollIntervalMs;
     this._geminiCliPath = options.geminiCliPath;
+    this._onPollComplete = options.onPollComplete;
   }
 
   /**
@@ -68,8 +72,17 @@ export class GeminiBridge {
     return this._running;
   }
 
+  /**
+   * Sets the callback invoked after each successful poll cycle.
+   * Used by BridgeWatchdog to update the heartbeat.
+   */
+  setOnPollComplete(callback: () => void | Promise<void>): void {
+    this._onPollComplete = callback;
+  }
+
   private async _poll(): Promise<void> {
-    if (!this._running) return;
+    if (!this._running || this._polling) return;
+    this._polling = true;
 
     try {
       const messages = await this._mailbox.receive(this._teamName);
@@ -79,8 +92,15 @@ export class GeminiBridge {
         if (!this._running) break;
         await this._executeTask(task.text, task.from);
       }
+
+      // Signal successful poll completion (used by watchdog for heartbeat)
+      if (this._onPollComplete) {
+        await this._onPollComplete();
+      }
     } catch (err) {
       console.error('[GeminiBridge] Poll error:', err);
+    } finally {
+      this._polling = false;
     }
   }
 

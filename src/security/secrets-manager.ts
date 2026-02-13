@@ -32,8 +32,13 @@ export class SecretsManager {
    * @param masterPassword  Master password for key derivation.
    *   NOTE: In production this would come from macOS Keychain via `keytar`.
    *   Using a password parameter here to avoid requiring native compilation.
+   *   A master password MUST be provided — no default is used to prevent
+   *   accidental use of a well-known key.
    */
-  constructor(configDir: string, masterPassword = 'zora-default-master-key') {
+  constructor(configDir: string, masterPassword: string) {
+    if (!masterPassword) {
+      throw new Error('SecretsManager requires a master password. Do not use a default.');
+    }
     this._configDir = configDir;
     this._secretsPath = path.join(configDir, 'secrets.enc');
     this._masterPassword = masterPassword;

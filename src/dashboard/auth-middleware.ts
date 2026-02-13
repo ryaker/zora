@@ -7,6 +7,7 @@
  *   - Token sourced from environment variable or static config.
  */
 
+import crypto from 'node:crypto';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 export interface AuthMiddlewareOptions {
@@ -36,14 +37,18 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHan
       return;
     }
 
-    const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    // HTTP auth schemes are case-insensitive (RFC 7235)
+    if (!authHeader.toLowerCase().startsWith('bearer ')) {
       res.status(401).json({ error: 'Invalid Authorization header format. Expected: Bearer <token>' });
       return;
     }
 
-    const token = parts[1];
-    if (token !== expectedToken) {
+    const token = authHeader.slice('bearer '.length);
+
+    // Use timing-safe comparison to prevent timing attacks
+    const tokenBuf = Buffer.from(token);
+    const expectedBuf = Buffer.from(expectedToken);
+    if (tokenBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(tokenBuf, expectedBuf)) {
       res.status(401).json({ error: 'Invalid token' });
       return;
     }

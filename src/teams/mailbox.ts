@@ -12,11 +12,21 @@ import path from 'node:path';
 import { writeAtomic } from '../utils/fs.js';
 import type { MailboxMessage } from './team-types.js';
 
+/**
+ * Validates that a name does not contain path separators or traversal sequences.
+ */
+function validateName(name: string, label: string): void {
+  if (/[/\\]/.test(name) || name.includes('..')) {
+    throw new Error(`Invalid ${label}: must not contain path separators or ".." (got "${name}")`);
+  }
+}
+
 export class Mailbox {
   private readonly _teamsDir: string;
   private readonly _agentName: string;
 
   constructor(teamsDir: string, agentName: string) {
+    validateName(agentName, 'agentName');
     this._teamsDir = teamsDir;
     this._agentName = agentName;
   }
@@ -89,6 +99,8 @@ export class Mailbox {
   }
 
   private _inboxPath(teamName: string, agentName: string): string {
+    validateName(teamName, 'teamName');
+    validateName(agentName, 'agentName');
     return path.join(this._teamsDir, teamName, 'inboxes', `${agentName}.json`);
   }
 

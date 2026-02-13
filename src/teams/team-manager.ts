@@ -122,6 +122,10 @@ export class TeamManager {
     const config = await this.getTeam(teamName);
     if (!config) throw new Error(`Team "${teamName}" not found`);
 
+    if (config.coordinatorId === agentId) {
+      throw new Error(`Cannot remove coordinator "${agentId}" from team "${teamName}"`);
+    }
+
     config.members = config.members.filter((m) => m.agentId !== agentId);
 
     await writeAtomic(

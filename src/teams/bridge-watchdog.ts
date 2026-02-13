@@ -44,6 +44,8 @@ export class BridgeWatchdog {
 
   /**
    * Starts health check monitoring.
+   * Injects a heartbeat callback into the bridge so each successful
+   * poll cycle updates the heartbeat timestamp.
    */
   async start(): Promise<void> {
     if (this._running) return;
@@ -51,6 +53,10 @@ export class BridgeWatchdog {
 
     await fs.mkdir(path.dirname(this._healthFilePath), { recursive: true });
     await this.writeHeartbeat();
+
+    // Inject heartbeat callback into the bridge so the heartbeat is
+    // updated after each successful poll cycle.
+    this._bridge.setOnPollComplete(() => this.writeHeartbeat());
 
     this._checkTimer = setInterval(() => {
       void this._check();

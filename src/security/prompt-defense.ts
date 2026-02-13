@@ -65,7 +65,11 @@ export function sanitizeInput(content: string): string {
   const allPatterns = [...INJECTION_PATTERNS, ...ENCODED_INJECTION_PATTERNS];
 
   for (const pattern of allPatterns) {
-    result = result.replace(pattern, (match) => `<untrusted_content>${match}</untrusted_content>`);
+    // Ensure global flag is set so all occurrences are replaced, not just the first
+    const globalPattern = pattern.global
+      ? pattern
+      : new RegExp(pattern.source, pattern.flags + 'g');
+    result = result.replace(globalPattern, (match) => `<untrusted_content>${match}</untrusted_content>`);
   }
 
   return result;
@@ -94,7 +98,7 @@ export function validateOutput(toolCall: {
 
     // Check for modifications to critical config files
     for (const criticalPath of CRITICAL_PATHS) {
-      if (command.includes(criticalPath) && /\b(rm|mv|sed|truncate|>)\b/.test(command)) {
+      if (command.includes(criticalPath) && (/\b(rm|mv|sed|truncate)\b/.test(command) || command.includes('>'))) {
         return {
           valid: false,
           reason: `Suspicious pattern: shell command modifying critical file ${criticalPath}`,

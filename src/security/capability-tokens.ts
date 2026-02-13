@@ -7,6 +7,7 @@
  *   - Expiration checks
  */
 
+import path from 'node:path';
 import type { WorkerCapabilityToken, ZoraPolicy } from '../types.js';
 
 const DEFAULT_EXPIRATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -78,21 +79,26 @@ export function isTokenExpired(token: WorkerCapabilityToken): boolean {
 // ─── Private Helpers ──────────────────────────────────────────────
 
 function _enforcePath(token: WorkerCapabilityToken, targetPath: string): EnforcementResult {
+  // Normalize the path to prevent traversal bypasses (e.g., /allowed/../denied)
+  const normalized = path.resolve(targetPath);
+
   // Check denied paths first
   for (const denied of token.deniedPaths) {
-    if (targetPath === denied || targetPath.startsWith(denied + '/')) {
-      return { allowed: false, reason: `Path ${targetPath} is denied by capability token` };
+    const normalizedDenied = path.resolve(denied);
+    if (normalized === normalizedDenied || normalized.startsWith(normalizedDenied + '/')) {
+      return { allowed: false, reason: `Path ${normalized} is denied by capability token` };
     }
   }
 
   // Check allowed paths
   for (const allowed of token.allowedPaths) {
-    if (targetPath === allowed || targetPath.startsWith(allowed + '/')) {
+    const normalizedAllowed = path.resolve(allowed);
+    if (normalized === normalizedAllowed || normalized.startsWith(normalizedAllowed + '/')) {
       return { allowed: true };
     }
   }
 
-  return { allowed: false, reason: `Path ${targetPath} is not in token's allowed paths` };
+  return { allowed: false, reason: `Path ${normalized} is not in token's allowed paths` };
 }
 
 function _enforceCommand(token: WorkerCapabilityToken, command: string): EnforcementResult {

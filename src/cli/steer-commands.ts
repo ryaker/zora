@@ -52,6 +52,10 @@ export function registerSteerCommands(
     .command('approve <jobId> <flagId>')
     .description('Approve a flagged decision')
     .action(async (jobId: string, flagId: string) => {
+      const fm = new FlagManager(path.join(baseDir, 'flags'), {
+        timeoutMs: 300_000,
+      });
+      await fm.approve(flagId);
       const id = await injectFlagDecision(baseDir, jobId, flagId, 'approve');
       console.log(`Flag approved: ${id}`);
     });
@@ -60,12 +64,17 @@ export function registerSteerCommands(
     .command('reject <jobId> <flagId> [reason]')
     .description('Reject a flagged decision')
     .action(async (jobId: string, flagId: string, reason?: string) => {
+      const rejectReason = reason ?? 'Rejected via CLI';
+      const fm = new FlagManager(path.join(baseDir, 'flags'), {
+        timeoutMs: 300_000,
+      });
+      await fm.reject(flagId, rejectReason);
       const id = await injectFlagDecision(
         baseDir,
         jobId,
         flagId,
         'reject',
-        reason ?? 'Rejected via CLI',
+        rejectReason,
       );
       console.log(`Flag rejected: ${id}`);
     });
