@@ -82,17 +82,21 @@ Zora operates within strict boundaries you define. A policy file (`~/.zora/polic
 
 ## Project Status
 
-Zora is in active development (v0.6.0). Core functionality is stable and tested — dual-LLM orchestration, failover, memory systems, policy enforcement, and the web dashboard all work.
+Zora is in active development (v0.6.0). This table reflects what actually works today.
 
 | Component | Status |
 |-----------|--------|
 | Dual-LLM orchestration (Claude + Gemini) | ✅ Working |
 | Automatic failover on quota/auth errors | ✅ Working |
-| Policy-based security engine | ✅ Working |
+| Policy-based security engine (path + command enforcement) | ✅ Working |
+| Policy-aware agent (checks permissions before acting) | ✅ Working |
+| SOUL.md personality loading | ✅ Working |
 | Hierarchical memory (long-term + daily notes) | ✅ Working |
 | Scheduled routines via cron | ✅ Working |
 | Web dashboard for monitoring and task injection | ✅ Working |
 | Persistent retry queue with backoff | ✅ Working |
+| Interactive approval for flagged actions (`always_flag`) | 🚧 Config parsed, enforcement in progress |
+| Runtime permission expansion (grant access mid-task) | 🚧 Planned |
 | Cross-platform support (macOS, Linux, Windows) | 🚧 macOS tested, others in progress |
 
 ---

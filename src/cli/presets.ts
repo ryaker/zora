@@ -7,9 +7,35 @@
 
 import type { ZoraPolicy } from '../types.js';
 
-export type PresetName = 'safe' | 'balanced' | 'power';
+export type PresetName = 'locked' | 'safe' | 'balanced' | 'power';
 
 export const PRESETS: Record<PresetName, ZoraPolicy> = {
+  locked: {
+    filesystem: {
+      allowed_paths: [],
+      denied_paths: ['/', '~/', '~/.ssh', '~/.gnupg', '~/.aws'],
+      resolve_symlinks: true,
+      follow_symlinks: false,
+    },
+    shell: {
+      mode: 'deny_all',
+      allowed_commands: [],
+      denied_commands: ['*'],
+      split_chained_commands: true,
+      max_execution_time: '0s',
+    },
+    actions: {
+      reversible: [],
+      irreversible: ['*'],
+      always_flag: ['*'],
+    },
+    network: {
+      allowed_domains: [],
+      denied_domains: ['*'],
+      max_request_size: '0',
+    },
+  },
+
   safe: {
     filesystem: {
       allowed_paths: ['~/Projects', '~/.zora/workspace', '~/.zora/memory/daily', '~/.zora/memory/items'],
@@ -101,6 +127,7 @@ export const TOOL_STACKS: Record<string, string[]> = {
 };
 
 export const PRESET_DESCRIPTIONS: Record<PresetName, string> = {
+  locked: 'Zero access — fresh install default, run `zora init` to configure',
   safe: 'Read-only, no shell — best for first run or high-sensitivity environments',
   balanced: 'Read/write inside dev path plus safe shell allowlist (recommended)',
   power: 'Expanded filesystem + shell access — use only if you understand the risks',

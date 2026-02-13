@@ -454,7 +454,7 @@ Full preset configurations are in [Policy Presets](../specs/v5/docs/POLICY_PRESE
 | **Denied paths** | Folders that are always blocked, even if a parent folder is allowed. |
 | **Allowlist mode** | Zora can ONLY run commands on the list. Everything else is denied. |
 | **Reversible actions** | Things Zora can undo (writing a file, making a folder). These run freely. |
-| **Irreversible actions** | Things that can't be undone (pushing to git). These get flagged for your review. |
+| **Irreversible actions** | Things that can't be undone (pushing to git). Currently blocked via deny list; interactive flagging is planned. |
 | **Audit log** | A record of every action Zora takes. Stored in `~/.zora/audit/audit.jsonl`. |
 
 ### The golden rule of security

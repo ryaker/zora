@@ -29,12 +29,24 @@ export interface SdkHookMatcher {
   hooks: SdkHookCallback[];
 }
 
+/**
+ * Custom tool that Zora can inject into the SDK execution.
+ * Used for Zora-specific tools like check_permissions and request_permissions.
+ */
+export interface CustomToolDefinition {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  handler: (input: Record<string, unknown>) => Promise<unknown>;
+}
+
 export interface ZoraExecutionOptions {
   systemPrompt?: string;
   cwd?: string;
   model?: string;
   maxTurns?: number;
   allowedTools?: string[];
+  customTools?: CustomToolDefinition[];
   mcpServers?: Record<string, Record<string, unknown>>;
   agents?: Record<string, SdkAgentDefinition>;
   hooks?: Partial<Record<string, SdkHookMatcher[]>>;
@@ -63,6 +75,13 @@ export class ExecutionLoop {
     let result = '';
     let sessionId: string | undefined;
 
+    // Build custom tool schemas for SDK registration
+    const customToolSchemas = (this._opts.customTools ?? []).map(t => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.input_schema,
+    }));
+
     const sdkOptions: Record<string, unknown> = {
       allowedTools: this._opts.allowedTools ?? DEFAULT_TOOLS,
       permissionMode: this._opts.permissionMode ?? 'default',
@@ -75,6 +94,7 @@ export class ExecutionLoop {
       hooks: this._opts.hooks ?? {},
       canUseTool: this._opts.canUseTool,
       settingSources: ['user', 'project'],
+      ...(customToolSchemas.length > 0 ? { customTools: customToolSchemas } : {}),
     };
 
     for await (const message of query({ prompt, options: sdkOptions as any })) {

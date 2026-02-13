@@ -20,10 +20,11 @@ Zora is an AI agent that runs on your computer. This guide explains what it can 
 - Can't run `curl` or `wget` in balanced mode (network downloads disabled by default)
 
 **Action Restrictions:**
-- Can't push to git remotes without confirmation (if `always_flag` is set)
 - Can't execute destructive shell commands
 - Can't follow symlinks outside allowed paths
 - Can't make network requests to arbitrary domains (only HTTPS allowed by default)
+
+> **Note:** The `always_flag` config (e.g., flagging `git_push` for interactive approval) is parsed from `policy.toml` but enforcement is not yet wired up. For now, dangerous commands are blocked outright via the shell deny list rather than flagged for approval.
 
 ---
 
@@ -257,6 +258,24 @@ Please use GitHub Security Advisories for private disclosure:
 If GitHub advisories are not available to you, open a GitHub issue with the minimum necessary detail and note that you can provide a private report if contacted.
 
 We aim to acknowledge reports within 72 hours.
+
+---
+
+## v0.6 Implementation Status
+
+Transparency about what's fully wired vs. in progress:
+
+| Feature | Status |
+|---------|--------|
+| Path allow/deny enforcement | ✅ Enforced via PolicyEngine |
+| Shell command allow/deny enforcement | ✅ Enforced via PolicyEngine |
+| Symlink boundary checks | ✅ Enforced |
+| Agent sees its own policy boundaries | ✅ Policy injected into system prompt |
+| `check_permissions` tool (agent self-checks) | ✅ Available to agent |
+| Hash-chain audit trail | ✅ Working |
+| `always_flag` interactive approval | 🚧 Config parsed, enforcement in progress |
+| Runtime permission expansion (mid-task grants) | 🚧 Planned |
+| Locked-by-default fresh install | 🚧 Planned (currently defaults to Balanced) |
 
 ---
 
