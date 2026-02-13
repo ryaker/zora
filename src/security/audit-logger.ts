@@ -49,11 +49,14 @@ export class AuditLogger {
     // Queue the write and return the entry once written
     return new Promise<AuditEntry>((resolve, reject) => {
       this._writeQueue = this._writeQueue
+        .catch(() => {}) // Recover from previous failures
         .then(async () => {
           const entry = await this._appendEntry(input);
           resolve(entry);
         })
-        .catch(reject);
+        .catch((err) => {
+          reject(err);
+        });
     });
   }
 
@@ -179,7 +182,7 @@ export class AuditLogger {
       previousHash: this._previousHash,
     };
 
-    const hash = this._computeHashFromParts(entryWithoutHash, this._previousHash);
+    const hash = this._computeHashFromParts(entryWithoutHash);
 
     const entry: AuditEntry = {
       ...entryWithoutHash,
@@ -210,7 +213,6 @@ export class AuditLogger {
 
   private _computeHashFromParts(
     data: Omit<AuditEntry, 'hash'>,
-    _previousHash: string,
   ): string {
     return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
   }
