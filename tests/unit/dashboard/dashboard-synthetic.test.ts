@@ -369,21 +369,19 @@ test.describe('Rate Limiting', () => {
 // ─── 7. Error Handling ──────────────────────────────────────────────
 
 test.describe('Error Handling', () => {
-  test('health API returns 500 on unexpected provider error', async ({ page, request }) => {
-    // Temporarily break the provider's checkAuth to throw
+  test('health API returns 500 on unexpected provider error', async ({ request }) => {
     const originalCheckAuth = provider.checkAuth.bind(provider);
     const originalCheckAuth2 = secondProvider.checkAuth.bind(secondProvider);
     (provider as any).checkAuth = async () => { throw new Error('Provider unavailable'); };
     (secondProvider as any).checkAuth = async () => { throw new Error('Provider unavailable'); };
 
     try {
-      // The AuthMonitor catches per-provider errors but checkAll still returns a map.
-      // If ALL providers error, the map will be empty but not throw.
       const res = await request.get(`${baseUrl}/api/health`);
+      // AuthMonitor.checkAll() propagates the error, route handler returns 500
+      expect(res.status()).toBe(500);
       const data = await res.json();
-      // Should still return ok:true with empty providers (errors logged, not thrown)
-      expect(data.ok).toBe(true);
-      expect(data.providers).toHaveLength(0);
+      expect(data.ok).toBe(false);
+      expect(data.error).toContain('Provider unavailable');
     } finally {
       provider.checkAuth = originalCheckAuth;
       secondProvider.checkAuth = originalCheckAuth2;
