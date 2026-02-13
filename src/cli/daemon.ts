@@ -93,8 +93,19 @@ async function main() {
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
-    providers,
+    submitTask: async (prompt: string) => {
+      // Generate jobId immediately and kick off task in background (don't await)
+      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
+        dashboard.broadcastEvent({ type: event.type, data: event.content });
+      } }).catch(err => {
+        console.error(`[Daemon] Task ${jobId} failed:`, err);
+        dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
+      });
+      return jobId;
+    },
     port: config.steering.dashboard_port ?? 7070,
+    host: process.env.ZORA_BIND_HOST,
   });
   await dashboard.start();
 

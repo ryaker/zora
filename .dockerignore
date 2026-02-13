@@ -1,0 +1,10 @@
+node_modules
+dist
+*.md
+!README.md
+.git
+.github
+specs
+tests/fixtures
+coverage
+.env*

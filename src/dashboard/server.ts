@@ -19,13 +19,18 @@ import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+export interface SubmitTaskFn {
+  (prompt: string): Promise<string>; // returns jobId
+}
+
 export interface DashboardOptions {
   loop?: ExecutionLoop;
   sessionManager: SessionManager;
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
-  providers?: LLMProvider[];
+  submitTask?: SubmitTaskFn;
   port?: number;
+  host?: string;
 }
 
 export class DashboardServer {
@@ -153,6 +158,31 @@ export class DashboardServer {
       }
     });
 
+    // --- Task Submission ---
+
+    /** POST /api/task — Submit a new task to the orchestrator */
+    this._app.post('/api/task', async (req, res) => {
+      const { prompt } = req.body;
+
+      if (typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({ ok: false, error: 'prompt must be a non-empty string' });
+      }
+
+      const { submitTask } = this._options;
+      if (!submitTask) {
+        return res.status(503).json({ ok: false, error: 'Task submission not available' });
+      }
+
+      try {
+        const jobId = await submitTask(prompt.trim());
+        // Note: job_started event is now emitted by the orchestrator via onEvent callback
+        res.json({ ok: true, jobId });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ ok: false, error: message });
+      }
+    });
+
     // --- Steering APIs ---
 
     /** POST /api/steer — Inject a steering message */
@@ -231,9 +261,10 @@ export class DashboardServer {
    */
   async start(): Promise<void> {
     const port = this._options.port ?? 7070;
+    const host = this._options.host ?? '127.0.0.1';
     return new Promise((resolve) => {
-      this._server = this._app.listen(port, '127.0.0.1', () => {
-        console.log(`[Dashboard] Zora Tactical Interface active at http://localhost:${port}`);
+      this._server = this._app.listen(port, host, () => {
+        console.log(`[Dashboard] Zora Tactical Interface active at http://${host}:${port}`);
         resolve();
       });
     });
