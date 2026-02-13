@@ -93,6 +93,10 @@ async function main() {
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
+    submitTask: async (prompt: string) => {
+      const result = await orchestrator.submitTask({ prompt });
+      return result;
+    },
     port: config.steering.dashboard_port ?? 7070,
   });
   await dashboard.start();
