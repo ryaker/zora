@@ -530,9 +530,10 @@ Before merging a new provider:
 
 ## Reference: Existing Providers
 
-| Provider | File | Pattern | Backend |
-|----------|------|---------|---------|
-| `ClaudeProvider` | `src/providers/claude-provider.ts` | SDK (dependency-injected) | `@anthropic-ai/claude-agent-sdk` |
-| `GeminiProvider` | `src/providers/gemini-provider.ts` | CLI subprocess | `gemini` CLI |
+| Provider | File | Pattern | Backend | Config type |
+|----------|------|---------|---------|-------------|
+| `ClaudeProvider` | `src/providers/claude-provider.ts` | SDK (dependency-injected) | `@anthropic-ai/claude-agent-sdk` | `claude-sdk` |
+| `GeminiProvider` | `src/providers/gemini-provider.ts` | CLI subprocess | `gemini` CLI | `gemini-cli` |
+| `OllamaProvider` | `src/providers/ollama-provider.ts` | HTTP REST API | Ollama `/api/chat` | `ollama` |
 
-Read these files for production-tested patterns before building yours.
+Read these files for production-tested patterns before building yours. The `OllamaProvider` is a good template for any REST-based local model provider.

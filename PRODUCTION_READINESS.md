@@ -48,7 +48,8 @@ Zora's individual components are genuinely well-implemented -- real cryptography
 |---|---|---|
 | SessionManager | `src/orchestrator/session-manager.ts` | Real JSONL append via `fs.promises.appendFile`, corruption-tolerant parsing (skips bad lines), path traversal protection via jobId sanitization |
 | ExecutionLoop | `src/orchestrator/execution-loop.ts` | Real SDK `query()` wrapper, proper async generator iteration, session ID capture |
-| ClaudeProvider | `src/providers/claude-provider.ts` | Real SDK integration via lazy dynamic import, dependency injection for testing, exhaustive message mapping, abort controller, cost tracking, memory context injection into prompts |
+| ClaudeProvider | `src/providers/claude-provider.ts` | Real SDK integration via lazy dynamic import, dependency injection for testing, exhaustive message mapping, abort controller, cost tracking, memory context injection into prompts. Multiple entries supported for Opus/Sonnet/Haiku tier selection. |
+| OllamaProvider | `src/providers/ollama-provider.ts` | HTTP REST client for Ollama `/api/chat` with NDJSON streaming, abort controller, 50MB buffer limit, tool call parsing. `cost_tier = "free"` for local models. |
 
 ### Teams and Coordination
 
@@ -72,7 +73,7 @@ Zora's individual components are genuinely well-implemented -- real cryptography
 
 | Component | File | Evidence |
 |---|---|---|
-| RoutineManager | `src/routines/routine-manager.ts` | Real TOML parsing, `node-cron` scheduling, ExecutionLoop integration |
+| RoutineManager | `src/routines/routine-manager.ts` | Real TOML parsing, `node-cron` scheduling, routes through `Orchestrator.submitTask()` with `model_preference` and `max_cost_tier` flow-through |
 | HeartbeatSystem | `src/routines/heartbeat.ts` | Real markdown task parsing (`- [ ]` checkboxes), completion marking (`- [x]`) |
 | EventTriggerManager | `src/routines/event-triggers.ts` | Real `fs.stat` polling, glob pattern matching with debouncing |
 

@@ -24,37 +24,45 @@ throttle_check_interval = "10s"  # How often to check resources
 
 ## [[providers]]
 
-Array of provider configs. Each entry:
+Array of provider configs. Create **multiple entries of the same type** with different models for granular cost control (e.g. claude-opus, claude-sonnet, claude-haiku as separate providers):
 
 ```toml
 [[providers]]
-name = "claude"                           # Unique ID (required)
+name = "claude-sonnet"                    # Unique ID, used in model_preference (required)
 type = "claude-sdk"                       # Integration type (required)
-rank = 1                                  # Priority, lower = higher (required)
+rank = 2                                  # Priority, lower = higher (required, unique among enabled)
 capabilities = ["reasoning", "coding"]    # Routing tags (required)
 cost_tier = "included"                    # free | included | metered | premium (required)
 enabled = true                            # Active flag (required)
 auth_method = "mac_session"               # How auth works (optional)
-model = "claude-sonnet-4-5"               # Default model (optional)
+model = "claude-sonnet-4-5"               # Specific model identifier (optional)
 max_turns = 200                           # Turn limit per task (optional)
 max_concurrent_jobs = 3                   # Parallelism limit (optional)
 cli_path = "gemini"                       # CLI binary path (optional, for CLI providers)
 api_key_env = "OPENAI_API_KEY"            # Env var for API key (optional)
-endpoint = "http://localhost:11434"        # API base URL (optional)
+endpoint = "http://localhost:11434"        # API base URL (optional, for Ollama)
 ```
 
 ### Provider types
 
-| type | Backend | Auth |
-|------|---------|------|
-| `claude-sdk` | Anthropic Claude Agent SDK | Mac session |
-| `gemini-cli` | Google Gemini CLI | Workspace SSO |
-| `openai-api` | OpenAI API | API key |
-| `ollama` | Ollama local | None |
+| type | Backend | Auth | Notes |
+|------|---------|------|-------|
+| `claude-sdk` | Anthropic Claude Agent SDK | Mac session | Multiple entries for Opus/Sonnet/Haiku |
+| `gemini-cli` | Google Gemini CLI | Workspace SSO | |
+| `ollama` | Ollama local REST API | None | `cost_tier = "free"`, no API limits |
 
 ### Capability tags
 
 `reasoning`, `coding`, `creative`, `structured-data`, `large-context`, `search`, `fast`, or any custom string.
+
+### Routine model selection
+
+In routine TOML files, use `model_preference` (provider name) and `max_cost_tier` (cost ceiling):
+```toml
+[routine]
+model_preference = "claude-haiku"   # Use this specific provider
+max_cost_tier = "included"          # Or let Router pick cheapest within ceiling
+```
 
 ## [routing]
 
