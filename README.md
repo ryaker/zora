@@ -43,7 +43,7 @@ That's it. Three commands from zero to productive.
 - **Email drafting** — `zora ask "Draft replies to unread emails about the product launch"`
 - **Git management** — `zora ask "Create feature branches from all open issues labeled 'sprint-12'"`
 - **Web research** — `zora ask "Find and summarize the latest React 19 migration guides"`
-- **Multi-step workflows** — Chain file operations, API calls, and decision-making without intervention
+- **Multi-step workflows** — `zora ask "Find all TODOs in my project, create a summary, and open a GitHub issue with it."`
 
 ---
 
