@@ -298,20 +298,23 @@ These are automatically loaded as context in future conversations.
 
 ### Dashboard
 
-Launch the web dashboard to see Zora's activity in real-time:
+Launch the web dashboard to monitor tasks, see provider status, and send messages to running jobs:
 
 ```bash
 zora start
 ```
 
-Then open [http://localhost:7070](http://localhost:7070)
+Your browser will open automatically to `http://localhost:7070`. (Use `--no-open` to suppress this.)
 
 The dashboard shows:
-- Active tasks
-- Provider status (Claude, Gemini)
-- Recent actions
-- Memory items
-- Audit log viewer
+- **Provider status** — Which AI providers are connected
+- **Task activity** — Real-time logs from running jobs
+- **Security policy** — Current policy rules in effect
+- **System info** — Uptime and resource usage
+
+First-time users will see a welcome screen with quick-start examples. If providers aren't configured yet, you'll see setup instructions right in the dashboard.
+
+Need help setting up? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — paste the prompt into ChatGPT, Claude, or Gemini for a guided walkthrough.
 
 ### Routines (Scheduled Tasks)
 

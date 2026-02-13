@@ -18,11 +18,16 @@ import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+export interface SubmitTaskFn {
+  (prompt: string): Promise<string>; // returns jobId
+}
+
 export interface DashboardOptions {
   loop?: ExecutionLoop;
   sessionManager: SessionManager;
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
+  submitTask?: SubmitTaskFn;
   port?: number;
 }
 
@@ -130,37 +135,25 @@ export class DashboardServer {
       }
     });
 
-    /** GET /api/system — Real system metrics (cached for 5s to avoid expensive listSessions per poll) */
-    let systemCache: { data: Record<string, unknown>; timestamp: number } | null = null;
-    const SYSTEM_CACHE_TTL = 5000;
+    // --- Task Submission ---
 
-    this._app.get('/api/system', async (_req, res) => {
+    /** POST /api/task — Submit a new task to the orchestrator */
+    this._app.post('/api/task', async (req, res) => {
+      const { prompt } = req.body;
+
+      if (typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({ ok: false, error: 'prompt must be a non-empty string' });
+      }
+
+      const { submitTask } = this._options;
+      if (!submitTask) {
+        return res.status(503).json({ ok: false, error: 'Task submission not available' });
+      }
+
       try {
-        const now = Date.now();
-        if (systemCache && now - systemCache.timestamp < SYSTEM_CACHE_TTL) {
-          return res.json(systemCache.data);
-        }
-
-        const uptime = process.uptime();
-        const mem = process.memoryUsage();
-        const sessions = await sessionManager.listSessions();
-        const activeJobs = sessions.reduce((count, s) => s.status === 'running' ? count + 1 : count, 0);
-
-        const response = {
-          ok: true,
-          uptime: Math.floor(uptime),
-          memory: {
-            used: Math.round(mem.heapUsed / 1024 / 1024),
-            total: Math.round(mem.heapTotal / 1024 / 1024),
-            rss: Math.round(mem.rss / 1024 / 1024),
-          },
-          activeJobs,
-          totalJobs: sessions.length,
-          version: '0.6.0',
-        };
-
-        systemCache = { data: response, timestamp: now };
-        res.json(response);
+        const jobId = await submitTask(prompt.trim());
+        // Note: job_started event is now emitted by the orchestrator via onEvent callback
+        res.json({ ok: true, jobId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         res.status(500).json({ ok: false, error: message });

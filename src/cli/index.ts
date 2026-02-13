@@ -218,7 +218,8 @@ program
 program
   .command('start')
   .description('Start the agent daemon')
-  .action(async () => {
+  .option('--no-open', 'Do not auto-open the dashboard in browser')
+  .action(async (opts) => {
     const pidFile = getPidFilePath();
 
     // Check if already running
@@ -241,7 +242,7 @@ program
     }
 
     // Fork a detached child process
-    const { fork } = await import('node:child_process');
+    const { fork, exec } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
 
@@ -255,6 +256,32 @@ program
       fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
       child.unref();
       console.log(`Zora daemon started (PID: ${child.pid}).`);
+
+      // Read dashboard port from config, falling back to 7070
+      let dashboardPort = 7070;
+      try {
+        const configPath = path.join(os.homedir(), '.zora', 'config.toml');
+        if (fs.existsSync(configPath)) {
+          const { parse: parseTOML } = await import('smol-toml');
+          const raw = parseTOML(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+          const steering = raw['steering'] as Record<string, unknown> | undefined;
+          if (steering?.['dashboard_port']) {
+            dashboardPort = steering['dashboard_port'] as number;
+          }
+        }
+      } catch {
+        // Use default port if config can't be read
+      }
+      const dashboardUrl = `http://localhost:${dashboardPort}`;
+      console.log(`Dashboard: ${dashboardUrl}`);
+
+      if (opts.open !== false) {
+        // Auto-open browser (non-blocking, ignore errors)
+        const openCmd = process.platform === 'darwin' ? `open ${dashboardUrl}` :
+                        process.platform === 'win32' ? `start "" ${dashboardUrl}` :
+                        `xdg-open ${dashboardUrl}`;
+        exec(openCmd, () => {});
+      }
     } else {
       console.error('Failed to start daemon.');
     }
