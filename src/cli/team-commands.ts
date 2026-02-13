@@ -11,7 +11,12 @@ import type { AgentMember } from '../teams/team-types.js';
 function parseAgentSpec(spec: string): Omit<AgentMember, 'isActive'> {
   const parts = spec.split(':');
   const name = parts[0] ?? 'agent';
-  const provider = (parts[1] ?? 'claude') as 'claude' | 'gemini';
+  const VALID_PROVIDERS = ['claude', 'gemini'] as const;
+  const rawProvider = parts[1] ?? 'claude';
+  if (!VALID_PROVIDERS.includes(rawProvider as typeof VALID_PROVIDERS[number])) {
+    throw new Error(`Invalid provider "${rawProvider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`);
+  }
+  const provider = rawProvider as 'claude' | 'gemini';
   const model = parts[2] ?? 'default';
 
   return {

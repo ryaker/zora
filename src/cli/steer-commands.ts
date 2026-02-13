@@ -12,7 +12,9 @@ import { FlagManager } from '../steering/flag-manager.js';
 export function registerSteerCommands(
   program: Command,
   baseDir: string,
+  options?: { flagTimeoutMs?: number },
 ): void {
+  const flagTimeoutMs = options?.flagTimeoutMs ?? 300_000;
   program
     .command('steer <jobId> <message>')
     .description('Send steering message to a running job')
@@ -27,7 +29,7 @@ export function registerSteerCommands(
     .option('--job <jobId>', 'Filter by job ID')
     .action(async (opts: { job?: string }) => {
       const fm = new FlagManager(path.join(baseDir, 'flags'), {
-        timeoutMs: 300_000,
+        timeoutMs: flagTimeoutMs,
       });
       const flags = await fm.getFlags(opts.job);
 
@@ -53,7 +55,7 @@ export function registerSteerCommands(
     .description('Approve a flagged decision')
     .action(async (jobId: string, flagId: string) => {
       const fm = new FlagManager(path.join(baseDir, 'flags'), {
-        timeoutMs: 300_000,
+        timeoutMs: flagTimeoutMs,
       });
       await fm.approve(flagId);
       const id = await injectFlagDecision(baseDir, jobId, flagId, 'approve');
@@ -66,7 +68,7 @@ export function registerSteerCommands(
     .action(async (jobId: string, flagId: string, reason?: string) => {
       const rejectReason = reason ?? 'Rejected via CLI';
       const fm = new FlagManager(path.join(baseDir, 'flags'), {
-        timeoutMs: 300_000,
+        timeoutMs: flagTimeoutMs,
       });
       await fm.reject(flagId, rejectReason);
       const id = await injectFlagDecision(

@@ -36,7 +36,10 @@ export function registerEditCommands(
 
         const editor = process.env['EDITOR'] ?? process.env['VISUAL'] ?? 'vi';
 
-        const child = spawn(editor, [filePath], { stdio: 'inherit' });
+        const parts = editor.split(/\s+/);
+        const cmd = parts[0]!;
+        const editorArgs = [...parts.slice(1), filePath];
+        const child = spawn(cmd, editorArgs, { stdio: 'inherit' });
 
         await new Promise<void>((resolve, reject) => {
           child.on('close', (code) => {
