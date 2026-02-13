@@ -11,18 +11,12 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { SdkAgentDefinition } from '../orchestrator/execution-loop.js';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
 export interface LoadedAgent {
   name: string;
-  description: string;
-  prompt: string;
-  tools?: string[];
-  model?: 'sonnet' | 'opus' | 'haiku' | 'inherit';
-}
-
-export interface SdkAgentDefinition {
   description: string;
   prompt: string;
   tools?: string[];
