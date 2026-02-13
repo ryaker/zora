@@ -364,27 +364,6 @@ always_flag = ["git_push"]
 allowed_domains = ["*"]
 denied_domains = []
 max_request_size = "10MB"
-
-# --- Action Budgets ---
-# Limits on how many actions Zora can take per session.
-# Prevents unbounded autonomous loops (OWASP LLM06/LLM10).
-[budget]
-max_actions_per_session = 500
-token_budget = 1000000
-on_exceed = "flag"    # "block" = hard stop, "flag" = ask for approval
-
-[budget.max_actions_per_type]
-shell_exec = 100
-write_file = 200
-shell_exec_destructive = 10
-
-# --- Dry-Run Mode ---
-# Preview what Zora would do without actually executing.
-# Great for testing new policy configurations.
-[dry_run]
-enabled = false       # Set to true to enable preview mode
-tools = []            # Empty = intercept all write tools
-audit_dry_runs = true # Log dry-run interceptions to audit trail
 ENDOFPOLICY
 ```
 
@@ -659,12 +638,8 @@ This file controls what Zora is and isn't allowed to do:
 | `[shell]` | Which terminal commands it can run | Safe set: `git`, `node`, `npm`, etc. |
 | `[actions]` | Which actions need approval | `git_push` always flagged |
 | `[network]` | Which websites it can access | All domains allowed |
-| `[budget]` | Per-session action and token limits | 500 actions, 1M tokens, on_exceed: flag |
-| `[dry_run]` | Preview mode (execute nothing) | Disabled by default |
 
 > **Golden rule:** Start restrictive, expand as you build trust. You can always add more permissions later.
->
-> **New in v0.6:** Action budgets prevent unbounded loops. Dry-run mode lets you preview what Zora would do without executing. See [SECURITY.md](SECURITY.md) for the full security guide.
 
 ![LCARS Divider](specs/v5/assets/lcars_divider.svg)
 

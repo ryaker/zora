@@ -4,44 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [0.6.0] — 2026-02-13
 
-### Security Hardening (OWASP LLM Top 10 / Agentic Top 10)
-
-This release addresses critical security gaps identified in a comprehensive audit against OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026).
-
-**Action Budgets (LLM06/LLM10 — Excessive Agency / Unbounded Consumption)**
-- Per-session action limits (`max_actions_per_session`) prevent unbounded autonomous loops
-- Per-type limits (`max_actions_per_type`) cap shell commands, file writes, and destructive operations independently
-- Token budget enforcement caps total LLM token consumption per session
-- Configurable `on_exceed` behavior: `"block"` (hard stop) or `"flag"` (prompt for approval)
-- Budget tracking integrated into PolicyEngine with `recordAction()` and `recordTokenUsage()`
-- All four presets (locked/safe/balanced/power) include budget defaults
-
-**Dry-Run Preview Mode (ASI-02 — Tool Misuse)**
-- `[dry_run]` policy section enables preview-without-execute for write operations
-- Write tools (Write, Edit, destructive Bash) intercepted; read-only tools pass through
-- Smart command classification: `ls`, `cat`, `git status`, `git diff`, `pwd`, `echo` recognized as read-only
-- Dry-run interceptions logged to audit trail when `audit_dry_runs = true`
-- Configurable per-tool targeting via `tools` array (empty = all write tools)
-
-**Intent Capsules / Mandate Signing (ASI-01 — Agent Goal Hijack)**
-- New `IntentCapsuleManager` creates HMAC-SHA256 signed mandate bundles per task
-- SHA-256 mandate hashing with keyword extraction and category tagging
-- Per-action drift detection: category match, keyword overlap (>10% threshold), capsule expiry
-- Goal drift flagged for human review (not blocked outright to avoid false positives)
-- Per-session signing keys via `crypto.randomBytes(32)`
-- Timing-safe signature verification via `crypto.timingSafeEqual`
-
-**RAG/Tool-Output Injection Defense (LLM01 — Prompt Injection)**
-- 10 new RAG-specific injection patterns added to PromptDefense
-- Detects: `[IMPORTANT INSTRUCTION]`, `NOTE TO AI`, `HIDDEN INSTRUCTION`, embedded `<system>`/`<instruction>`/`<override>`/`<admin>` tags, delimiter attacks, role impersonation
-- New `sanitizeToolOutput()` function wraps suspicious tool outputs in `<untrusted_tool_output>` tags
-- Existing `sanitizeInput()` updated to include RAG patterns in scan
-
-**Infrastructure: Centralized Policy Loader**
-- Extracted duplicated TOML→ZoraPolicy parsing from `cli/index.ts` and `cli/daemon.ts` into `src/config/policy-loader.ts`
-- Single source of truth for all policy field defaults and backward compatibility
-- New optional `[budget]` and `[dry_run]` sections with safe defaults for missing fields
-
 ### Added
 - Claude Agent SDK integration — ExecutionLoop wraps SDK `query()` with full message streaming
 - Claude provider with lazy SDK import, dependency injection, abort support, and cost tracking
@@ -56,7 +18,7 @@ This release addresses critical security gaps identified in a comprehensive audi
 - Secrets manager with AES-256-GCM encryption, PBKDF2 key derivation, and atomic writes
 - Integrity guardian with SHA-256 baselines and file quarantine
 - Leak detector with 9 pattern categories (API keys, JWTs, private keys, AWS credentials)
-- Prompt defense with 20+ injection patterns (direct + RAG) and tool output sanitization
+- Prompt defense with 10+ injection patterns and output validation
 - Capability tokens with expiration enforcement and path/command validation
 - 3-tier hierarchical memory system (MEMORY.md, daily notes, structured items)
 - Salience scorer with exponential decay and Jaccard similarity
@@ -79,7 +41,7 @@ This release addresses critical security gaps identified in a comprehensive audi
 - Skill loader for dynamic ~/.claude/skills/ discovery
 - CLI with `ask`, `status`, `start`, `stop` commands plus memory, audit, edit, team, steer, and skill subcommands
 - MCP server configuration support in config loader
-- Comprehensive test suite (48 files, 500+ passing tests via Vitest + Playwright)
+- Comprehensive test suite (38 files, 62+ passing tests via Vitest + Playwright)
 - CI/CD with Claude Code review workflow
 
 ### Known Limitations

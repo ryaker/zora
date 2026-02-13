@@ -26,7 +26,7 @@ That's it. Three commands from zero to productive.
 
 🚀 **Dual-LLM with Automatic Failover** — Claude as primary brain, Gemini as secondary. When one hits quota limits, work seamlessly continues on the other. Work never stops.
 
-🛡️ **Policy-Enforced Autonomy** — Work freely within boundaries you define. The security engine enforces strict allow/deny rules for filesystem, shell, and network with action budgets, dry-run preview mode, and intent verification. [OWASP LLM Top 10 and Agentic Top 10 hardened](SECURITY.md).
+🛡️ **Policy-Enforced Autonomy** — Work freely within boundaries you define. The security engine enforces strict allow/deny rules for filesystem, shell, and network. No constant approval prompts.
 
 🧠 **Hierarchical Memory** — Zora remembers your preferences, past work, and project context across sessions. Long-term memory + daily rolling notes.
 
@@ -52,19 +52,6 @@ That's it. Three commands from zero to productive.
 ## How Security Works
 
 Zora operates within strict boundaries you define. A policy file (`~/.zora/policy.toml`) specifies allowed filesystem paths, shell commands, and network access. The agent self-corrects when it hits policy limits — no data leaves your machine except API calls to Claude/Gemini. Every action is logged to a tamper-proof audit trail.
-
-**v0.6 Security Hardening** — Audited against OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026):
-
-| Defense | What It Does |
-|---------|-------------|
-| **Action Budgets** | Per-session limits on tool invocations and token spend prevent unbounded loops |
-| **Dry-Run Mode** | Preview write operations without executing — test policies safely |
-| **Intent Capsules** | HMAC-SHA256 signed mandates detect goal hijacking from injected instructions |
-| **RAG Injection Defense** | 20+ patterns detect prompt injection in tool outputs and RAG documents |
-| **Hash-Chain Audit** | SHA-256 chained append-only log with tamper detection |
-| **AES-256-GCM Secrets** | Encrypted credential storage with PBKDF2 key derivation |
-
-See **[SECURITY.md](SECURITY.md)** for the full security guide and OWASP compliance matrix.
 
 ---
 
@@ -102,10 +89,6 @@ Zora is in active development (v0.6.0). This table reflects what actually works 
 | Dual-LLM orchestration (Claude + Gemini) | ✅ Working |
 | Automatic failover on quota/auth errors | ✅ Working |
 | Policy-based security engine (path + command enforcement) | ✅ Working |
-| Action budgets (per-session + per-type limits) | ✅ Working |
-| Dry-run preview mode (test without executing) | ✅ Working |
-| Intent capsules (HMAC-SHA256 goal drift detection) | ✅ Working |
-| RAG/tool-output injection defense (20+ patterns) | ✅ Working |
 | Policy-aware agent (checks permissions before acting) | ✅ Working |
 | SOUL.md personality loading | ✅ Working |
 | Hierarchical memory (long-term + daily notes) | ✅ Working |

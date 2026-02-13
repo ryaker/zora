@@ -18,21 +18,19 @@ Zora's individual components are genuinely well-implemented -- real cryptography
 
 ---
 
-## What Works -- Production-Grade Components (29 modules)
+## What Works -- Production-Grade Components (27 modules)
 
 ### Security (all genuinely production-ready)
 
 | Component | File | Evidence |
 |---|---|---|
-| PolicyEngine | `src/security/policy-engine.ts` | Real symlink detection via `fs.lstatSync`/`realpathSync`, path canonicalization, quote-aware command parsing, SDK `canUseTool` integration, **action budget enforcement** (per-session + per-type limits, token budgets), **dry-run preview mode** (smart write-tool interception with read-only command classification), **intent capsule integration** (goal drift checking) |
+| PolicyEngine | `src/security/policy-engine.ts` | Real symlink detection via `fs.lstatSync`/`realpathSync`, path canonicalization, quote-aware command parsing, SDK `canUseTool` integration |
 | AuditLogger | `src/security/audit-logger.ts` | Real SHA-256 hash chain via `crypto.createHash`, serialized Promise-based write queue, chain verification, genesis hash pattern |
 | SecretsManager | `src/security/secrets-manager.ts` | Real AES-256-GCM via `crypto.createCipheriv`, PBKDF2 100k iterations, 96-bit IV per NIST SP 800-38D, 32-byte salt, `0o600` permissions, atomic `.tmp`+rename writes |
 | IntegrityGuardian | `src/security/integrity-guardian.ts` | Real SHA-256 baselines, file quarantine via `fs.copyFile`, tool registry tampering detection |
 | LeakDetector | `src/security/leak-detector.ts` | 9 real regex patterns (OpenAI/Anthropic keys, GitHub tokens, AWS keys, private keys, JWTs, base64 blocks) |
-| PromptDefense | `src/security/prompt-defense.ts` | 20+ injection patterns (direct + RAG-specific), `sanitizeToolOutput()` for tool-output injection, output validation for shell exfiltration (pipe-to-curl/wget), critical file modification blocking |
+| PromptDefense | `src/security/prompt-defense.ts` | 10+ injection patterns, output validation for shell exfiltration (pipe-to-curl/wget), critical file modification blocking |
 | CapabilityTokens | `src/security/capability-tokens.ts` | Real expiration enforcement (30min default), path normalization with `path.resolve`, deny-first evaluation |
-| IntentCapsuleManager | `src/security/intent-capsule.ts` | **NEW in v0.6** — HMAC-SHA256 signed mandate bundles per task, SHA-256 mandate hashing, keyword-based + category-based drift detection, timing-safe signature verification, per-session signing keys |
-| PolicyLoader | `src/config/policy-loader.ts` | **NEW in v0.6** — Centralized TOML→ZoraPolicy parsing, backward-compatible defaults for missing `[budget]`/`[dry_run]` sections |
 
 ### Memory (all genuinely production-ready)
 
@@ -162,13 +160,8 @@ The `ask` command in `src/cli/index.ts` is the **ONLY** end-to-end path that wor
 - Wire dashboard `GET /api/jobs` to `SessionManager`
 - Build or stub the frontend `dist`
 
-### P2 -- Hardening (partially complete)
+### P2 -- Hardening
 
-- ~~Action budget enforcement (per-session + per-type)~~ **DONE in v0.6**
-- ~~Dry-run preview mode for write operations~~ **DONE in v0.6**
-- ~~Intent capsule / mandate signing for goal drift detection~~ **DONE in v0.6**
-- ~~RAG/tool-output injection defense~~ **DONE in v0.6**
-- ~~Centralized policy loader (DRY refactor)~~ **DONE in v0.6**
 - Add HTTP rate limiting to the dashboard Express server
 - Structured logging (JSON format) with rotation
 - Integration tests for the full orchestration flow
