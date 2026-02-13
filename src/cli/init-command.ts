@@ -10,8 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import * as clack from '@clack/prompts';
-import { stringify as stringifyTOML } from 'smol-toml';
-import { parse as parseTOML } from 'smol-toml';
+import { stringify as stringifyTOML, parse as parseTOML } from 'smol-toml';
 import { PRESETS, TOOL_STACKS, PRESET_DESCRIPTIONS } from './presets.js';
 import { runDoctorChecks } from './doctor.js';
 import type { DoctorResult } from './doctor.js';
@@ -357,7 +356,7 @@ async function runWizard(opts: {
   if (opts.yes) {
     // Auto-detect based on doctor
     toolStacks = ['general'];
-    if (doctor.claude.found || doctor.gemini.found) toolStacks.push('node');
+    if (doctor.node.found) toolStacks.push('node');
   } else {
     const stackChoices = await clack.multiselect({
       message: 'Which tool stacks do you use?',

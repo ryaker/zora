@@ -85,12 +85,9 @@ async function setupContext() {
       },
     };
   } else {
-    policy = {
-      filesystem: { allowed_paths: [os.homedir()], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
-      shell: { mode: 'allowlist', allowed_commands: ['ls', 'npm', 'git'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
-      actions: { reversible: [], irreversible: [], always_flag: [] },
-      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
-    };
+    // Fall back to the safest preset when no policy.toml exists
+    const { PRESETS } = await import('./presets.js');
+    policy = structuredClone(PRESETS['safe']);
   }
 
   const engine = new PolicyEngine(policy);
