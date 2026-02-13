@@ -21,7 +21,7 @@ export function evaluateWasmFeasibility(): WasmSpikeResult {
   return {
     feasible: true,
     notes: [
-      'Wasmtime has a mature Node.js binding (@aspect-build/rules_js does not yet provide WASM support).',
+      'Wasmtime has a mature Node.js binding.',
       'Wasmer provides wasmer-js for browser and Node.js runtimes with WASI preview2 support.',
       'WASI (WebAssembly System Interface) enables filesystem and network capability-based isolation.',
       'The IronClaw pattern (compile tool code to WASM, execute in sandboxed runtime) is viable for pure computation tasks.',
