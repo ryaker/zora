@@ -105,6 +105,7 @@ async function main() {
       return jobId;
     },
     port: config.steering.dashboard_port ?? 7070,
+    host: process.env.ZORA_BIND_HOST,
   });
   await dashboard.start();
 

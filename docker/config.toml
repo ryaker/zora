@@ -1,0 +1,60 @@
+# Container test configuration — mock providers, no real AI calls
+
+[agent]
+name = "zora-container"
+workspace = "/root/.zora/workspace"
+max_parallel_jobs = 2
+default_timeout = "1h"
+heartbeat_interval = "15m"
+log_level = "debug"
+
+[agent.identity]
+soul_file = "/root/.zora/workspace/SOUL.md"
+
+[agent.resources]
+cpu_throttle_percent = 80
+memory_limit_mb = 512
+
+[[providers]]
+name = "claude"
+type = "claude-sdk"
+rank = 1
+capabilities = ["reasoning", "coding", "creative"]
+cost_tier = "included"
+enabled = false
+
+[[providers]]
+name = "gemini"
+type = "gemini-cli"
+rank = 2
+capabilities = ["search", "structured-data"]
+cost_tier = "included"
+enabled = false
+
+[routing]
+mode = "respect_ranking"
+
+[failover]
+enabled = true
+auto_handoff = true
+max_retries = 3
+
+[memory]
+long_term_file = "/root/.zora/memory/MEMORY.md"
+daily_notes_dir = "/root/.zora/memory/daily"
+items_dir = "/root/.zora/memory/items"
+categories_dir = "/root/.zora/memory/categories"
+
+[security]
+policy_file = "/root/.zora/policy.toml"
+audit_log = "/root/.zora/audit/audit.jsonl"
+audit_hash_chain = true
+leak_detection = true
+
+[steering]
+enabled = true
+dashboard_port = 7070
+poll_interval = "5s"
+
+[notifications]
+enabled = false

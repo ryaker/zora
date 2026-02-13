@@ -1,0 +1,24 @@
+# Container test policy — permissive for integration testing
+
+[filesystem]
+allowed_paths = ["/root/.zora", "/tmp"]
+denied_paths = []
+resolve_symlinks = true
+follow_symlinks = false
+
+[shell]
+mode = "allowlist"
+allowed_commands = ["ls", "echo", "cat"]
+denied_commands = ["rm", "sudo"]
+split_chained_commands = true
+max_execution_time = "30s"
+
+[actions]
+reversible = ["write_file", "edit_file"]
+irreversible = []
+always_flag = []
+
+[network]
+allowed_domains = ["*"]
+denied_domains = []
+max_request_size = "10MB"
