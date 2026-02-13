@@ -173,8 +173,10 @@ test.describe('Quota & Usage Display', () => {
 
   test('session usage panel shows total cost and requests', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=Total Cost')).toBeVisible();
-    await expect(page.locator('text=Requests')).toBeVisible();
+    // Scope to Session Usage panel to avoid matching provider-level "REQUESTS"
+    const usagePanel = page.locator('.lcars-panel.border-zora-cyan.bg-zora-cyan\\/5');
+    await expect(usagePanel.locator('text=Total Cost')).toBeVisible({ timeout: 5000 });
+    await expect(usagePanel.locator('text=Requests')).toBeVisible({ timeout: 5000 });
   });
 
   test('cost tier is displayed per provider', async ({ page }) => {
