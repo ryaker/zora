@@ -14,7 +14,7 @@ const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
-  const [logs, setLogs] = useState<string[]>(['System initialized...', 'Awaiting neural link...']);
+  const [logs, setLogs] = useState<string[]>(['Zora is running.', 'Waiting for tasks...']);
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -22,7 +22,7 @@ const App: React.FC = () => {
         const res = await axios.get('/api/health');
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
-        console.error('Pulse failure');
+        console.error('Health check failed');
       }
     };
 
@@ -40,10 +40,10 @@ const App: React.FC = () => {
         author: 'operator',
         source: 'dashboard'
       });
-      setLogs(prev => [`Course correction injected: ${steerMsg}`, ...prev].slice(0, 10));
+      setLogs(prev => [`Message sent: ${steerMsg}`, ...prev].slice(0, 10));
       setSteerMsg('');
     } catch (err) {
-      setLogs(prev => ['FAILED TO INJECT STEERING', ...prev]);
+      setLogs(prev => ['Failed to send message', ...prev]);
     }
   };
 
@@ -54,7 +54,7 @@ const App: React.FC = () => {
       {/* Header Bar */}
       <div className="flex items-center gap-4 mb-6">
         <div className="lcars-bar flex-1 bg-zora-amber">
-          ZORA // TACTICAL INTERFACE // NODE_01
+          ZORA // DASHBOARD
         </div>
         <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
       </div>
@@ -63,7 +63,7 @@ const App: React.FC = () => {
         
         {/* Left Column: Health */}
         <div className="col-span-3 flex flex-col gap-4">
-          <div className="lcars-bar bg-zora-magenta">Health Monitor</div>
+          <div className="lcars-bar bg-zora-magenta">Provider Status</div>
           <div className="flex-1 lcars-panel border-zora-magenta bg-zora-magenta/5 overflow-y-auto">
             <AnimatePresence>
               {providers.map(p => (
@@ -78,7 +78,7 @@ const App: React.FC = () => {
                     <Activity size={14} className={p.valid ? 'text-green-500' : 'text-red-500'} />
                   </div>
                   <div className="text-[10px] font-data text-zora-amber uppercase">
-                    {p.valid ? 'Link Stable' : 'Link Severed'}
+                    {p.valid ? 'Connected' : 'Disconnected'}
                   </div>
                 </motion.div>
               ))}
@@ -88,7 +88,7 @@ const App: React.FC = () => {
 
         {/* Center: Main View / Steering */}
         <div className="col-span-6 flex flex-col gap-4">
-          <div className="lcars-bar bg-zora-cyan">Neural Steering</div>
+          <div className="lcars-bar bg-zora-cyan">Task Activity</div>
           <div className="flex-1 lcars-panel border-zora-cyan flex flex-col gap-4">
             <div className="flex-1 bg-black/60 p-4 font-data text-sm text-zora-cyan overflow-y-auto">
               {logs.map((log, i) => (
@@ -100,7 +100,7 @@ const App: React.FC = () => {
                 type="text" 
                 value={steerMsg}
                 onChange={(e) => setSteerMsg(e.target.value)}
-                placeholder="INPUT COMMAND..."
+                placeholder="Send a message to the running task..."
                 className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:ring-2 focus:ring-zora-cyan focus:outline-none"
               />
               <button 
@@ -115,26 +115,26 @@ const App: React.FC = () => {
 
         {/* Right Column: Policy & Info */}
         <div className="col-span-3 flex flex-col gap-4">
-          <div className="lcars-bar bg-zora-amber">Security Perimeter</div>
+          <div className="lcars-bar bg-zora-amber">Security Policy</div>
           <div className="flex-1 lcars-panel border-zora-amber">
             <div className="flex items-center gap-2 text-zora-amber mb-4">
               <Shield size={18} />
-              <span className="text-sm font-bold uppercase">Policy: Strict</span>
+              <span className="text-sm font-bold uppercase">Policy: Active</span>
             </div>
             <div className="text-[10px] font-data text-white/60 space-y-2">
               <div className="flex items-start gap-2">
                 <Terminal size={12} className="mt-0.5 text-zora-cyan" />
-                <span>SHELL ALLOWLIST ACTIVE</span>
+                <span>Approved commands only</span>
               </div>
               <div className="flex items-start gap-2">
                 <Zap size={12} className="mt-0.5 text-zora-magenta" />
-                <span>IRREVERSIBLE ACTIONS FLAGGED</span>
+                <span>Dangerous actions require approval</span>
               </div>
             </div>
           </div>
           <div className="h-32 lcars-panel border-zora-cyan bg-zora-cyan/5 text-zora-cyan text-[10px] font-data">
             <div className="flex items-center gap-2 mb-2 font-bold uppercase">
-              <Info size={14} /> System Node
+              <Info size={14} /> System Info
             </div>
             UPTIME: 04:20:12<br/>
             MEMORY: 128MB / 512MB<br/>
@@ -146,8 +146,8 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
-        <div>Zora Agent v0.5.0 // Unauthorized access is prohibited</div>
-        <div>Sector 7-G // Build 2026.02.12</div>
+        <div>Zora v0.6.0</div>
+        <div>Dashboard</div>
       </div>
     </div>
   );
