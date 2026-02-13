@@ -72,25 +72,33 @@ export class IntentCapsuleManager {
    * Returns false if the capsule has been tampered with.
    */
   verifyCapsule(capsule: IntentCapsule): boolean {
-    const payload = JSON.stringify({
-      capsuleId: capsule.capsuleId,
-      mandate: capsule.mandate,
-      mandateHash: capsule.mandateHash,
-      mandateKeywords: capsule.mandateKeywords,
-      allowedActionCategories: capsule.allowedActionCategories,
-      createdAt: capsule.createdAt,
-      expiresAt: capsule.expiresAt,
-    });
+    try {
+      const payload = JSON.stringify({
+        capsuleId: capsule.capsuleId,
+        mandate: capsule.mandate,
+        mandateHash: capsule.mandateHash,
+        mandateKeywords: capsule.mandateKeywords,
+        allowedActionCategories: capsule.allowedActionCategories,
+        createdAt: capsule.createdAt,
+        expiresAt: capsule.expiresAt,
+      });
 
-    const expectedSignature = crypto
-      .createHmac('sha256', this._signingKey)
-      .update(payload)
-      .digest('hex');
+      const expectedSignature = crypto
+        .createHmac('sha256', this._signingKey)
+        .update(payload)
+        .digest('hex');
 
-    return crypto.timingSafeEqual(
-      Buffer.from(capsule.signature, 'hex'),
-      Buffer.from(expectedSignature, 'hex'),
-    );
+      const sigBuffer = Buffer.from(capsule.signature, 'hex');
+      const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+
+      // timingSafeEqual throws if buffer lengths differ (malformed signature)
+      if (sigBuffer.length !== expectedBuffer.length) return false;
+
+      return crypto.timingSafeEqual(sigBuffer, expectedBuffer);
+    } catch {
+      // Malformed signature or unexpected error — treat as verification failure
+      return false;
+    }
   }
 
   /**
@@ -131,9 +139,16 @@ export class IntentCapsuleManager {
     // Keyword overlap check: does the action detail relate to the mandate?
     const actionKeywords = this._extractKeywords(actionDetail);
     const overlap = actionKeywords.filter(k => capsule.mandateKeywords.includes(k));
-    const overlapRatio = actionKeywords.length > 0
-      ? overlap.length / actionKeywords.length
-      : 1.0; // empty action detail = no drift signal
+    // Empty action detail is neutral — skip keyword check (don't flag, don't assume match)
+    if (actionKeywords.length === 0) {
+      const result: DriftCheckResult = {
+        consistent: true, confidence: 0.5,
+        action: actionType, mandateHash: capsule.mandateHash,
+      };
+      this._driftHistory.push(result);
+      return result;
+    }
+    const overlapRatio = overlap.length / actionKeywords.length;
 
     const consistent = overlapRatio >= 0.1; // At least 10% keyword overlap
     const confidence = consistent ? overlapRatio : 1.0 - overlapRatio;

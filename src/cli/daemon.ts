@@ -49,8 +49,13 @@ async function main() {
   let policy: ZoraPolicy;
   try {
     policy = await loadPolicy(policyPath);
-  } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora init` first.');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('not found')) {
+      console.error('Policy not found at ~/.zora/policy.toml. Run `zora init` first.');
+    } else {
+      console.error(`Failed to load policy at ~/.zora/policy.toml: ${msg}`);
+    }
     process.exit(1);
   }
 

@@ -102,7 +102,7 @@ on_long_running = "30m"
 | `mode` | string | `"allowlist"` | One of: `"allowlist"` (only listed commands), `"denylist"` (everything except listed), `"deny_all"` (no commands). |
 | `allowed_commands` | string[] | `["ls", "npm", "git"]` | Commands permitted when mode is `"allowlist"`. |
 | `denied_commands` | string[] | `[]` | Commands blocked. In `"denylist"` mode, these are the only ones blocked. |
-| `split_chained_commands` | bool | `true` | Parse chained commands (`&&`, `||`, `;`, `|`) and validate each individually. |
+| `split_chained_commands` | bool | `true` | Parse chained commands (`&&`, `\|\|`, `;`, `\|`) and validate each individually. |
 | `max_execution_time` | string | `"1m"` | Maximum wall-clock time for a single command. Format: `"30s"`, `"5m"`, `"1h"`. |
 
 ### `[actions]` — Action Classification

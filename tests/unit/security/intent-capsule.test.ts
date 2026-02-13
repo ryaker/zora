@@ -85,6 +85,18 @@ describe('IntentCapsuleManager', () => {
       // Verify with different manager should fail
       expect(manager2.verifyCapsule(capsule)).toBe(false);
     });
+
+    it('returns false for malformed signature (wrong length)', () => {
+      const capsule = manager.createCapsule('Test mandate');
+      const tampered = { ...capsule, signature: 'short' };
+      expect(manager.verifyCapsule(tampered)).toBe(false);
+    });
+
+    it('returns false for empty signature', () => {
+      const capsule = manager.createCapsule('Test mandate');
+      const tampered = { ...capsule, signature: '' };
+      expect(manager.verifyCapsule(tampered)).toBe(false);
+    });
   });
 
   describe('checkDrift', () => {

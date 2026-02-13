@@ -259,9 +259,11 @@ Each log entry includes a cryptographic hash of the previous entry. If someone (
 Every audit log entry includes a hash of the previous entry, creating a cryptographic chain. If any entry is deleted or modified, the chain breaks.
 
 **How it works:**
-1. Entry 1: `hash_chain = hash(entry1)`
-2. Entry 2: `hash_chain = hash(entry1_hash + entry2)`
-3. Entry 3: `hash_chain = hash(entry2_hash + entry3)`
+1. Entry 1: `hash_chain = SHA256(entry1_data)`
+2. Entry 2: `hash_chain = SHA256(previous_hash + entry2_data)`
+3. Entry 3: `hash_chain = SHA256(previous_hash + entry3_data)`
+
+Each entry's hash depends on the previous entry's hash, forming a chain. If any entry is removed or altered, the subsequent hashes won't match.
 
 **Why it matters:**
 If malware (or a rogue AI) tries to hide its tracks by deleting log entries, you'll detect it by verifying the chain.
@@ -432,7 +434,7 @@ Zora's security is built on multiple independent layers that work together:
 
 Please use GitHub Security Advisories for private disclosure:
 
-**https://github.com/ryaker/AgentDev/security/advisories**
+**https://github.com/ryaker/zora/security/advisories**
 
 If GitHub advisories are not available to you, open a GitHub issue with the minimum necessary detail and note that you can provide a private report if contacted.
 

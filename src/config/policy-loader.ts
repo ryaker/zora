@@ -10,15 +10,31 @@ import type { ZoraPolicy } from '../types.js';
 
 /**
  * Load and parse a ZoraPolicy from a TOML file.
- * Throws if the file does not exist.
+ * Throws descriptive errors for missing files, missing dependencies, and parse failures.
  */
 export async function loadPolicy(policyPath: string): Promise<ZoraPolicy> {
   if (!fs.existsSync(policyPath)) {
     throw new Error(`Policy file not found at ${policyPath}. Run \`zora init\` first.`);
   }
 
-  const { parse: parseTOML } = await import('smol-toml');
-  const raw = parseTOML(fs.readFileSync(policyPath, 'utf-8')) as Record<string, unknown>;
+  let parseTOML: (input: string) => Record<string, unknown>;
+  try {
+    const mod = await import('smol-toml');
+    parseTOML = mod.parse as (input: string) => Record<string, unknown>;
+  } catch {
+    throw new Error(
+      'Failed to load TOML parser (smol-toml). Run `npm install` to install dependencies.',
+    );
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = parseTOML(fs.readFileSync(policyPath, 'utf-8'));
+  } catch (err: unknown) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse ${policyPath}: ${detail}`);
+  }
+
   return parsePolicy(raw);
 }
 
@@ -34,7 +50,7 @@ export function parsePolicy(raw: Record<string, unknown>): ZoraPolicy {
   const budPol = raw['budget'] as Record<string, unknown> | undefined;
   const dryPol = raw['dry_run'] as Record<string, unknown> | undefined;
 
-  return {
+  const policy: ZoraPolicy = {
     filesystem: {
       allowed_paths: (fsPol?.['allowed_paths'] as string[]) ?? [],
       denied_paths: (fsPol?.['denied_paths'] as string[]) ?? [],
@@ -58,20 +74,24 @@ export function parsePolicy(raw: Record<string, unknown>): ZoraPolicy {
       denied_domains: (netPol?.['denied_domains'] as string[]) ?? [],
       max_request_size: (netPol?.['max_request_size'] as string) ?? '10mb',
     },
-    ...(budPol ? {
-      budget: {
-        max_actions_per_session: (budPol['max_actions_per_session'] as number) ?? 0,
-        max_actions_per_type: (budPol['max_actions_per_type'] as Record<string, number>) ?? {},
-        token_budget: (budPol['token_budget'] as number) ?? 0,
-        on_exceed: (budPol['on_exceed'] as 'block' | 'flag') ?? 'block',
-      },
-    } : {}),
-    ...(dryPol ? {
-      dry_run: {
-        enabled: (dryPol['enabled'] as boolean) ?? false,
-        tools: (dryPol['tools'] as string[]) ?? [],
-        audit_dry_runs: (dryPol['audit_dry_runs'] as boolean) ?? true,
-      },
-    } : {}),
   };
+
+  if (budPol) {
+    policy.budget = {
+      max_actions_per_session: (budPol['max_actions_per_session'] as number) ?? 0,
+      max_actions_per_type: (budPol['max_actions_per_type'] as Record<string, number>) ?? {},
+      token_budget: (budPol['token_budget'] as number) ?? 0,
+      on_exceed: (budPol['on_exceed'] as 'block' | 'flag') ?? 'block',
+    };
+  }
+
+  if (dryPol) {
+    policy.dry_run = {
+      enabled: (dryPol['enabled'] as boolean) ?? false,
+      tools: (dryPol['tools'] as string[]) ?? [],
+      audit_dry_runs: (dryPol['audit_dry_runs'] as boolean) ?? true,
+    };
+  }
+
+  return policy;
 }

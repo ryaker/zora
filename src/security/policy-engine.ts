@@ -285,8 +285,17 @@ export class PolicyEngine {
 
   /**
    * Determine if a bash command is read-only.
+   * For chained commands (&&, ||, ;, |), ALL parts must be read-only.
    */
   private _isReadOnlyCommand(command: string): boolean {
+    const parts = this._splitChainedCommands(command);
+    return parts.every(part => this._isSingleReadOnlyCommand(part));
+  }
+
+  /**
+   * Determine if a single (non-chained) command is read-only.
+   */
+  private _isSingleReadOnlyCommand(command: string): boolean {
     const base = this._extractBaseCommand(command);
     if (PolicyEngine.READ_ONLY_COMMANDS.has(base)) return true;
     // git status, git log, git diff are read-only
@@ -526,6 +535,16 @@ export class PolicyEngine {
         }
       }
 
+      // ─── Dry-run interception (ASI02) ──────────────────────────────
+      // Check dry-run BEFORE budget so intercepted actions don't consume quota
+      const dryRunResult = this._checkDryRun(toolName, input);
+      if (dryRunResult) {
+        return {
+          behavior: 'deny' as const,
+          message: `[DRY RUN] ${dryRunResult.wouldExecute}`,
+        };
+      }
+
       // ─── Budget enforcement (LLM06/LLM10) ─────────────────────────
       if (this._policy.budget) {
         const actionType = this._classifyAction(toolName, input) ?? 'unknown';
@@ -582,15 +601,6 @@ export class PolicyEngine {
           }
           // If no flag callback, log but allow (to avoid breaking non-interactive flows)
         }
-      }
-
-      // ─── Dry-run interception (ASI02) ──────────────────────────────
-      const dryRunResult = this._checkDryRun(toolName, input);
-      if (dryRunResult) {
-        return {
-          behavior: 'deny' as const,
-          message: `[DRY RUN] ${dryRunResult.wouldExecute}`,
-        };
       }
 
       // Default: allow the tool call

@@ -120,6 +120,28 @@ describe('Dry Run Mode', () => {
       const r = await canUseTool('Glob', { path: '/tmp/test', pattern: '*.ts' }, { signal });
       expect(r.behavior).toBe('allow');
     });
+
+    it('intercepts chained commands where any part is not read-only', async () => {
+      // "ls && rm -rf /tmp" should NOT be treated as read-only
+      const r = await canUseTool('Bash', { command: 'ls && npm install' }, { signal });
+      expect(r.behavior).toBe('deny');
+      if (r.behavior === 'deny') {
+        expect(r.message).toContain('[DRY RUN]');
+      }
+    });
+
+    it('allows chained commands where ALL parts are read-only', async () => {
+      const r = await canUseTool('Bash', { command: 'ls -la && git status' }, { signal });
+      expect(r.behavior).toBe('allow');
+    });
+
+    it('intercepts piped commands where any part is not read-only', async () => {
+      const r = await canUseTool('Bash', { command: 'ls | npm install' }, { signal });
+      expect(r.behavior).toBe('deny');
+      if (r.behavior === 'deny') {
+        expect(r.message).toContain('[DRY RUN]');
+      }
+    });
   });
 
   describe('dry-run with specific tools', () => {
