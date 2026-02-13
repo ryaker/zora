@@ -1,0 +1,13 @@
+[routine]
+name = "repo-cleanup"
+schedule = "0 9 * * 1-5"
+model_preference = "gemini"
+timeout = "15m"
+
+[routine.task]
+prompt = """
+Check all git repos in ~/Projects for stale branches (>30 days),
+uncommitted changes, and repos behind their remote.
+Write summary to ~/.zora/workspace/daily/{date}-repo-status.md
+and send a macOS notification with the highlight.
+"""
