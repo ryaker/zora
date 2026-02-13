@@ -12,6 +12,7 @@ import type {
   LLMProvider,
   AuthStatus,
   QuotaStatus,
+  ProviderUsage,
   AgentEvent,
   TaskContext,
   ProviderCapability,
@@ -34,6 +35,8 @@ export class GeminiProvider implements LLMProvider {
   private readonly _cliPath: string;
   private _lastAuthStatus: AuthStatus | null = null;
   private _lastQuotaStatus: QuotaStatus | null = null;
+  private _requestCount = 0;
+  private _lastRequestAt: Date | null = null;
 
   /** Active child processes indexed by jobId for abort support */
   private readonly _activeProcesses: Map<string, any> = new Map();
@@ -120,7 +123,19 @@ export class GeminiProvider implements LLMProvider {
     return status;
   }
 
+  getUsage(): ProviderUsage {
+    return {
+      totalCostUsd: 0, // Gemini CLI doesn't expose cost data
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      requestCount: this._requestCount,
+      lastRequestAt: this._lastRequestAt,
+    };
+  }
+
   async *execute(task: TaskContext): AsyncGenerator<AgentEvent> {
+    this._requestCount++;
+    this._lastRequestAt = new Date();
     const prompt = this._buildPrompt(task);
     const args = ['chat', '--prompt', prompt];
     

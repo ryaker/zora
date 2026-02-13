@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import * as clack from '@clack/prompts';
 import { stringify as stringifyTOML } from 'smol-toml';
 import { parse as parseTOML } from 'smol-toml';
-import { PRESETS, TOOL_STACKS, PRESET_DESCRIPTIONS } from './presets.js';
+import { PRESETS, TOOL_STACKS } from './presets.js';
 import { runDoctorChecks } from './doctor.js';
 import type { DoctorResult } from './doctor.js';
 import type { PresetName } from './presets.js';

@@ -15,6 +15,7 @@ import type { ExecutionLoop } from '../orchestrator/execution-loop.js';
 import type { SessionManager } from '../orchestrator/session-manager.js';
 import type { SteeringManager } from '../steering/steering-manager.js';
 import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
+import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,7 @@ export interface DashboardOptions {
   sessionManager: SessionManager;
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
+  providers?: LLMProvider[];
   port?: number;
 }
 
@@ -106,6 +108,27 @@ export class DashboardServer {
             ...status
           }))
         });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ ok: false, error: message });
+      }
+    });
+
+    /** GET /api/quota — Provider quota, usage, and cost snapshots */
+    this._app.get('/api/quota', async (_req, res) => {
+      const providers = this._options.providers ?? [];
+      try {
+        const authStatus = await authMonitor.checkAll();
+        const snapshots: ProviderQuotaSnapshot[] = await Promise.all(
+          providers.map(async (p) => ({
+            name: p.name,
+            auth: authStatus.get(p.name) ?? { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true },
+            quota: await p.getQuotaStatus(),
+            usage: p.getUsage(),
+            costTier: p.costTier,
+          }))
+        );
+        res.json({ ok: true, providers: snapshots });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         res.status(500).json({ ok: false, error: message });

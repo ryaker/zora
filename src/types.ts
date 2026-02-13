@@ -51,6 +51,24 @@ export interface QuotaStatus {
   healthScore: number; // 0-1
 }
 
+/** Extended usage snapshot for dashboard display */
+export interface ProviderUsage {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  requestCount: number;
+  lastRequestAt: Date | null;
+}
+
+/** Combined provider status for the /api/quota endpoint */
+export interface ProviderQuotaSnapshot {
+  name: string;
+  auth: AuthStatus;
+  quota: QuotaStatus;
+  usage: ProviderUsage;
+  costTier: CostTier;
+}
+
 // ─── Agent Events ────────────────────────────────────────────────────
 
 export type AgentEventType =
@@ -116,6 +134,7 @@ export interface LLMProvider {
   isAvailable(): Promise<boolean>;
   checkAuth(): Promise<AuthStatus>;
   getQuotaStatus(): Promise<QuotaStatus>;
+  getUsage(): ProviderUsage;
   execute(task: TaskContext): AsyncGenerator<AgentEvent>;
   abort(jobId: string): Promise<void>;
 }

@@ -9,6 +9,7 @@ import type {
   LLMProvider,
   AuthStatus,
   QuotaStatus,
+  ProviderUsage,
   AgentEvent,
   TaskContext,
   ProviderCapability,
@@ -91,6 +92,16 @@ export class MockProvider implements LLMProvider {
       remainingRequests: this._quotaExhausted ? 0 : 100,
       cooldownUntil: null,
       healthScore: this._healthScore,
+    };
+  }
+
+  getUsage(): ProviderUsage {
+    return {
+      totalCostUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      requestCount: this.executeCalls.length,
+      lastRequestAt: this.executeCalls.length > 0 ? new Date() : null,
     };
   }
 

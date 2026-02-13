@@ -18,6 +18,7 @@ import type {
   LLMProvider,
   AuthStatus,
   QuotaStatus,
+  ProviderUsage,
   AgentEvent,
   AgentEventType,
   TaskContext,
@@ -152,6 +153,12 @@ export class ClaudeProvider implements LLMProvider {
 
   /** Track cumulative cost */
   private _totalCostUsd = 0;
+
+  /** Track cumulative token usage */
+  private _totalInputTokens = 0;
+  private _totalOutputTokens = 0;
+  private _requestCount = 0;
+  private _lastRequestAt: Date | null = null;
 
   constructor(options: ClaudeProviderOptions) {
     const { config } = options;
@@ -489,6 +496,17 @@ export class ClaudeProvider implements LLMProvider {
    */
   private _handleResultMessage(msg: SDKResultMessage): void {
     this._totalCostUsd += msg.total_cost_usd;
+    this._requestCount++;
+    this._lastRequestAt = new Date();
+
+    // Aggregate token usage from modelUsage if the SDK exposes it
+    const raw = msg as unknown as Record<string, unknown>;
+    if (raw.modelUsage && typeof raw.modelUsage === 'object') {
+      for (const usage of Object.values(raw.modelUsage as Record<string, Record<string, number>>)) {
+        this._totalInputTokens += usage.inputTokens ?? 0;
+        this._totalOutputTokens += usage.outputTokens ?? 0;
+      }
+    }
 
     // If result was an error, check if it's auth/quota related
     if (msg.is_error && msg.subtype === 'error_max_turns') {
@@ -548,6 +566,16 @@ export class ClaudeProvider implements LLMProvider {
 
   get lastQuotaStatus(): QuotaStatus | null {
     return this._lastQuotaStatus;
+  }
+
+  getUsage(): ProviderUsage {
+    return {
+      totalCostUsd: this._totalCostUsd,
+      totalInputTokens: this._totalInputTokens,
+      totalOutputTokens: this._totalOutputTokens,
+      requestCount: this._requestCount,
+      lastRequestAt: this._lastRequestAt,
+    };
   }
 
   /**
