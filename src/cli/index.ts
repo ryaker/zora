@@ -25,6 +25,7 @@ import { registerAuditCommands } from './audit-commands.js';
 import { registerEditCommands } from './edit-commands.js';
 import { registerTeamCommands } from './team-commands.js';
 import { registerSteerCommands } from './steer-commands.js';
+import { registerSkillCommands } from './skill-commands.js';
 
 const program = new Command();
 
@@ -157,5 +158,6 @@ registerAuditCommands(program, () => path.join(configDir, 'audit.jsonl'));
 registerEditCommands(program, configDir);
 registerTeamCommands(program, configDir);
 registerSteerCommands(program, configDir);
+registerSkillCommands(program);
 
 program.parse();
