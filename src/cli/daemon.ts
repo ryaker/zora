@@ -94,6 +94,7 @@ async function main() {
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
     port: config.steering.dashboard_port ?? 7070,
+    host: process.env.ZORA_BIND_HOST,
   });
   await dashboard.start();
 

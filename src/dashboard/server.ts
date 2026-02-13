@@ -24,6 +24,7 @@ export interface DashboardOptions {
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
   port?: number;
+  host?: string;
 }
 
 export class DashboardServer {
@@ -208,9 +209,10 @@ export class DashboardServer {
    */
   async start(): Promise<void> {
     const port = this._options.port ?? 7070;
+    const host = this._options.host ?? '127.0.0.1';
     return new Promise((resolve) => {
-      this._server = this._app.listen(port, '127.0.0.1', () => {
-        console.log(`[Dashboard] Zora Tactical Interface active at http://localhost:${port}`);
+      this._server = this._app.listen(port, host, () => {
+        console.log(`[Dashboard] Zora Tactical Interface active at http://${host}:${port}`);
         resolve();
       });
     });
