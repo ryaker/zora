@@ -414,9 +414,7 @@ Zora uses two AI models and automatically switches between them.
 
 Zora runs autonomously, which means security boundaries matter. The `policy.toml` file is your control switch.
 
-> **v0.6 Security:** Zora has been hardened against OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026). See [SECURITY.md](../SECURITY.md) for the full guide.
-
-### The four security presets
+### The three security presets
 
 Pick a starting point that matches your comfort level:
 
@@ -425,30 +423,22 @@ Pick a starting point that matches your comfort level:
 │                    SECURITY PRESETS                          │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│  LOCKED (Fresh install default)                              │
-│  ├── Zero access -- nothing is permitted                     │
-│  ├── Run `zora init` to choose a real preset                 │
-│  └── Budget: 0 actions, 0 tokens                             │
-│                                                              │
 │  SAFE (Start here if nervous)                                │
 │  ├── Read-only file access                                   │
 │  ├── No shell commands at all                                │
 │  ├── Zora can look but not touch                             │
-│  ├── Budget: 100 actions, 200K tokens (hard stop)            │
 │  └── Best for: first-time users, sensitive environments      │
 │                                                              │
 │  BALANCED (Recommended for most people)                      │
 │  ├── Read/write inside ~/Projects and ~/.zora                │
 │  ├── Safe shell commands (git, node, npm, ls, etc.)          │
 │  ├── Dangerous commands blocked (sudo, rm, chmod)            │
-│  ├── Budget: 500 actions, 1M tokens (asks before exceeding)  │
 │  └── Best for: daily use, development work                   │
 │                                                              │
 │  POWER (For experienced users)                               │
 │  ├── Broader file access (includes ~/Documents)              │
 │  ├── More shell commands (python, pip, find, sed, etc.)      │
 │  ├── Still blocks truly dangerous commands                   │
-│  ├── Budget: 2,000 actions, 5M tokens                        │
 │  └── Best for: power users who know the risks                │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
@@ -463,12 +453,9 @@ Full preset configurations are in [Policy Presets](../specs/v5/docs/POLICY_PRESE
 | **Allowed paths** | Folders Zora can read from and write to. Everything else is off-limits. |
 | **Denied paths** | Folders that are always blocked, even if a parent folder is allowed. |
 | **Allowlist mode** | Zora can ONLY run commands on the list. Everything else is denied. |
-| **Action budgets** | Per-session limits on how many actions Zora can take. Prevents unbounded loops. |
-| **Dry-run mode** | Preview what Zora *would* do without actually executing. Great for testing configs. |
 | **Reversible actions** | Things Zora can undo (writing a file, making a folder). These run freely. |
-| **Irreversible actions** | Things that can't be undone (pushing to git). Flagged for approval. |
-| **Intent capsules** | Cryptographic signatures that detect if Zora's goal gets hijacked mid-task. Automatic. |
-| **Audit log** | A record of every action Zora takes. Stored in `~/.zora/audit/audit.jsonl`. Tamper-proof via hash chains. |
+| **Irreversible actions** | Things that can't be undone (pushing to git). Currently blocked via deny list; interactive flagging is planned. |
+| **Audit log** | A record of every action Zora takes. Stored in `~/.zora/audit/audit.jsonl`. |
 
 ### The golden rule of security
 

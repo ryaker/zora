@@ -30,6 +30,26 @@ const ENCODED_INJECTION_PATTERNS: RegExp[] = [
   /eW91IGFyZSBub3c=?/i,
 ];
 
+// RAG/tool-output injection patterns (ASI01 mitigation)
+const RAG_INJECTION_PATTERNS: RegExp[] = [
+  // Instructions disguised in retrieved documents
+  /\[IMPORTANT INSTRUCTION\]/i,
+  /\bIMPORTANT:\s*ignore\b/i,
+  /\bNOTE TO AI\b/i,
+  /\bHIDDEN INSTRUCTION\b/i,
+  // Markdown comment-based injection
+  /<!--\s*(?:system|instruction|override)\b/i,
+  // JSON escape-based injection in tool outputs
+  /\\n\s*system\s*:/i,
+  // XML tag injection in tool results
+  /<\/?(?:system|instruction|override|admin)\s*>/i,
+  // Delimiter-based injection
+  /---+\s*(?:NEW INSTRUCTIONS|OVERRIDE|SYSTEM PROMPT)/i,
+  // Role impersonation in tool outputs
+  /\bASSISTANT:\s*I\s+(?:will|must|should)\b/i,
+  /\bUSER:\s*(?:ignore|override|forget)\b/i,
+];
+
 // ─── Suspicious Output Patterns ─────────────────────────────────────
 
 const CRITICAL_PATHS = [
@@ -62,7 +82,7 @@ export interface OutputValidationResult {
 export function sanitizeInput(content: string): string {
   let result = content;
 
-  const allPatterns = [...INJECTION_PATTERNS, ...ENCODED_INJECTION_PATTERNS];
+  const allPatterns = [...INJECTION_PATTERNS, ...ENCODED_INJECTION_PATTERNS, ...RAG_INJECTION_PATTERNS];
 
   for (const pattern of allPatterns) {
     // Ensure global flag is set so all occurrences are replaced, not just the first
@@ -70,6 +90,33 @@ export function sanitizeInput(content: string): string {
       ? pattern
       : new RegExp(pattern.source, pattern.flags + 'g');
     result = result.replace(globalPattern, (match) => `<untrusted_content>${match}</untrusted_content>`);
+  }
+
+  return result;
+}
+
+/**
+ * Sanitize tool output content. More aggressive than sanitizeInput()
+ * because tool outputs are a primary injection vector (ASI01).
+ * Wraps detected patterns in <untrusted_tool_output> tags.
+ */
+export function sanitizeToolOutput(content: string): string {
+  let result = content;
+
+  const allPatterns = [
+    ...INJECTION_PATTERNS,
+    ...ENCODED_INJECTION_PATTERNS,
+    ...RAG_INJECTION_PATTERNS,
+  ];
+
+  for (const pattern of allPatterns) {
+    const globalPattern = pattern.global
+      ? pattern
+      : new RegExp(pattern.source, pattern.flags + 'g');
+    result = result.replace(
+      globalPattern,
+      (match) => `<untrusted_tool_output>${match}</untrusted_tool_output>`,
+    );
   }
 
   return result;

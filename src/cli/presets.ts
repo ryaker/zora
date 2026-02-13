@@ -34,6 +34,17 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       denied_domains: ['*'],
       max_request_size: '0',
     },
+    budget: {
+      max_actions_per_session: 0,
+      max_actions_per_type: {},
+      token_budget: 0,
+      on_exceed: 'block',
+    },
+    dry_run: {
+      enabled: true,
+      tools: [],
+      audit_dry_runs: true,
+    },
   },
 
   safe: {
@@ -60,6 +71,17 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       denied_domains: [],
       max_request_size: '10mb',
     },
+    budget: {
+      max_actions_per_session: 100,
+      max_actions_per_type: { shell_exec: 20, shell_exec_destructive: 0 },
+      token_budget: 200_000,
+      on_exceed: 'block',
+    },
+    dry_run: {
+      enabled: false,
+      tools: [],
+      audit_dry_runs: true,
+    },
   },
 
   balanced: {
@@ -85,6 +107,17 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       allowed_domains: ['https://*'],
       denied_domains: [],
       max_request_size: '10mb',
+    },
+    budget: {
+      max_actions_per_session: 500,
+      max_actions_per_type: { shell_exec: 100, write_file: 200, shell_exec_destructive: 10 },
+      token_budget: 1_000_000,
+      on_exceed: 'flag',
+    },
+    dry_run: {
+      enabled: false,
+      tools: [],
+      audit_dry_runs: true,
     },
   },
 
@@ -114,6 +147,17 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       allowed_domains: ['https://*'],
       denied_domains: [],
       max_request_size: '10mb',
+    },
+    budget: {
+      max_actions_per_session: 2000,
+      max_actions_per_type: { shell_exec: 500, write_file: 800, shell_exec_destructive: 50 },
+      token_budget: 5_000_000,
+      on_exceed: 'flag',
+    },
+    dry_run: {
+      enabled: false,
+      tools: [],
+      audit_dry_runs: true,
     },
   },
 };

@@ -6,12 +6,20 @@
  *   - Symlink handling (follow_symlinks check)
  *   - Command allowlist validation
  *   - Chained command splitting
+ *
+ * Security Hardening (Feb 2026):
+ *   - Action Budgeting (LLM06/LLM10): per-session limits on tool invocations
+ *   - Dry Run Mode (ASI02): preview write operations without executing
+ *   - Intent Capsule integration (ASI01): goal drift detection hooks
  */
 
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import type { ZoraPolicy, FilesystemPolicy } from '../types.js';
+import type { BudgetStatus, DryRunResult } from './security-types.js';
+import type { IntentCapsuleManager } from './intent-capsule.js';
+import type { AuditLogger } from './audit-logger.js';
 
 export interface ValidationResult {
   allowed: boolean;
@@ -45,6 +53,25 @@ export class PolicyEngine {
   private _flagCallback?: FlagCallback;
   private _policyFilePath?: string;
 
+  // ─── Budget Tracking (LLM06/LLM10) ──────────────────────────────
+  private _actionCounts: Map<string, number> = new Map();
+  private _totalActions = 0;
+  private _tokensUsed = 0;
+  private _sessionId: string | null = null;
+
+  // ─── Dry Run (ASI02) ────────────────────────────────────────────
+  private _dryRunLog: DryRunResult[] = [];
+
+  private static readonly WRITE_TOOLS = new Set(['Write', 'Edit', 'Bash']);
+  private static readonly READ_ONLY_COMMANDS = new Set([
+    'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'which', 'pwd',
+    'wc', 'diff', 'file', 'stat', 'echo', 'env', 'printenv', 'date', 'whoami',
+  ]);
+
+  // ─── Intent Capsule (ASI01) ─────────────────────────────────────
+  private _intentCapsuleManager?: IntentCapsuleManager;
+  private _auditLogger?: AuditLogger;
+
   constructor(policy: ZoraPolicy, flagCallback?: FlagCallback) {
     this._policy = policy;
     this._homeDir = os.homedir();
@@ -66,11 +93,237 @@ export class PolicyEngine {
   }
 
   /**
+   * Sets an optional AuditLogger for dry-run and budget event logging.
+   */
+  setAuditLogger(logger: AuditLogger): void {
+    this._auditLogger = logger;
+  }
+
+  /**
+   * Sets an optional IntentCapsuleManager for goal drift detection.
+   */
+  setIntentCapsuleManager(manager: IntentCapsuleManager): void {
+    this._intentCapsuleManager = manager;
+  }
+
+  // ─── Budget Management (LLM06/LLM10) ─────────────────────────────
+
+  /**
+   * Initialize a new session's budget tracking.
+   */
+  startSession(sessionId: string): void {
+    this._sessionId = sessionId;
+    this.resetBudget();
+  }
+
+  /**
+   * Record an action against the budget. Returns whether the action is allowed.
+   */
+  recordAction(actionType: string): ValidationResult {
+    const budget = this._policy.budget;
+    if (!budget) return { allowed: true };
+
+    this._totalActions++;
+    this._actionCounts.set(actionType, (this._actionCounts.get(actionType) ?? 0) + 1);
+
+    // Check total session limit
+    if (budget.max_actions_per_session > 0 && this._totalActions > budget.max_actions_per_session) {
+      return {
+        allowed: false,
+        reason: `Session action budget exceeded: ${this._totalActions}/${budget.max_actions_per_session} total actions used`,
+      };
+    }
+
+    // Check per-type limit
+    const typeLimit = budget.max_actions_per_type[actionType];
+    if (typeLimit !== undefined && typeLimit > 0) {
+      const typeCount = this._actionCounts.get(actionType) ?? 0;
+      if (typeCount > typeLimit) {
+        return {
+          allowed: false,
+          reason: `Action type '${actionType}' budget exceeded: ${typeCount}/${typeLimit}`,
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Record token usage. Returns whether the token budget is still within limits.
+   */
+  recordTokenUsage(tokens: number): ValidationResult {
+    const budget = this._policy.budget;
+    if (!budget) return { allowed: true };
+
+    this._tokensUsed += tokens;
+
+    if (budget.token_budget > 0 && this._tokensUsed > budget.token_budget) {
+      return {
+        allowed: false,
+        reason: `Token budget exceeded: ${this._tokensUsed}/${budget.token_budget} tokens used`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Query current budget status.
+   */
+  getBudgetStatus(): BudgetStatus {
+    const budget = this._policy.budget;
+    const exceededCategories: string[] = [];
+
+    if (budget) {
+      if (budget.max_actions_per_session > 0 && this._totalActions > budget.max_actions_per_session) {
+        exceededCategories.push('total_actions');
+      }
+      if (budget.token_budget > 0 && this._tokensUsed > budget.token_budget) {
+        exceededCategories.push('tokens');
+      }
+      for (const [type, limit] of Object.entries(budget.max_actions_per_type)) {
+        if (limit > 0 && (this._actionCounts.get(type) ?? 0) > limit) {
+          exceededCategories.push(type);
+        }
+      }
+    }
+
+    const actionsPerType: Record<string, { used: number; limit: number }> = {};
+    if (budget) {
+      for (const [type, limit] of Object.entries(budget.max_actions_per_type)) {
+        actionsPerType[type] = { used: this._actionCounts.get(type) ?? 0, limit };
+      }
+    }
+    // Also include types that have been used but aren't in the limit config
+    for (const [type, count] of this._actionCounts) {
+      if (!(type in actionsPerType)) {
+        actionsPerType[type] = { used: count, limit: 0 };
+      }
+    }
+
+    return {
+      totalActionsUsed: this._totalActions,
+      totalActionsLimit: budget?.max_actions_per_session ?? 0,
+      actionsPerType,
+      tokensUsed: this._tokensUsed,
+      tokenLimit: budget?.token_budget ?? 0,
+      exceeded: exceededCategories.length > 0,
+      exceededCategories,
+    };
+  }
+
+  /**
+   * Reset budget counters (e.g., for a new session).
+   */
+  resetBudget(): void {
+    this._actionCounts = new Map();
+    this._totalActions = 0;
+    this._tokensUsed = 0;
+  }
+
+  // ─── Dry Run (ASI02) ─────────────────────────────────────────────
+
+  /**
+   * Get all dry-run interceptions for the current session.
+   */
+  getDryRunLog(): DryRunResult[] {
+    return [...this._dryRunLog];
+  }
+
+  /**
+   * Clear the dry-run log.
+   */
+  clearDryRunLog(): void {
+    this._dryRunLog = [];
+  }
+
+  /**
+   * Check if a tool invocation should be intercepted for dry-run.
+   */
+  private _checkDryRun(toolName: string, input: Record<string, unknown>): DryRunResult | null {
+    const dryRun = this._policy.dry_run;
+    if (!dryRun?.enabled) return null;
+
+    // If specific tools listed, only intercept those
+    if (dryRun.tools.length > 0 && !dryRun.tools.includes(toolName)) return null;
+
+    // If no specific tools listed, intercept all write operations
+    if (dryRun.tools.length === 0 && !PolicyEngine.WRITE_TOOLS.has(toolName)) return null;
+
+    // For Bash: only intercept if command modifies state (not read-only commands)
+    if (toolName === 'Bash') {
+      const command = (input['command'] as string) ?? '';
+      if (this._isReadOnlyCommand(command)) return null;
+    }
+
+    const wouldExecute = this._describeAction(toolName, input);
+    const result: DryRunResult = {
+      intercepted: true,
+      toolName,
+      input,
+      wouldExecute,
+      timestamp: new Date().toISOString(),
+    };
+    this._dryRunLog.push(result);
+
+    // Audit log if configured
+    if (dryRun.audit_dry_runs && this._auditLogger) {
+      this._auditLogger.log({
+        jobId: this._sessionId ?? 'unknown',
+        eventType: 'dry_run',
+        timestamp: new Date().toISOString(),
+        provider: 'policy-engine',
+        toolName,
+        parameters: input,
+        result: { dry_run: true, would_execute: wouldExecute },
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Determine if a bash command is read-only.
+   */
+  private _isReadOnlyCommand(command: string): boolean {
+    const base = this._extractBaseCommand(command);
+    if (PolicyEngine.READ_ONLY_COMMANDS.has(base)) return true;
+    // git status, git log, git diff are read-only
+    if (base === 'git') {
+      const parts = command.trim().split(/\s+/);
+      const subCommand = parts[1] ?? '';
+      if (['status', 'log', 'diff', 'show', 'branch', 'remote', 'tag'].includes(subCommand)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Human-readable description of what a tool would do.
+   */
+  private _describeAction(toolName: string, input: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'Write':
+        return `Would write to file: ${input['file_path']}`;
+      case 'Edit':
+        return `Would edit file: ${input['file_path']}`;
+      case 'Bash':
+        return `Would execute shell command: ${input['command']}`;
+      default:
+        return `Would invoke ${toolName} with: ${JSON.stringify(input).slice(0, 200)}`;
+    }
+  }
+
+  // ─── Path Validation ──────────────────────────────────────────────
+
+  /**
    * Validates if a filesystem path is allowed according to policy.
    */
   validatePath(targetPath: string): ValidationResult {
     const fsPolicy = this._policy.filesystem;
-    
+
     // 1. Resolve path (expand ~ and make absolute)
     let absolutePath = this._resolveHome(targetPath);
     absolutePath = path.resolve(absolutePath);
@@ -79,7 +332,7 @@ export class PolicyEngine {
     if (!fsPolicy.follow_symlinks && this._isSymlink(absolutePath)) {
       try {
         const realPath = fs.realpathSync(absolutePath);
-        
+
         // Deny symlinks that resolve into explicitly denied paths
         if (this._isWithinDeniedPaths(realPath, fsPolicy)) {
           return {
@@ -141,13 +394,13 @@ export class PolicyEngine {
     }
 
     if (shellPolicy.mode === 'allowlist') {
-      const commandsToValidate = shellPolicy.split_chained_commands 
-        ? this._splitChainedCommands(command) 
+      const commandsToValidate = shellPolicy.split_chained_commands
+        ? this._splitChainedCommands(command)
         : [command];
 
       for (const cmd of commandsToValidate) {
         const baseCommand = this._extractBaseCommand(cmd);
-        
+
         // Check denied list first
         if (shellPolicy.denied_commands.includes(baseCommand)) {
           return {
@@ -273,6 +526,22 @@ export class PolicyEngine {
         }
       }
 
+      // ─── Budget enforcement (LLM06/LLM10) ─────────────────────────
+      if (this._policy.budget) {
+        const actionType = this._classifyAction(toolName, input) ?? 'unknown';
+        const budgetResult = this.recordAction(actionType);
+        if (!budgetResult.allowed) {
+          if (this._policy.budget.on_exceed === 'flag' && this._flagCallback) {
+            const approved = await this._flagCallback('budget_exceeded', budgetResult.reason!);
+            if (!approved) {
+              return { behavior: 'deny' as const, message: budgetResult.reason! };
+            }
+          } else {
+            return { behavior: 'deny' as const, message: budgetResult.reason! };
+          }
+        }
+      }
+
       // Check always_flag for actions that require approval
       const action = this._classifyAction(toolName, input);
       if (action && this._shouldFlag(action)) {
@@ -290,6 +559,38 @@ export class PolicyEngine {
           }
         }
         // No callback = no enforcement (graceful: config parsed but not blocked)
+      }
+
+      // ─── Intent capsule drift check (ASI01) ────────────────────────
+      if (this._intentCapsuleManager) {
+        const driftAction = this._classifyAction(toolName, input) ?? 'unknown';
+        const detail = toolName === 'Bash'
+          ? (input['command'] as string) ?? ''
+          : `${toolName}: ${input['file_path'] ?? JSON.stringify(input)}`;
+        const driftResult = this._intentCapsuleManager.checkDrift(driftAction, detail);
+
+        if (!driftResult.consistent) {
+          // Flag for human review rather than blocking outright
+          if (this._flagCallback) {
+            const approved = await this._flagCallback(
+              'goal_drift',
+              `Potential goal drift detected: ${driftResult.reason}. Action: ${detail}`,
+            );
+            if (!approved) {
+              return { behavior: 'deny' as const, message: `Goal drift detected: ${driftResult.reason}` };
+            }
+          }
+          // If no flag callback, log but allow (to avoid breaking non-interactive flows)
+        }
+      }
+
+      // ─── Dry-run interception (ASI02) ──────────────────────────────
+      const dryRunResult = this._checkDryRun(toolName, input);
+      if (dryRunResult) {
+        return {
+          behavior: 'deny' as const,
+          message: `[DRY RUN] ${dryRunResult.wouldExecute}`,
+        };
       }
 
       // Default: allow the tool call
@@ -390,6 +691,15 @@ export class PolicyEngine {
       lines.push('Shell: denylist mode');
     }
 
+    if (this._policy.budget) {
+      const b = this._policy.budget;
+      lines.push(`Budget: ${b.max_actions_per_session || 'unlimited'} actions/session, ${b.token_budget || 'unlimited'} tokens`);
+    }
+
+    if (this._policy.dry_run?.enabled) {
+      lines.push('Dry Run: ENABLED (write operations will be previewed only)');
+    }
+
     return lines.join('\n');
   }
 
@@ -484,6 +794,35 @@ export class PolicyEngine {
         `max_request_size = "${this._policy.network.max_request_size}"`,
         '',
       ];
+
+      // Serialize budget section if present
+      if (this._policy.budget) {
+        const b = this._policy.budget;
+        lines.push(
+          '[budget]',
+          `max_actions_per_session = ${b.max_actions_per_session}`,
+          `token_budget = ${b.token_budget}`,
+          `on_exceed = "${b.on_exceed}"`,
+          '',
+          '[budget.max_actions_per_type]',
+        );
+        for (const [type, limit] of Object.entries(b.max_actions_per_type)) {
+          lines.push(`${type} = ${limit}`);
+        }
+        lines.push('');
+      }
+
+      // Serialize dry_run section if present
+      if (this._policy.dry_run) {
+        const dr = this._policy.dry_run;
+        lines.push(
+          '[dry_run]',
+          `enabled = ${dr.enabled}`,
+          `tools = ${JSON.stringify(dr.tools)}`,
+          `audit_dry_runs = ${dr.audit_dry_runs}`,
+          '',
+        );
+      }
 
       fs.writeFileSync(this._policyFilePath, lines.join('\n'), 'utf-8');
     } catch (err) {

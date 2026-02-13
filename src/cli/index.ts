@@ -85,41 +85,12 @@ async function setupContext() {
 
   const config = await loadConfig(configPath);
 
-  // Load policy from TOML if it exists, otherwise use a safe fallback
+  // Load policy from TOML using centralized loader
+  const { loadPolicy } = await import('../config/policy-loader.js');
   let policy: ZoraPolicy;
-  if (fs.existsSync(policyPath)) {
-    const { parse: parseTOML } = await import('smol-toml');
-    const raw = parseTOML(fs.readFileSync(policyPath, 'utf-8')) as Record<string, unknown>;
-    const fsPol = raw['filesystem'] as Record<string, unknown> | undefined;
-    const shPol = raw['shell'] as Record<string, unknown> | undefined;
-    const actPol = raw['actions'] as Record<string, unknown> | undefined;
-    const netPol = raw['network'] as Record<string, unknown> | undefined;
-    policy = {
-      filesystem: {
-        allowed_paths: (fsPol?.['allowed_paths'] as string[]) ?? [],
-        denied_paths: (fsPol?.['denied_paths'] as string[]) ?? [],
-        resolve_symlinks: (fsPol?.['resolve_symlinks'] as boolean) ?? true,
-        follow_symlinks: (fsPol?.['follow_symlinks'] as boolean) ?? false,
-      },
-      shell: {
-        mode: (shPol?.['mode'] as 'allowlist' | 'denylist' | 'deny_all') ?? 'allowlist',
-        allowed_commands: (shPol?.['allowed_commands'] as string[]) ?? ['ls', 'npm', 'git'],
-        denied_commands: (shPol?.['denied_commands'] as string[]) ?? [],
-        split_chained_commands: (shPol?.['split_chained_commands'] as boolean) ?? true,
-        max_execution_time: (shPol?.['max_execution_time'] as string) ?? '1m',
-      },
-      actions: {
-        reversible: (actPol?.['reversible'] as string[]) ?? [],
-        irreversible: (actPol?.['irreversible'] as string[]) ?? [],
-        always_flag: (actPol?.['always_flag'] as string[]) ?? [],
-      },
-      network: {
-        allowed_domains: (netPol?.['allowed_domains'] as string[]) ?? [],
-        denied_domains: (netPol?.['denied_domains'] as string[]) ?? [],
-        max_request_size: (netPol?.['max_request_size'] as string) ?? '10mb',
-      },
-    };
-  } else {
+  try {
+    policy = await loadPolicy(policyPath);
+  } catch {
     console.error('Policy not found at ~/.zora/policy.toml. Run `zora init` first.');
     process.exit(1);
   }

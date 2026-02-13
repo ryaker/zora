@@ -10,8 +10,9 @@ export { AuditLogger } from './audit-logger.js';
 export type { AuditEntryInput, AuditFilter, ChainVerificationResult } from './audit-logger.js';
 export { IntegrityGuardian } from './integrity-guardian.js';
 export type { IntegrityCheckResult } from './integrity-guardian.js';
-export { sanitizeInput, validateOutput } from './prompt-defense.js';
+export { sanitizeInput, validateOutput, sanitizeToolOutput } from './prompt-defense.js';
 export type { OutputValidationResult } from './prompt-defense.js';
+export { IntentCapsuleManager } from './intent-capsule.js';
 export { LeakDetector } from './leak-detector.js';
 export {
   createCapabilityToken,
@@ -30,4 +31,8 @@ export type {
   LeakMatch,
   LeakSeverity,
   CapabilityGrant,
+  BudgetStatus,
+  DryRunResult,
+  IntentCapsule,
+  DriftCheckResult,
 } from './security-types.js';

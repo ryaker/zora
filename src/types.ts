@@ -359,11 +359,37 @@ export interface NetworkPolicy {
   max_request_size: string;
 }
 
+// ─── Budget Policy (LLM06/LLM10 Mitigation) ─────────────────────────
+
+export interface BudgetPolicy {
+  /** Maximum total tool invocations per session. 0 = unlimited. */
+  max_actions_per_session: number;
+  /** Per-action-type caps. Keys match action categories from _classifyAction(). */
+  max_actions_per_type: Record<string, number>;
+  /** Maximum token spend per session. 0 = unlimited. */
+  token_budget: number;
+  /** What happens when budget is exceeded: 'block' halts, 'flag' asks for approval. */
+  on_exceed: 'block' | 'flag';
+}
+
+// ─── Dry Run Policy (ASI02 Mitigation) ───────────────────────────────
+
+export interface DryRunPolicy {
+  /** Enable dry-run mode globally. */
+  enabled: boolean;
+  /** Tools to apply dry-run to. Empty = all write operations. */
+  tools: string[];
+  /** Log the would-be action to the audit log. */
+  audit_dry_runs: boolean;
+}
+
 export interface ZoraPolicy {
   filesystem: FilesystemPolicy;
   shell: ShellPolicy;
   actions: ActionsPolicy;
   network: NetworkPolicy;
+  budget?: BudgetPolicy;
+  dry_run?: DryRunPolicy;
 }
 
 // ─── Worker Capability Token ─────────────────────────────────────────
