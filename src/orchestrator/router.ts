@@ -12,6 +12,7 @@ import type {
   LLMProvider,
   TaskContext,
   ProviderCapability,
+  CostTier,
   RoutingMode,
   TaskComplexity,
   TaskResourceType,
@@ -27,6 +28,14 @@ export class Router {
   private readonly _providers: LLMProvider[];
   private readonly _mode: RoutingMode;
   private readonly _providerOnlyName?: string;
+
+  /** Ordered cost tiers for comparison and filtering */
+  private static readonly COST_ORDER: Record<string, number> = {
+    free: 0,
+    included: 1,
+    metered: 2,
+    premium: 3,
+  };
 
   constructor(options: RouterOptions) {
     this._providers = options.providers;
@@ -54,13 +63,23 @@ export class Router {
     const requiredCaps = this._getRequiredCapabilities(task);
 
     // 3. Filter healthy and capable providers
-    const candidates = await this._getCapableProviders(requiredCaps);
+    let candidates = await this._getCapableProviders(requiredCaps);
+
+    // 4. Apply cost ceiling if specified (soft constraint — falls through if no match)
+    if (task.maxCostTier && candidates.length > 0) {
+      const filtered = this._filterByCostCeiling(candidates, task.maxCostTier);
+      if (filtered.length > 0) {
+        candidates = filtered;
+      }
+      // If all candidates exceed the ceiling, fall through to unfiltered list
+      // (better to use an expensive model than fail the task entirely)
+    }
 
     if (candidates.length === 0) {
       throw new Error(`No available provider found with capabilities: ${requiredCaps.join(', ')}`);
     }
 
-    // 4. Sort based on routing mode
+    // 5. Sort based on routing mode
     switch (this._mode) {
       case 'optimize_cost':
         return this._sortByCost(candidates)[0]!;
@@ -151,13 +170,20 @@ export class Router {
   }
 
   private _sortByCost(providers: LLMProvider[]): LLMProvider[] {
-    const costMap = { free: 0, included: 1, metered: 2, premium: 3 };
     return [...providers].sort((a, b) => {
-      const costA = costMap[a.costTier];
-      const costB = costMap[b.costTier];
+      const costA = Router.COST_ORDER[a.costTier] ?? 3;
+      const costB = Router.COST_ORDER[b.costTier] ?? 3;
       if (costA !== costB) return costA - costB;
       return a.rank - b.rank; // Tie-breaker by rank
     });
+  }
+
+  /**
+   * Filter providers whose cost tier is at or below the ceiling.
+   */
+  private _filterByCostCeiling(providers: LLMProvider[], maxCostTier: CostTier): LLMProvider[] {
+    const maxCost = Router.COST_ORDER[maxCostTier] ?? 3;
+    return providers.filter((p) => (Router.COST_ORDER[p.costTier] ?? 3) <= maxCost);
   }
 
   /**

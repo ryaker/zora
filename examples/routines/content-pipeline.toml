@@ -1,10 +1,11 @@
 [routine]
 name = "content-pipeline"
 schedule = "0 8 * * 2"
-model_preference = "claude"
+model_preference = "claude-haiku"
+max_cost_tier = "included"
 timeout = "30m"
 
-[routine.task]
+[task]
 prompt = """
 It's Tuesday — time for the weekly MyMoneyCoach.ai content pipeline.
 

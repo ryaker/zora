@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { RoutineManager } from '../../../src/routines/routine-manager.js';
-import { ExecutionLoop } from '../../../src/orchestrator/execution-loop.js';
-import { SessionManager } from '../../../src/orchestrator/session-manager.js';
-import { PolicyEngine } from '../../../src/security/policy-engine.js';
-import { MockProvider } from '../../fixtures/mock-provider.js';
+import { RoutineManager, type RoutineTaskSubmitter } from '../../../src/routines/routine-manager.js';
+import type { RoutineDefinition } from '../../../src/types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -11,7 +8,7 @@ import os from 'node:os';
 describe('RoutineManager', () => {
   const testDir = path.join(os.tmpdir(), 'zora-routines-test');
   let manager: RoutineManager;
-  let loop: ExecutionLoop;
+  let submitTaskMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     try {
@@ -19,18 +16,8 @@ describe('RoutineManager', () => {
     } catch {}
     await fs.mkdir(testDir, { recursive: true });
 
-    const provider = new MockProvider();
-    const engine = new PolicyEngine({
-      filesystem: { allowed_paths: [], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
-      shell: { mode: 'deny_all', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
-      actions: { reversible: [], irreversible: [], always_flag: [] },
-      network: { allowed_domains: [], denied_domains: [], max_request_size: '1mb' },
-    });
-    const sessionManager = new SessionManager(testDir);
-    loop = new ExecutionLoop({ provider, engine, sessionManager });
-    vi.spyOn(loop, 'run').mockResolvedValue(undefined);
-
-    manager = new RoutineManager(loop, testDir);
+    submitTaskMock = vi.fn().mockResolvedValue('Task completed');
+    manager = new RoutineManager(submitTaskMock, testDir);
   });
 
   afterEach(async () => {
@@ -60,10 +47,117 @@ prompt = "say hello"
   it('stops all tasks', async () => {
     manager.scheduleRoutine({
       routine: { name: 'r1', schedule: '* * * * *' },
-      task: { prompt: 'p1' }
+      task: { prompt: 'p1' },
     });
     expect(manager.scheduledCount).toBe(1);
     manager.stopAll();
+    expect(manager.scheduledCount).toBe(0);
+  });
+
+  it('passes model_preference to submitTask via runRoutine', async () => {
+    const definition: RoutineDefinition = {
+      routine: { name: 'r-model', schedule: '* * * * *', model_preference: 'claude-haiku' },
+      task: { prompt: 'generate content' },
+    };
+
+    await manager.runRoutine(definition);
+
+    expect(submitTaskMock).toHaveBeenCalledWith({
+      prompt: 'generate content',
+      model: 'claude-haiku',
+      maxCostTier: undefined,
+    });
+  });
+
+  it('passes max_cost_tier to submitTask via runRoutine', async () => {
+    const definition: RoutineDefinition = {
+      routine: { name: 'r-cost', schedule: '* * * * *', max_cost_tier: 'included' },
+      task: { prompt: 'cheap task' },
+    };
+
+    await manager.runRoutine(definition);
+
+    expect(submitTaskMock).toHaveBeenCalledWith({
+      prompt: 'cheap task',
+      model: undefined,
+      maxCostTier: 'included',
+    });
+  });
+
+  it('passes both model_preference and max_cost_tier together', async () => {
+    const definition: RoutineDefinition = {
+      routine: {
+        name: 'r-both',
+        schedule: '* * * * *',
+        model_preference: 'ollama',
+        max_cost_tier: 'free',
+      },
+      task: { prompt: 'local task' },
+    };
+
+    await manager.runRoutine(definition);
+
+    expect(submitTaskMock).toHaveBeenCalledWith({
+      prompt: 'local task',
+      model: 'ollama',
+      maxCostTier: 'free',
+    });
+  });
+
+  it('loads routine with model_preference and max_cost_tier from TOML', async () => {
+    const routinePath = path.join(testDir, 'routines', 'model-test.toml');
+    await fs.mkdir(path.dirname(routinePath), { recursive: true });
+    await fs.writeFile(routinePath, `
+[routine]
+name = "model-routine"
+schedule = "* * * * *"
+model_preference = "claude-haiku"
+max_cost_tier = "free"
+
+[task]
+prompt = "budget task"
+    `, 'utf8');
+
+    await manager.init();
+    expect(manager.scheduledCount).toBe(1);
+  });
+
+  it('warns on invalid max_cost_tier but still loads', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const routinePath = path.join(testDir, 'routines', 'bad-tier.toml');
+    await fs.mkdir(path.dirname(routinePath), { recursive: true });
+    await fs.writeFile(routinePath, `
+[routine]
+name = "bad-tier"
+schedule = "* * * * *"
+max_cost_tier = "ultra-cheap"
+
+[task]
+prompt = "test"
+    `, 'utf8');
+
+    await manager.init();
+    expect(manager.scheduledCount).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid max_cost_tier'));
+
+    warnSpy.mockRestore();
+  });
+
+  it('skips disabled routines', async () => {
+    const routinePath = path.join(testDir, 'routines', 'disabled.toml');
+    await fs.mkdir(path.dirname(routinePath), { recursive: true });
+    await fs.writeFile(routinePath, `
+[routine]
+name = "disabled-routine"
+schedule = "* * * * *"
+enabled = false
+
+[task]
+prompt = "should not run"
+    `, 'utf8');
+
+    await manager.init();
     expect(manager.scheduledCount).toBe(0);
   });
 });

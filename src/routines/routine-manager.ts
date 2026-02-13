@@ -4,7 +4,13 @@
  * Spec §5.6 "Cron Routines (Scheduled)":
  *   - Loads routine definitions from TOML files.
  *   - Schedules tasks using node-cron.
- *   - Supports model preference and timeouts per routine.
+ *   - Supports model preference, cost ceiling, and timeouts per routine.
+ *
+ * Routines are executed through a RoutineTaskSubmitter function, which
+ * routes them through the Orchestrator's full pipeline (Router, failover,
+ * memory context, session persistence) rather than calling ExecutionLoop
+ * directly. This ensures model_preference and max_cost_tier flow through
+ * to the routing layer.
  */
 
 import fs from 'node:fs/promises';
@@ -12,16 +18,25 @@ import path from 'node:path';
 import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
-import type { RoutineDefinition } from '../types.js';
-import { ExecutionLoop } from '../orchestrator/execution-loop.js';
+import type { RoutineDefinition, CostTier } from '../types.js';
+
+/**
+ * Function signature for submitting routine tasks through the orchestration pipeline.
+ * Injected by the Orchestrator at construction time.
+ */
+export type RoutineTaskSubmitter = (options: {
+  prompt: string;
+  model?: string;
+  maxCostTier?: CostTier;
+}) => Promise<string>;
 
 export class RoutineManager {
   private readonly _routinesDir: string;
-  private readonly _loop: ExecutionLoop;
+  private readonly _submitTask: RoutineTaskSubmitter;
   private readonly _scheduledTasks: Map<string, ScheduledTask> = new Map();
 
-  constructor(loop: ExecutionLoop, baseDir: string = path.join(os.homedir(), '.zora')) {
-    this._loop = loop;
+  constructor(submitTask: RoutineTaskSubmitter, baseDir: string = path.join(os.homedir(), '.zora')) {
+    this._submitTask = submitTask;
     this._routinesDir = path.join(baseDir, 'routines');
   }
 
@@ -61,7 +76,7 @@ export class RoutineManager {
     try {
       const content = await fs.readFile(filePath, 'utf8');
       const raw = smol.parse(content) as any;
-      
+
       if (this._isValidRoutine(raw)) {
         const definition = raw as RoutineDefinition;
         if (definition.routine.enabled !== false) {
@@ -77,6 +92,8 @@ export class RoutineManager {
 
   /**
    * Schedules a routine using node-cron.
+   * Passes model_preference and max_cost_tier through the task submitter
+   * so the Router can select the appropriate provider.
    */
   scheduleRoutine(definition: RoutineDefinition): void {
     const { routine, task } = definition;
@@ -88,7 +105,11 @@ export class RoutineManager {
 
     const scheduledTask = cron.schedule(routine.schedule, async () => {
       try {
-        await this._loop.run(task.prompt);
+        await this._submitTask({
+          prompt: task.prompt,
+          model: routine.model_preference,
+          maxCostTier: routine.max_cost_tier,
+        });
       } catch (err) {
         console.error(`Routine ${routine.name} failed:`, err);
       }
@@ -98,17 +119,44 @@ export class RoutineManager {
   }
 
   /**
+   * Directly runs a routine's task through the submitter (for testing and manual triggers).
+   */
+  async runRoutine(definition: RoutineDefinition): Promise<string> {
+    const { routine, task } = definition;
+    return this._submitTask({
+      prompt: task.prompt,
+      model: routine.model_preference,
+      maxCostTier: routine.max_cost_tier,
+    });
+  }
+
+  /**
    * Basic validation for RoutineDefinition.
    */
   private _isValidRoutine(raw: any): raw is RoutineDefinition {
-    return (
-      raw &&
-      typeof raw.routine === 'object' &&
-      typeof raw.routine.name === 'string' &&
-      typeof raw.routine.schedule === 'string' &&
-      typeof raw.task === 'object' &&
-      typeof raw.task.prompt === 'string'
-    );
+    if (
+      !raw ||
+      typeof raw.routine !== 'object' ||
+      typeof raw.routine.name !== 'string' ||
+      typeof raw.routine.schedule !== 'string' ||
+      typeof raw.task !== 'object' ||
+      typeof raw.task.prompt !== 'string'
+    ) {
+      return false;
+    }
+
+    // Validate optional max_cost_tier if present
+    if (raw.routine.max_cost_tier !== undefined) {
+      const validTiers = ['free', 'included', 'metered', 'premium'];
+      if (!validTiers.includes(raw.routine.max_cost_tier)) {
+        console.warn(
+          `Invalid max_cost_tier "${raw.routine.max_cost_tier}" in routine "${raw.routine.name}". ` +
+          `Valid values: ${validTiers.join(', ')}. Ignoring.`
+        );
+      }
+    }
+
+    return true;
   }
 
   /**
