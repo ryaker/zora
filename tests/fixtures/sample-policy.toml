@@ -22,3 +22,18 @@ always_flag = ["git_push"]
 allowed_domains = ["*"]
 denied_domains = []
 max_request_size = "10MB"
+
+[budget]
+max_actions_per_session = 100
+token_budget = 500000
+on_exceed = "block"
+
+[budget.max_actions_per_type]
+shell_exec = 50
+write_file = 30
+shell_exec_destructive = 5
+
+[dry_run]
+enabled = false
+tools = []
+audit_dry_runs = true

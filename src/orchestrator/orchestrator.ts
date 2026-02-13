@@ -10,6 +10,7 @@
  *     and memory context injection into a unified execution path.
  */
 
+import crypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -32,6 +33,7 @@ import { HeartbeatSystem } from '../routines/heartbeat.js';
 import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
 import { PolicyEngine } from '../security/policy-engine.js';
+import { IntentCapsuleManager } from '../security/intent-capsule.js';
 
 export interface OrchestratorOptions {
   config: ZoraConfig;
@@ -65,6 +67,9 @@ export class Orchestrator {
   private _policyEngine!: PolicyEngine;
   private _notifications!: NotificationTools;
 
+  // Security
+  private _intentCapsuleManager!: IntentCapsuleManager;
+
   // Background systems
   private _heartbeatSystem: HeartbeatSystem | null = null;
   private _routineManager: RoutineManager | null = null;
@@ -91,6 +96,14 @@ export class Orchestrator {
     // Initialize core services
     this._notifications = new NotificationTools();
     this._policyEngine = new PolicyEngine(this._policy);
+    this._policyEngine.startSession(`session_${Date.now()}`);
+
+    // ASI01: Create IntentCapsuleManager with per-session signing key
+    this._intentCapsuleManager = new IntentCapsuleManager(
+      crypto.randomBytes(32).toString('hex'),
+    );
+    this._policyEngine.setIntentCapsuleManager(this._intentCapsuleManager);
+
     this._sessionManager = new SessionManager(this._baseDir);
 
     this._steeringManager = new SteeringManager(this._baseDir);
@@ -244,6 +257,11 @@ export class Orchestrator {
       'Do NOT attempt actions without checking first.',
       ...memoryContext,
     ].join('\n\n');
+
+    // ASI01: Create signed intent capsule for goal drift detection
+    if (this._intentCapsuleManager) {
+      this._intentCapsuleManager.createCapsule(options.prompt);
+    }
 
     // Classify task for routing
     const classification = this._router.classifyTask(options.prompt);

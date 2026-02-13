@@ -20,7 +20,10 @@ export type AuditEntryEventType =
   | 'auth_error'
   | 'notification'
   | 'secret_access'
-  | 'integrity_check';
+  | 'integrity_check'
+  | 'budget_exceeded'
+  | 'dry_run'
+  | 'goal_drift';
 
 export interface AuditEntry {
   entryId: string;
@@ -67,6 +70,49 @@ export interface LeakMatch {
   pattern: string;
   match: string;
   severity: LeakSeverity;
+}
+
+// ─── Budget Status ────────────────────────────────────────────────
+
+export interface BudgetStatus {
+  totalActionsUsed: number;
+  totalActionsLimit: number;
+  actionsPerType: Record<string, { used: number; limit: number }>;
+  tokensUsed: number;
+  tokenLimit: number;
+  exceeded: boolean;
+  exceededCategories: string[];
+}
+
+// ─── Dry Run ──────────────────────────────────────────────────────
+
+export interface DryRunResult {
+  intercepted: boolean;
+  toolName: string;
+  input: Record<string, unknown>;
+  wouldExecute: string;
+  timestamp: string;
+}
+
+// ─── Intent Capsule (ASI01 Mitigation) ────────────────────────────
+
+export interface IntentCapsule {
+  capsuleId: string;
+  mandate: string;
+  mandateHash: string;
+  allowedActionCategories: string[];
+  mandateKeywords: string[];
+  signature: string;
+  createdAt: string;
+  expiresAt?: string;
+}
+
+export interface DriftCheckResult {
+  consistent: boolean;
+  confidence: number;
+  reason?: string;
+  action: string;
+  mandateHash: string;
 }
 
 // ─── Capability Tokens ─────────────────────────────────────────────
