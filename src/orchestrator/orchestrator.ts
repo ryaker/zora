@@ -18,6 +18,7 @@ import type {
   ZoraConfig,
   ZoraPolicy,
   LLMProvider,
+  CostTier,
   TaskContext,
   AgentEvent,
 } from '../types.js';
@@ -45,6 +46,7 @@ export interface OrchestratorOptions {
 export interface SubmitTaskOptions {
   prompt: string;
   model?: string;
+  maxCostTier?: CostTier;
   maxTurns?: number;
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
@@ -189,7 +191,14 @@ export class Orchestrator {
     });
     await this._heartbeatSystem.start();
 
-    this._routineManager = new RoutineManager(defaultLoop, this._baseDir);
+    this._routineManager = new RoutineManager(
+      async (opts) => this.submitTask({
+        prompt: opts.prompt,
+        model: opts.model,
+        maxCostTier: opts.maxCostTier,
+      }),
+      this._baseDir,
+    );
     await this._routineManager.init();
 
     this._booted = true;
@@ -277,6 +286,7 @@ export class Orchestrator {
       memoryContext,
       history: [],
       modelPreference: options.model,
+      maxCostTier: options.maxCostTier,
       maxTurns: options.maxTurns,
     };
 

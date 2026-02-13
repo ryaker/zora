@@ -29,44 +29,79 @@ memory_limit_mb = 4096
 throttle_check_interval = "10s"
 ```
 
-## Provider registry (v0.5)
+## Provider registry
 
-Providers are defined as an ordered array. Routing considers rank, capabilities, and cost tier.
+Providers are defined as an ordered array. Routing considers rank, capabilities, and cost tier. You can define **multiple entries of the same type** with different models to enable granular model selection:
 
 ```toml
+# ─── Multi-tier Claude models ───────────────────────────────
 [[providers]]
-name = "claude"
+name = "claude-opus"
 type = "claude-sdk"
 rank = 1
+capabilities = ["reasoning", "coding", "creative"]
+cost_tier = "premium"
+enabled = true
+auth_method = "mac_session"
+model = "claude-opus-4"
+max_turns = 200
+
+[[providers]]
+name = "claude-sonnet"
+type = "claude-sdk"
+rank = 2
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
 auth_method = "mac_session"
 model = "claude-sonnet-4-5"
 max_turns = 200
-max_concurrent_jobs = 3
 
+[[providers]]
+name = "claude-haiku"
+type = "claude-sdk"
+rank = 3
+capabilities = ["creative", "fast"]
+cost_tier = "free"
+enabled = true
+auth_method = "mac_session"
+model = "claude-3-5-haiku-latest"
+max_turns = 100
+
+# ─── Other providers ────────────────────────────────────────
 [[providers]]
 name = "gemini"
 type = "gemini-cli"
-rank = 2
+rank = 4
 capabilities = ["search", "structured-data", "large-context", "coding"]
-cost_tier = "included"
+cost_tier = "free"
 enabled = true
 auth_method = "workspace_sso"
 cli_path = "gemini"
 model = "gemini-2.5-pro"
 max_turns = 100
-max_concurrent_jobs = 2
+
+[[providers]]
+name = "ollama"
+type = "ollama"
+rank = 5
+capabilities = ["creative", "reasoning", "fast"]
+cost_tier = "free"
+enabled = true
+model = "llama3.2"
+endpoint = "http://localhost:11434"
+max_turns = 50
 ```
 
 Common fields:
-- `name`: provider id
-- `type`: integration type (`claude-sdk`, `gemini-cli`, `openai-api`, `ollama`)
-- `rank`: lower number = higher priority
+- `name`: unique provider id (used in `model_preference`)
+- `type`: integration type (`claude-sdk`, `gemini-cli`, `ollama`)
+- `rank`: lower number = higher priority (must be unique among enabled providers)
 - `capabilities`: routing tags
 - `cost_tier`: `free`, `included`, `metered`, `premium`
 - `enabled`: true/false
+- `model`: specific model identifier (e.g. `claude-opus-4`, `llama3.2`)
+- `endpoint`: API base URL (for Ollama: `http://localhost:11434`)
 
 ## Routing
 

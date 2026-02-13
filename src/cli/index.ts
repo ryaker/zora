@@ -18,6 +18,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
+import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -53,6 +54,9 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
         break;
       case 'gemini-cli':
         providers.push(new GeminiProvider({ config: pConfig }));
+        break;
+      case 'ollama':
+        providers.push(new OllamaProvider({ config: pConfig }));
         break;
       default:
         console.warn(`Unknown provider type: ${pConfig.type}, skipping ${pConfig.name}`);
@@ -111,7 +115,8 @@ program
   .command('ask')
   .description('Send a task to the agent and wait for completion')
   .argument('<prompt>', 'The task or question for the agent')
-  .option('-m, --model <model>', 'Model to use')
+  .option('-m, --model <model>', 'Provider name to use (e.g., claude-haiku, gemini, ollama)')
+  .option('--max-cost-tier <tier>', 'Maximum cost tier: free, included, metered, premium')
   .option('--max-turns <n>', 'Maximum turns', parseInt)
   .action(async (prompt, opts) => {
     const { config, policy } = await setupContext();
@@ -132,6 +137,7 @@ program
       const result = await orchestrator.submitTask({
         prompt,
         model: opts.model,
+        maxCostTier: opts.maxCostTier,
         maxTurns: opts.maxTurns,
       });
 

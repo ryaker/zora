@@ -50,7 +50,8 @@ Format: "Yesterday: [commits], Today: [open work], Blockers: [issues]"
 **What each field means:**
 - `name` — Internal identifier (use lowercase-with-dashes)
 - `schedule` — Cron expression (`0 8 * * *` = 8:00 AM daily)
-- `model_preference` — Which AI model to use (`claude` or `gemini`)
+- `model_preference` — Which provider to use (e.g. `claude-opus`, `claude-haiku`, `gemini`, `ollama`)
+- `max_cost_tier` — Cost ceiling: `free`, `included`, `metered`, or `premium` (optional)
 - `timeout` — Max runtime before the routine is killed
 - `prompt` — The task Zora will execute
 
@@ -300,8 +301,22 @@ Use cron syntax:
 
 ### Switch the AI Model
 
-- `model_preference = "claude"` — Best for writing, code review, complex reasoning
-- `model_preference = "gemini"` — Best for large context (e.g., reading months of notes), speed
+- `model_preference = "claude-opus"` — Best for complex reasoning, architecture, difficult tasks
+- `model_preference = "claude-sonnet"` — Good balance of quality and cost for coding, writing
+- `model_preference = "claude-haiku"` — Fast and cheap for simple tasks, content generation, summaries
+- `model_preference = "gemini"` — Best for large context (e.g., reading months of notes), search, speed
+- `model_preference = "ollama"` — Local models (Llama, Mistral, etc.) — free, no API limits, fully offline
+
+### Limit Cost per Routine
+
+Use `max_cost_tier` to cap how much a routine can spend:
+
+- `max_cost_tier = "free"` — Only use free providers (Haiku, Gemini, Ollama)
+- `max_cost_tier = "included"` — Free + included-tier providers (skips premium)
+- `max_cost_tier = "metered"` — Anything except premium
+- `max_cost_tier = "premium"` — No limit (default)
+
+The Router picks the cheapest capable provider within your ceiling. If no providers fit, it falls through to whatever's available (better expensive than broken).
 
 ### Adjust Timeout
 

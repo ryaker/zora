@@ -19,13 +19,20 @@ describe('loadConfig (from file)', () => {
   it('loads providers from the sample fixture', async () => {
     const config = await loadConfig(resolve(FIXTURE_DIR, 'sample-config.toml'));
 
-    expect(config.providers).toHaveLength(2);
-    expect(config.providers[0]!.name).toBe('claude');
+    expect(config.providers).toHaveLength(5);
+    expect(config.providers[0]!.name).toBe('claude-opus');
     expect(config.providers[0]!.type).toBe('claude-sdk');
     expect(config.providers[0]!.rank).toBe(1);
     expect(config.providers[0]!.capabilities).toContain('reasoning');
-    expect(config.providers[1]!.name).toBe('gemini');
+    expect(config.providers[1]!.name).toBe('claude-sonnet');
     expect(config.providers[1]!.rank).toBe(2);
+    expect(config.providers[2]!.name).toBe('claude-haiku');
+    expect(config.providers[2]!.cost_tier).toBe('free');
+    expect(config.providers[3]!.name).toBe('gemini');
+    expect(config.providers[3]!.rank).toBe(4);
+    expect(config.providers[4]!.name).toBe('ollama');
+    expect(config.providers[4]!.type).toBe('ollama');
+    expect(config.providers[4]!.cost_tier).toBe('free');
   });
 
   it('throws on non-existent file', async () => {

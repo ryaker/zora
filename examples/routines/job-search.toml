@@ -2,9 +2,10 @@
 name = "job-search"
 schedule = "0 7 * * 1-5"
 model_preference = "gemini"
+max_cost_tier = "free"
 timeout = "20m"
 
-[routine.task]
+[task]
 prompt = """
 Daily job search automation:
 

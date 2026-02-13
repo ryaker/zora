@@ -1,10 +1,11 @@
 [routine]
 name = "repo-cleanup"
 schedule = "0 9 * * 1-5"
-model_preference = "gemini"
+model_preference = "ollama"
+max_cost_tier = "free"
 timeout = "15m"
 
-[routine.task]
+[task]
 prompt = """
 Check all git repos in ~/Projects for stale branches (>30 days),
 uncommitted changes, and repos behind their remote.

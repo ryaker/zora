@@ -125,6 +125,22 @@ describe('routing-e2e', () => {
     expect(selected.name).toBe('gemini');
   });
 
+  it('maxCostTier constrains routing to cheaper providers', async () => {
+    const router = new Router({ providers: [claudeProvider, geminiProvider], mode: 'respect_ranking' });
+    // Claude is 'premium', Gemini is 'included' — maxCostTier='included' should filter out Claude
+    const task = createTask({ maxCostTier: 'included', resourceType: 'reasoning' });
+    const selected = await router.selectProvider(task);
+    expect(selected.name).toBe('gemini');
+  });
+
+  it('maxCostTier falls through when it would eliminate all providers', async () => {
+    const router = new Router({ providers: [claudeProvider], mode: 'respect_ranking' });
+    // Only Claude available (premium), but maxCostTier='free' — should still select Claude
+    const task = createTask({ maxCostTier: 'free', resourceType: 'reasoning' });
+    const selected = await router.selectProvider(task);
+    expect(selected.name).toBe('claude');
+  });
+
   it('classifyTask returns expected complexity and resource type', () => {
     const router = new Router({ providers: [], mode: 'respect_ranking' });
 

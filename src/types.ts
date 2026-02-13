@@ -114,7 +114,8 @@ export interface TaskContext {
   systemPrompt: string;
   memoryContext: string[];
   history: AgentEvent[];
-  modelPreference?: string; // per-routine override
+  modelPreference?: string; // per-routine override (provider name)
+  maxCostTier?: CostTier;   // cost ceiling for routing (e.g. 'included' skips 'premium')
   maxTurns?: number;
   timeout?: number;
 }
@@ -320,7 +321,8 @@ export interface RoutineTask {
 export interface RoutineConfig {
   name: string;
   schedule: string; // Cron expression
-  model_preference?: string;
+  model_preference?: string;  // provider name (e.g. 'claude-haiku', 'gemini', 'ollama')
+  max_cost_tier?: CostTier;   // cost ceiling: 'free' | 'included' | 'metered' | 'premium'
   timeout?: string;
   enabled?: boolean;
 }

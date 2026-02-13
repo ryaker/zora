@@ -1,8 +1,8 @@
 /**
  * Providers module barrel exports.
  *
- * Re-exports the ClaudeProvider and its supporting types.
- * Future providers (Gemini, OpenAI, Ollama) will be added here.
+ * Re-exports all provider implementations: Claude, Gemini, and Ollama.
+ * Future providers (OpenAI, custom) will be added here.
  */
 
 export {
@@ -21,3 +21,8 @@ export {
   GeminiProvider,
   type GeminiProviderOptions,
 } from './gemini-provider.js';
+
+export {
+  OllamaProvider,
+  type OllamaProviderOptions,
+} from './ollama-provider.js';

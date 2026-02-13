@@ -103,8 +103,93 @@ describe('Router', () => {
       const task = makeTask({ resourceType: 'search' });
       // Remove search capable providers
       router = new Router({ providers: [p1] });
-      
+
       await expect(router.selectProvider(task)).rejects.toThrow('No available provider found');
+    });
+  });
+
+  describe('maxCostTier filtering', () => {
+    it('filters providers by cost ceiling', async () => {
+      const cheap = new MockProvider({
+        name: 'haiku',
+        rank: 2,
+        capabilities: ['reasoning'],
+        costTier: 'free',
+      });
+      const expensive = new MockProvider({
+        name: 'opus',
+        rank: 1,
+        capabilities: ['reasoning'],
+        costTier: 'premium',
+      });
+      const r = new Router({ providers: [expensive, cheap] });
+
+      const task = makeTask({ maxCostTier: 'included', resourceType: 'reasoning' });
+      const selected = await r.selectProvider(task);
+      expect(selected.name).toBe('haiku');
+    });
+
+    it('falls through to all candidates if cost filter eliminates everyone', async () => {
+      const expensive = new MockProvider({
+        name: 'opus',
+        rank: 1,
+        capabilities: ['reasoning'],
+        costTier: 'premium',
+      });
+      const r = new Router({ providers: [expensive] });
+
+      const task = makeTask({ maxCostTier: 'free', resourceType: 'reasoning' });
+      // Should NOT throw — falls through to unfiltered list
+      const selected = await r.selectProvider(task);
+      expect(selected.name).toBe('opus');
+    });
+
+    it('modelPreference bypasses cost ceiling', async () => {
+      const expensive = new MockProvider({
+        name: 'opus',
+        rank: 1,
+        capabilities: ['reasoning'],
+        costTier: 'premium',
+      });
+      const cheap = new MockProvider({
+        name: 'haiku',
+        rank: 2,
+        capabilities: ['reasoning'],
+        costTier: 'free',
+      });
+      const r = new Router({ providers: [expensive, cheap] });
+
+      // modelPreference takes priority over maxCostTier
+      const task = makeTask({ modelPreference: 'opus', maxCostTier: 'free', resourceType: 'reasoning' });
+      const selected = await r.selectProvider(task);
+      expect(selected.name).toBe('opus');
+    });
+
+    it('respects cost ceiling with optimize_cost mode', async () => {
+      const mid = new MockProvider({
+        name: 'sonnet',
+        rank: 2,
+        capabilities: ['reasoning'],
+        costTier: 'included',
+      });
+      const cheap = new MockProvider({
+        name: 'haiku',
+        rank: 3,
+        capabilities: ['reasoning'],
+        costTier: 'free',
+      });
+      const expensive = new MockProvider({
+        name: 'opus',
+        rank: 1,
+        capabilities: ['reasoning'],
+        costTier: 'premium',
+      });
+      const r = new Router({ providers: [expensive, mid, cheap], mode: 'optimize_cost' });
+
+      const task = makeTask({ maxCostTier: 'included', resourceType: 'reasoning' });
+      const selected = await r.selectProvider(task);
+      // haiku is cheapest within the ceiling
+      expect(selected.name).toBe('haiku');
     });
   });
 });

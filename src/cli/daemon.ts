@@ -14,6 +14,7 @@ import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { DashboardServer } from '../dashboard/server.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
+import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 
 function createProviders(config: ZoraConfig): LLMProvider[] {
@@ -26,6 +27,9 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
         break;
       case 'gemini-cli':
         providers.push(new GeminiProvider({ config: pConfig }));
+        break;
+      case 'ollama':
+        providers.push(new OllamaProvider({ config: pConfig }));
         break;
     }
   }

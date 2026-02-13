@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1] — 2026-02-13
+
+### Added
+- Granular model selection — define multiple entries per provider type (claude-opus, claude-sonnet, claude-haiku) with distinct cost tiers and capabilities
+- `max_cost_tier` field on routine config and CLI (`--max-cost-tier`) for cost-aware task routing (Router filters providers by cost ceiling)
+- Ollama provider (`type = "ollama"`) for local/OSS models (Llama, Mistral, etc.) — `cost_tier = "free"`, no API limits
+- `RoutineManager.runRoutine()` method for manual/test-triggered routine execution
+
+### Changed
+- RoutineManager now routes tasks through `Orchestrator.submitTask()` instead of calling `ExecutionLoop.run()` directly — routines get full routing, failover, memory context, and session persistence
+- `model_preference` and `max_cost_tier` from routine TOML configs now flow through to the Router (previously silently dropped)
+- Router `_sortByCost()` uses shared `COST_ORDER` constant; new `_filterByCostCeiling()` method for soft cost constraints
+
+### Fixed
+- Example routine TOML files used `[routine.task]` (nests under routine in TOML) instead of separate `[task]` section — validation expected `raw.task` at top level
+
 ## [0.6.0] — 2026-02-13
 
 ### Security Hardening (OWASP LLM Top 10 / Agentic Top 10)

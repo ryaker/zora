@@ -373,30 +373,34 @@ Imagine Zora is halfway through a big task and you realize you want it to change
 
 ![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
 
-## The Two Brains: Claude and Gemini
+## Multi-Model Architecture
 
-Zora uses two AI models and automatically switches between them.
+Zora supports multiple AI providers and model tiers. Pick the right model for each task — expensive for hard problems, cheap for simple ones, local for zero-cost work.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    DUAL-BRAIN SYSTEM                         │
+│                  MULTI-MODEL SYSTEM                          │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│  CLAUDE (Primary)                                            │
-│  ├── Zora's default brain for all tasks                      │
-│  ├── Best at: reasoning, coding, creative writing            │
+│  CLAUDE (Opus / Sonnet / Haiku)                              │
+│  ├── Opus: complex reasoning, architecture, difficult tasks  │
+│  ├── Sonnet: balanced quality + cost for coding, writing     │
+│  ├── Haiku: fast and cheap for summaries, content, simple    │
 │  └── Connected via the official Claude Agent SDK             │
 │                                                              │
-│  GEMINI (Secondary / Backup)                                 │
-│  ├── Automatically takes over if Claude is unavailable       │
+│  GEMINI                                                      │
 │  ├── Best at: search, large documents, structured data       │
 │  └── Connected via the Gemini CLI                            │
 │                                                              │
-│  FAILOVER (How the switch works):                            │
-│  ├── Claude hits rate limit? → Gemini takes over instantly   │
-│  ├── Claude auth expires?    → Gemini takes over instantly   │
+│  OLLAMA (Local Models)                                       │
+│  ├── Llama, Mistral, Qwen, DeepSeek, etc.                   │
+│  ├── Runs on your machine — zero API cost, no limits         │
+│  └── Connected via Ollama REST API                           │
+│                                                              │
+│  FAILOVER (Automatic):                                       │
+│  ├── Provider hits rate limit? → Next one takes over         │
 │  ├── Full context is handed off (nothing is lost)            │
-│  └── When Claude recovers, it can pick back up               │
+│  └── When the original recovers, it can pick back up         │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -404,9 +408,10 @@ Zora uses two AI models and automatically switches between them.
 ### What this means for you
 
 - **You don't have to do anything.** The failover is automatic.
-- **Your work doesn't stop.** If Claude goes down, Gemini picks up right where Claude left off.
-- **You can set preferences.** In your routine files, use `model_preference` to pick which brain handles a specific task.
-- **You can add more providers.** Zora's architecture supports adding OpenAI, local models, or anything else. See the [Architecture docs](../specs/v5/docs/ARCHITECTURE.md) for details.
+- **Your work doesn't stop.** If one provider goes down, the next picks up right where it left off.
+- **You can pick models per task.** In routine files, use `model_preference = "claude-haiku"` for cheap tasks or `"ollama"` for free local execution.
+- **You can cap costs.** Set `max_cost_tier = "free"` on a routine to only use free providers (Haiku, Gemini, Ollama).
+- **You can add more providers.** See the [Architecture docs](../specs/v5/docs/ARCHITECTURE.md) for details.
 
 ![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
 

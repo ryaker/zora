@@ -24,7 +24,7 @@ That's it. Three commands from zero to productive.
 
 ## What It Can Do
 
-🚀 **Dual-LLM with Automatic Failover** — Claude as primary brain, Gemini as secondary. When one hits quota limits, work seamlessly continues on the other. Work never stops.
+🚀 **Multi-Model with Automatic Failover** — Claude (Opus/Sonnet/Haiku), Gemini, and Ollama (local models). Pick the right model per task — Opus for hard problems, Haiku for cheap content, Ollama for zero-cost local work. Failover is automatic.
 
 🛡️ **Policy-Enforced Autonomy** — Work freely within boundaries you define. The security engine enforces strict allow/deny rules for filesystem, shell, and network with action budgets, dry-run preview mode, and intent verification. [OWASP LLM Top 10 and Agentic Top 10 hardened](SECURITY.md).
 
@@ -79,8 +79,8 @@ See **[SECURITY.md](SECURITY.md)** for the full security guide and OWASP complia
 │         Retry Queue  │  Session Manager         │
 ├─────────────────────────────────────────────────┤
 │             LLM PROVIDER REGISTRY               │
-│  Claude (Primary)    │    Gemini (Secondary)    │
-│  Agent SDK (Native)  │    CLI (Subprocess)      │
+│  Claude Opus/Sonnet/Haiku  │  Gemini  │  Ollama │
+│  Agent SDK (Native)   CLI (Sub)   REST (Local)  │
 ├─────────────────────────────────────────────────┤
 │  Tools      │  Memory         │  Security       │
 │  Shell      │  MEMORY.md      │  Policy Engine  │
@@ -99,7 +99,7 @@ Zora is in active development (v0.6.0). This table reflects what actually works 
 
 | Component | Status |
 |-----------|--------|
-| Dual-LLM orchestration (Claude + Gemini) | ✅ Working |
+| Multi-model orchestration (Claude Opus/Sonnet/Haiku + Gemini + Ollama) | ✅ Working |
 | Automatic failover on quota/auth errors | ✅ Working |
 | Policy-based security engine (path + command enforcement) | ✅ Working |
 | Action budgets (per-session + per-type limits) | ✅ Working |

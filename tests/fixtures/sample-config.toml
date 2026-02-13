@@ -1,4 +1,4 @@
-# Test fixture — minimal valid config
+# Test fixture — multi-tier provider config demonstrating granular model selection
 
 [agent]
 name = "zora-test"
@@ -16,10 +16,27 @@ cpu_throttle_percent = 80
 memory_limit_mb = 2048
 throttle_check_interval = "10s"
 
+# ─── Multi-tier providers ─────────────────────────────────────────
+# Multiple entries of the same type with different models allow
+# granular cost control. Use model_preference in routines to pick
+# a specific tier, or use max_cost_tier to let the router choose
+# the cheapest capable provider.
+
 [[providers]]
-name = "claude"
+name = "claude-opus"
 type = "claude-sdk"
 rank = 1
+capabilities = ["reasoning", "coding", "creative"]
+cost_tier = "premium"
+enabled = true
+auth_method = "mac_session"
+model = "claude-opus-4"
+max_turns = 200
+
+[[providers]]
+name = "claude-sonnet"
+type = "claude-sdk"
+rank = 2
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
@@ -28,16 +45,38 @@ model = "claude-sonnet-4-5"
 max_turns = 200
 
 [[providers]]
+name = "claude-haiku"
+type = "claude-sdk"
+rank = 3
+capabilities = ["creative", "fast"]
+cost_tier = "free"
+enabled = true
+auth_method = "mac_session"
+model = "claude-3-5-haiku-latest"
+max_turns = 100
+
+[[providers]]
 name = "gemini"
 type = "gemini-cli"
-rank = 2
+rank = 4
 capabilities = ["search", "structured-data", "large-context", "coding"]
-cost_tier = "included"
+cost_tier = "free"
 enabled = true
 auth_method = "workspace_sso"
 cli_path = "gemini"
 model = "gemini-2.5-pro"
 max_turns = 100
+
+[[providers]]
+name = "ollama"
+type = "ollama"
+rank = 5
+capabilities = ["creative", "reasoning", "fast"]
+cost_tier = "free"
+enabled = true
+model = "llama3.2"
+endpoint = "http://localhost:11434"
+max_turns = 50
 
 [routing]
 mode = "respect_ranking"
