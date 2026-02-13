@@ -88,8 +88,10 @@ test.describe('Page Load Journey', () => {
 
   test('footer displays version info', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=Zora v0.6.0')).toBeVisible();
-    await expect(page.locator('text=Dashboard')).toBeVisible();
+    // Scope to footer container to avoid matching header "ZORA // DASHBOARD"
+    const footer = page.locator('.tracking-widest');
+    await expect(footer).toContainText('Zora v0.6.0');
+    await expect(footer).toContainText('Dashboard');
   });
 
   test('initial log entries are visible', async ({ page }) => {
