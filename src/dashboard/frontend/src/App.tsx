@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Shield, Terminal, Zap, Send, Info, Play } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 
@@ -10,26 +10,124 @@ interface ProviderStatus {
   canAutoRefresh: boolean;
 }
 
-const MAX_LOGS = 50;
-
-let logIdCounter = 0;
-
-interface LogEntry {
-  id: number;
-  message: string;
+interface JobStatus {
+  jobId: string;
+  eventCount: number;
+  lastActivity: string | null;
+  status: string;
 }
+
+const ZORA_VERSION = 'v0.6.0';
+
+const SETUP_PROMPT = `I want to set up Zora, an autonomous AI agent for my computer. Please walk me through the setup step by step:
+
+1. Check if I have Node.js 20+ installed
+2. Install Zora: npm install -g zora
+3. Run: zora init
+4. Help me choose a security preset (Safe, Balanced, or Power)
+5. Verify setup with: zora doctor
+
+Ask me one question at a time and wait for my response before moving on.`;
+
+const SetupNeededPanel: React.FC = () => {
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(SETUP_PROMPT);
+      setCopied(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Clipboard write failed:', err);
+    }
+  };
+
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="max-w-lg text-center"
+      >
+        <AlertTriangle size={48} className="text-zora-amber mx-auto mb-4" />
+        <h2 className="text-2xl font-tactical text-zora-amber mb-4 uppercase tracking-wider">
+          Zora needs setup
+        </h2>
+        <p className="text-white/70 font-data text-sm mb-6">
+          Run <code className="text-zora-cyan bg-black/40 px-2 py-0.5">zora init</code> in your
+          terminal to configure AI providers.
+        </p>
+        <div className="lcars-panel border-zora-cyan text-left mb-6">
+          <p className="text-white/60 font-data text-xs mb-3">
+            Or use our AI Setup Assistant — paste this prompt into ChatGPT, Claude, or Gemini:
+          </p>
+          <div className="bg-black/60 p-3 font-data text-xs text-zora-cyan mb-3 max-h-24 overflow-y-auto">
+            {SETUP_PROMPT}
+          </div>
+          <button
+            onClick={handleCopy}
+            className="bg-zora-cyan text-black px-4 py-2 font-bold text-xs uppercase flex items-center gap-2 hover:bg-white transition-colors"
+          >
+            {copied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy Setup Prompt</>}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const WelcomePanel: React.FC = () => (
+  <div className="flex-1 flex items-center justify-center">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="max-w-lg text-center"
+    >
+      <Rocket size={48} className="text-zora-cyan mx-auto mb-4" />
+      <h2 className="text-2xl font-tactical text-zora-cyan mb-4 uppercase tracking-wider">
+        Welcome to Zora
+      </h2>
+      <p className="text-white/70 font-data text-sm mb-6">
+        Your AI agent is running and ready for tasks.
+      </p>
+      <div className="lcars-panel border-zora-amber text-left mb-6">
+        <p className="text-zora-amber font-bold text-xs uppercase mb-3">Quick start</p>
+        <div className="space-y-2 font-data text-xs text-white/60">
+          <div className="bg-black/40 px-3 py-2">
+            <code className="text-zora-cyan">zora ask "summarize the files in ~/Projects"</code>
+          </div>
+          <div className="bg-black/40 px-3 py-2">
+            <code className="text-zora-cyan">zora ask "review my latest git commit"</code>
+          </div>
+          <div className="bg-black/40 px-3 py-2">
+            <code className="text-zora-cyan">zora ask "find all TODO comments in this repo"</code>
+          </div>
+        </div>
+      </div>
+      <p className="text-white/40 font-data text-xs">
+        Run a task from your terminal, then come back here to monitor progress.
+      </p>
+    </motion.div>
+  </div>
+);
 
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [taskPrompt, setTaskPrompt] = useState('');
+  const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
-  const [logs, setLogs] = useState<LogEntry[]>([
-    { id: ++logIdCounter, message: 'Zora is running.' },
-    { id: ++logIdCounter, message: 'Waiting for tasks...' },
-  ]);
-  const [submitting, setSubmitting] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const [logs, setLogs] = useState<string[]>(['Zora is running.', 'Waiting for tasks...']);
+  const [healthLoaded, setHealthLoaded] = useState(false);
+  const [jobsLoaded, setJobsLoaded] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -38,6 +136,9 @@ const App: React.FC = () => {
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
         console.error('Health check failed', err);
+        setFetchError(true);
+      } finally {
+        setHealthLoaded(true);
       }
     };
 
@@ -46,66 +147,26 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // SSE connection for real-time events
   useEffect(() => {
-    const es = new EventSource('/api/events');
-    eventSourceRef.current = es;
-
-    es.onmessage = (e) => {
+    const fetchJobs = async () => {
       try {
-        const event = JSON.parse(e.data);
-        switch (event.type) {
-          case 'connected':
-            break;
-          case 'job_started':
-            setLogs(prev => [{ id: ++logIdCounter, message: `Task started: ${event.data?.prompt ?? event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
-            if (event.data?.jobId) setSelectedJob(event.data.jobId);
-            break;
-          case 'job_progress':
-            setLogs(prev => [{ id: ++logIdCounter, message: event.data?.message ?? '...' }, ...prev].slice(0, MAX_LOGS));
-            break;
-          case 'job_completed':
-            setLogs(prev => [{ id: ++logIdCounter, message: `Task completed: ${event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
-            break;
-          case 'job_failed':
-            setLogs(prev => [{ id: ++logIdCounter, message: `Task failed: ${event.data?.error ?? event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
-            break;
-          default:
-            if (event.data?.message) {
-              setLogs(prev => [{ id: ++logIdCounter, message: event.data.message }, ...prev].slice(0, MAX_LOGS));
-            }
+        const res = await axios.get('/api/jobs');
+        if (res.data.jobs) {
+          setJobs(res.data.jobs);
+          setSelectedJob(prev => (prev === 'job_active' && res.data.jobs.length > 0) ? res.data.jobs[0].jobId : prev);
         }
       } catch (err) {
-        console.error('Failed to parse SSE event:', e.data, err);
+        console.error('Jobs fetch failed', err);
+        setFetchError(true);
+      } finally {
+        setJobsLoaded(true);
       }
     };
 
-    es.onerror = () => {
-      // EventSource auto-reconnects
-    };
-
-    return () => es.close();
+    fetchJobs();
+    const interval = setInterval(fetchJobs, 15000);
+    return () => clearInterval(interval);
   }, []);
-
-  const handleSubmitTask = async () => {
-    if (!taskPrompt.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      const res = await axios.post('/api/task', { prompt: taskPrompt.trim() });
-      if (res.data.ok) {
-        setLogs(prev => [{ id: ++logIdCounter, message: `Task submitted: ${taskPrompt.trim()}` }, ...prev].slice(0, MAX_LOGS));
-        setSelectedJob(res.data.jobId);
-        setTaskPrompt('');
-      }
-    } catch (err) {
-      const msg = axios.isAxiosError(err) && err.response?.data?.error
-        ? err.response.data.error
-        : 'Failed to submit task';
-      setLogs(prev => [{ id: ++logIdCounter, message: msg }, ...prev].slice(0, MAX_LOGS));
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleSteer = async () => {
     if (!steerMsg) return;
@@ -119,10 +180,64 @@ const App: React.FC = () => {
       setLogs(prev => [{ id: ++logIdCounter, message: `Message sent: ${steerMsg}` }, ...prev].slice(0, MAX_LOGS));
       setSteerMsg('');
     } catch (err) {
-      setLogs(prev => [{ id: ++logIdCounter, message: 'Failed to send message' }, ...prev].slice(0, MAX_LOGS));
+      console.error('Steering message failed', err);
+      setLogs(prev => ['Failed to send message', ...prev].slice(0, 10));
     }
   };
 
+  // Wait for initial data load
+  if (!healthLoaded || !jobsLoaded) {
+    return (
+      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
+        <div className="scanline" />
+        <div className="flex items-center gap-4 mb-6">
+          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
+          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-zora-cyan font-data text-sm animate-pulse">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // No providers configured — show setup guide
+  if (providers.length === 0) {
+    return (
+      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
+        <div className="scanline" />
+        <div className="flex items-center gap-4 mb-6">
+          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
+          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
+        </div>
+        <SetupNeededPanel />
+        <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
+          <div>Zora {ZORA_VERSION}</div>
+          <div>Dashboard</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Providers configured but no jobs yet — show welcome (only if no fetch errors)
+  if (jobs.length === 0 && !fetchError) {
+    return (
+      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
+        <div className="scanline" />
+        <div className="flex items-center gap-4 mb-6">
+          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
+          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
+        </div>
+        <WelcomePanel />
+        <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
+          <div>Zora {ZORA_VERSION}</div>
+          <div>Dashboard</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main dashboard — active jobs exist
   return (
     <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
       <div className="scanline" />
@@ -130,7 +245,7 @@ const App: React.FC = () => {
       {/* Header Bar */}
       <div className="flex items-center gap-4 mb-6">
         <div className="lcars-bar flex-1 bg-zora-amber">
-          ZORA // DASHBOARD
+          {'ZORA // DASHBOARD'}
         </div>
         <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
       </div>
@@ -250,7 +365,7 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
-        <div>Zora v0.6.0</div>
+        <div>Zora {ZORA_VERSION}</div>
         <div>Dashboard</div>
       </div>
     </div>
