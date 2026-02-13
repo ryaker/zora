@@ -82,7 +82,6 @@ Three options:
   - Read/write access inside your dev directory
   - Safe shell commands allowed (git, npm, ls, grep, etc.)
   - Blocks destructive commands (rm, sudo, chmod)
-  - Flags risky actions like git push for your approval
 
 - **Power** — "Like a senior engineer — full autonomy, you review the audit log"
   - Expanded filesystem access (includes ~/Documents)
@@ -234,7 +233,6 @@ zora ask "Find all TODO comments in ~/Projects/my-app and create a summary markd
 1. Zora searches for TODO comments across your codebase
 2. Groups them by file and priority
 3. Writes a markdown file with the summary
-4. (If you chose "Balanced" or "Safe" preset, Zora asks for approval before writing)
 
 **What you should see:**
 ```
@@ -243,18 +241,11 @@ Found 12 TODO comments across 8 files
 Grouping by file and priority...
 
 📝 Writing summary to ~/Projects/my-app/TODO_SUMMARY.md
-
-[If Balanced/Safe preset]
-⚠️ Action requires approval: Write file
-  Path: ~/Projects/my-app/TODO_SUMMARY.md
-  Size: 1.2 KB
-
-Approve? [y/N]
 ```
 
-Type `y` to approve, and Zora writes the file.
-
 Open `~/Projects/my-app/TODO_SUMMARY.md` to see the structured summary.
+
+> **Note:** The "Safe" preset blocks file writes outside `~/.zora/workspace`. If you chose Safe mode and need to write project files, switch to Balanced: `zora init --preset balanced --force`
 
 ---
 

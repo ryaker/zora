@@ -268,76 +268,50 @@ async function runWizard(opts: {
     process.exit(1);
   }
 
+  // ── Step 1: Welcome + Trust explanation ──────────────────────────
   clack.intro('Welcome to Zora');
 
-  // Doctor checks
+  if (!opts.yes) {
+    clack.note(
+      [
+        'Zora starts LOCKED — zero access to your files or commands.',
+        'This wizard grants the minimum permissions you choose.',
+        'Every action is logged to a tamper-proof audit trail.',
+        'You can expand permissions later without restarting.',
+      ].join('\n'),
+      'How Zora earns trust',
+    );
+  }
+
+  // ── Step 2: Detect CLI providers ─────────────────────────────────
   const spin = clack.spinner();
   spin.start('Checking environment...');
   const doctor = await runDoctorChecks();
   spin.stop('Environment checked');
 
-  // Show doctor results
   const nodeStatus = doctor.node.found ? `Node.js ${doctor.node.version}` : 'Node.js < 20 (upgrade recommended)';
-  const claudeStatus = doctor.claude.found ? `Claude CLI (${doctor.claude.path})` : 'Claude CLI (not found)';
-  const geminiStatus = doctor.gemini.found ? `Gemini CLI (${doctor.gemini.path})` : 'Gemini CLI (not found)';
+  const claudeStatus = doctor.claude.found
+    ? `Claude CLI found — Zora will use your existing subscription`
+    : 'Claude CLI (not found)';
+  const geminiStatus = doctor.gemini.found
+    ? `Gemini CLI found — Zora will use your existing subscription`
+    : 'Gemini CLI (not found)';
   clack.note(
     [nodeStatus, claudeStatus, geminiStatus].join('\n'),
     'Detected tools',
   );
 
-  // Preset selection
-  let preset: PresetName;
-  if (opts.preset && (opts.preset === 'safe' || opts.preset === 'balanced' || opts.preset === 'power')) {
-    preset = opts.preset;
-  } else if (opts.yes) {
-    preset = 'balanced';
-  } else {
-    const presetChoice = await clack.select({
-      message: 'Choose a security preset:',
-      options: [
-        { value: 'safe', label: 'Safe', hint: PRESET_DESCRIPTIONS.safe },
-        { value: 'balanced', label: 'Balanced', hint: PRESET_DESCRIPTIONS.balanced },
-        { value: 'power', label: 'Power', hint: PRESET_DESCRIPTIONS.power },
-      ],
-    });
-    if (clack.isCancel(presetChoice)) {
-      clack.cancel('Setup cancelled.');
-      process.exit(0);
-    }
-    preset = presetChoice as PresetName;
-  }
-
-  // Dev path
-  let devPath: string;
-  const defaultDevPath = detectDevPath();
-  if (opts.devPath) {
-    devPath = opts.devPath.replace(os.homedir(), '~');
-  } else if (opts.yes) {
-    devPath = defaultDevPath;
-  } else {
-    const devPathInput = await clack.text({
-      message: 'Where do you code?',
-      placeholder: defaultDevPath,
-      defaultValue: defaultDevPath,
-    });
-    if (clack.isCancel(devPathInput)) {
-      clack.cancel('Setup cancelled.');
-      process.exit(0);
-    }
-    devPath = (devPathInput as string).replace(os.homedir(), '~');
-  }
-
-  // Denied paths
+  // ── Step 3: Permanent deny-list ──────────────────────────────────
   let deniedPaths: string[];
   if (opts.yes) {
     deniedPaths = ['~/.ssh', '~/.gnupg', '~/.aws'];
   } else {
     const deniedChoices = await clack.multiselect({
-      message: 'Which paths should be denied? (pre-selected are recommended)',
+      message: 'These paths are ALWAYS off-limits (recommended defaults pre-selected):',
       options: [
-        { value: '~/.ssh', label: '~/.ssh', hint: 'SSH keys' },
-        { value: '~/.gnupg', label: '~/.gnupg', hint: 'GPG keys' },
-        { value: '~/.aws', label: '~/.aws', hint: 'AWS credentials' },
+        { value: '~/.ssh', label: '~/.ssh', hint: 'SSH keys — never grant access' },
+        { value: '~/.gnupg', label: '~/.gnupg', hint: 'GPG keys — never grant access' },
+        { value: '~/.aws', label: '~/.aws', hint: 'AWS credentials — never grant access' },
         { value: '~/Documents', label: '~/Documents' },
         { value: '~/Desktop', label: '~/Desktop' },
         { value: '~/Downloads', label: '~/Downloads' },
@@ -352,39 +326,87 @@ async function runWizard(opts: {
     deniedPaths = deniedChoices as string[];
   }
 
-  // Tool stacks
-  let toolStacks: string[];
-  if (opts.yes) {
-    // Auto-detect based on doctor
-    toolStacks = ['general'];
-    if (doctor.claude.found || doctor.gemini.found) toolStacks.push('node');
+  // ── Step 4: First folder ─────────────────────────────────────────
+  let devPath: string;
+  const defaultDevPath = detectDevPath();
+  if (opts.devPath) {
+    devPath = opts.devPath.replace(os.homedir(), '~');
+  } else if (opts.yes) {
+    devPath = defaultDevPath;
   } else {
-    const stackChoices = await clack.multiselect({
-      message: 'Which tool stacks do you use?',
-      options: [
-        { value: 'node', label: 'Node.js', hint: 'node, npm, npx, tsc, vitest' },
-        { value: 'python', label: 'Python', hint: 'python3, pip, pip3' },
-        { value: 'rust', label: 'Rust', hint: 'cargo, rustc, rustup' },
-        { value: 'go', label: 'Go', hint: 'go' },
-        { value: 'general', label: 'General CLI', hint: 'ls, pwd, cat, head, grep, find, etc.' },
-      ],
-      initialValues: ['node', 'general'],
+    const devPathInput = await clack.text({
+      message: 'Pick your first folder — where Zora can read and work:',
+      placeholder: defaultDevPath,
+      defaultValue: defaultDevPath,
     });
-    if (clack.isCancel(stackChoices)) {
+    if (clack.isCancel(devPathInput)) {
       clack.cancel('Setup cancelled.');
       process.exit(0);
     }
-    toolStacks = stackChoices as string[];
+    devPath = (devPathInput as string).replace(os.homedir(), '~');
   }
 
-  // Confirm
+  // ── Step 5: Want to go further? ──────────────────────────────────
+  let preset: PresetName;
+  let toolStacks: string[];
+
+  if (opts.preset && (opts.preset === 'locked' || opts.preset === 'safe' || opts.preset === 'balanced' || opts.preset === 'power')) {
+    preset = opts.preset;
+    toolStacks = opts.yes ? ['general'] : [];
+    if (opts.yes && (doctor.claude.found || doctor.gemini.found)) toolStacks.push('node');
+  } else if (opts.yes) {
+    preset = 'balanced';
+    toolStacks = ['general'];
+    if (doctor.claude.found || doctor.gemini.found) toolStacks.push('node');
+  } else {
+    const goFurther = await clack.select({
+      message: 'Want to go further, or is one folder enough for now?',
+      options: [
+        { value: 'minimal', label: "I'm good for now", hint: 'Read-only access to your folder, no shell commands' },
+        { value: 'balanced', label: 'Add shell commands too', hint: 'git, npm, ls — the standard dev toolkit (recommended)' },
+        { value: 'power', label: 'Full dev setup', hint: 'Expanded tools: python, find, sed, awk' },
+      ],
+    });
+    if (clack.isCancel(goFurther)) {
+      clack.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    if (goFurther === 'minimal') {
+      preset = 'safe';
+      toolStacks = [];
+    } else {
+      preset = goFurther as PresetName;
+
+      // Only ask about tool stacks when shell access is enabled
+      const stackChoices = await clack.multiselect({
+        message: 'Which tool stacks do you use?',
+        options: [
+          { value: 'node', label: 'Node.js', hint: 'node, npm, npx, tsc, vitest' },
+          { value: 'python', label: 'Python', hint: 'python3, pip, pip3' },
+          { value: 'rust', label: 'Rust', hint: 'cargo, rustc, rustup' },
+          { value: 'go', label: 'Go', hint: 'go' },
+          { value: 'general', label: 'General CLI', hint: 'ls, pwd, cat, head, grep, find, etc.' },
+        ],
+        initialValues: ['node', 'general'],
+      });
+      if (clack.isCancel(stackChoices)) {
+        clack.cancel('Setup cancelled.');
+        process.exit(0);
+      }
+      toolStacks = stackChoices as string[];
+    }
+  }
+
+  // ── Step 6: Summary + confirm ────────────────────────────────────
   if (!opts.yes) {
+    const providerList = [doctor.claude.found ? 'Claude' : null, doctor.gemini.found ? 'Gemini' : null].filter(Boolean).join(', ') || 'none detected';
     const summary = [
       `Preset:      ${preset}`,
-      `Dev path:    ${devPath}`,
+      `Workspace:   ${devPath}`,
       `Denied:      ${deniedPaths.join(', ')}`,
-      `Tool stacks: ${toolStacks.join(', ')}`,
-      `Providers:   ${[doctor.claude.found ? 'Claude' : null, doctor.gemini.found ? 'Gemini' : null].filter(Boolean).join(', ') || 'none detected'}`,
+      `Tool stacks: ${toolStacks.length > 0 ? toolStacks.join(', ') : 'none (shell disabled)'}`,
+      `Providers:   ${providerList} (using your existing subscriptions)`,
     ].join('\n');
     clack.note(summary, 'Summary');
 
@@ -397,7 +419,7 @@ async function runWizard(opts: {
     }
   }
 
-  // Generate files
+  // ── Generate and write files ─────────────────────────────────────
   const policyToml = generatePolicyToml(preset, devPath, deniedPaths, toolStacks);
   const configToml = generateConfigToml(doctor);
 
@@ -421,17 +443,17 @@ async function runWizard(opts: {
   fs.writeFileSync(policyPath, policyToml, 'utf-8');
   fs.writeFileSync(configPath, configToml, 'utf-8');
 
-  clack.outro(`Zora is ready!
+  clack.outro(`Zora is ready! Permissions can grow over time as you need them.
 
-Try one of these to see it in action:
-
-  zora ask "What's in my ~/Projects folder? Give me a one-line summary of each."
-  zora ask "Write me a professional email declining a meeting. Save to ~/Desktop/draft.md"
-  zora ask "Check if I have any uncommitted git changes in ~/Projects"
+Try it:
+  zora ask "What's in my ${devPath.replace('~', '~')} folder? Give me a one-line summary of each."
 
 Or start the dashboard:
   zora start
-  Then open http://localhost:7070`);
+  Then open http://localhost:7070
+
+To expand permissions later:
+  Edit ~/.zora/policy.toml or re-run: zora init --force`);
 }
 
 /**
@@ -441,7 +463,7 @@ export function registerInitCommand(program: Command): void {
   program
     .command('init')
     .description('Set up Zora — generate config, policy, and directory structure')
-    .option('--preset <preset>', 'Security preset: safe, balanced, or power')
+    .option('--preset <preset>', 'Security preset: locked, safe, balanced, or power')
     .option('--dev-path <path>', 'Path to your code directory')
     .option('-y, --yes', 'Accept all defaults (non-interactive)')
     .option('--force', 'Overwrite existing config files')

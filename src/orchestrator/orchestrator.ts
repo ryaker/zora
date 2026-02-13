@@ -12,6 +12,7 @@
 
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
 import type {
   ZoraConfig,
   ZoraPolicy,
@@ -24,7 +25,7 @@ import { FailoverController } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
 import { SessionManager } from './session-manager.js';
-import { ExecutionLoop } from './execution-loop.js';
+import { ExecutionLoop, type CustomToolDefinition } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { HeartbeatSystem } from '../routines/heartbeat.js';
@@ -165,6 +166,7 @@ export class Orchestrator {
       permissionMode: 'default',
       cwd: process.cwd(),
       canUseTool: this._policyEngine.createCanUseTool(),
+      customTools: this._createCustomTools(),
     });
 
     this._heartbeatSystem = new HeartbeatSystem({
@@ -222,9 +224,24 @@ export class Orchestrator {
     // R6: Inject MemoryManager context systematically
     const memoryContext = await this._memoryManager.loadContext();
 
-    // Build system prompt
+    // Load SOUL.md for agent identity (fixes bug: file was created but never read)
+    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
+    let soulContent = '';
+    try {
+      if (fs.existsSync(soulPath)) {
+        soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
+      }
+    } catch {
+      // SOUL.md missing or unreadable — use default identity
+    }
+
+    // Build system prompt with policy awareness
     const systemPrompt = [
-      'You are Zora, a helpful autonomous agent.',
+      soulContent || 'You are Zora, a helpful autonomous agent.',
+      '[SECURITY] You operate under a permission policy. Before planning any task,',
+      'use the check_permissions tool to verify you have access to the paths and',
+      'commands you need. If access is denied, tell the user what you need and why.',
+      'Do NOT attempt actions without checking first.',
       ...memoryContext,
     ].join('\n\n');
 
@@ -375,6 +392,73 @@ export class Orchestrator {
     await this._memoryManager.appendDailyNote(`Completed task: ${taskContext.task}`);
 
     return result;
+  }
+
+  /**
+   * Creates custom tools available to the agent during execution.
+   */
+  private _createCustomTools(): CustomToolDefinition[] {
+    return [
+      {
+        name: 'check_permissions',
+        description: 'Check if you have access to specific paths or commands before executing. Use this during planning to verify your boundaries.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            paths: { type: 'array', items: { type: 'string' }, description: 'Filesystem paths to check access for' },
+            commands: { type: 'array', items: { type: 'string' }, description: 'Shell commands to check access for' },
+          },
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const paths = (input['paths'] as string[] | undefined) ?? [];
+          const commands = (input['commands'] as string[] | undefined) ?? [];
+          return this._policyEngine.checkAccess(paths, commands);
+        },
+      },
+      {
+        name: 'request_permissions',
+        description: 'Request additional permissions from the user. Use this when check_permissions shows a path or command is denied and you need it for the current task. The user will be asked to approve.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            paths: { type: 'array', items: { type: 'string' }, description: 'Filesystem paths to request access for' },
+            commands: { type: 'array', items: { type: 'string' }, description: 'Shell commands to request access for' },
+            reason: { type: 'string', description: 'Why you need this access (shown to user)' },
+          },
+          required: ['reason'],
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const paths = (input['paths'] as string[] | undefined) ?? [];
+          const commands = (input['commands'] as string[] | undefined) ?? [];
+          const reason = (input['reason'] as string | undefined) ?? 'No reason provided';
+
+          // Validate against permanent deny-list before asking the user
+          const deniedPaths = this._policy.filesystem.denied_paths;
+          for (const p of paths) {
+            const abs = path.resolve(p.replace(/^~/, os.homedir()));
+            for (const denied of deniedPaths) {
+              const absDenied = path.resolve(denied.replace(/^~/, os.homedir()));
+              if (abs === absDenied || abs.startsWith(absDenied + path.sep)) {
+                return {
+                  granted: false,
+                  message: `Cannot grant access to ${p} — it is in the permanent deny-list. This cannot be overridden at runtime.`,
+                };
+              }
+            }
+          }
+
+          // The actual approval flow happens outside (CLI prompt, dashboard, etc.)
+          // For now, return the request details so the caller can present them to the user.
+          // In the CLI, this will be intercepted by the onEvent callback.
+          return {
+            granted: false,
+            pending: true,
+            message: `Permission request submitted. Paths: ${paths.join(', ') || 'none'}. Commands: ${commands.join(', ') || 'none'}. Reason: ${reason}`,
+            request: { paths, commands, reason },
+          };
+        },
+      },
+    ];
   }
 
   /**

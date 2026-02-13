@@ -229,3 +229,322 @@ describe('createCanUseTool', () => {
     expect(result.behavior).toBe('deny');
   });
 });
+
+describe('checkAccess', () => {
+  const policy: ZoraPolicy = {
+    filesystem: {
+      allowed_paths: ['~/Projects'],
+      denied_paths: ['~/.ssh'],
+      resolve_symlinks: true,
+      follow_symlinks: false,
+    },
+    shell: {
+      mode: 'allowlist',
+      allowed_commands: ['git', 'npm', 'ls'],
+      denied_commands: ['rm', 'sudo'],
+      split_chained_commands: true,
+      max_execution_time: '1m',
+    },
+    actions: { reversible: [], irreversible: [], always_flag: [] },
+    network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+  };
+
+  it('returns allowed/denied status for multiple paths', () => {
+    const engine = new PolicyEngine(policy);
+    const result = engine.checkAccess(['~/Projects/app', '~/Downloads', '~/.ssh'], []);
+
+    expect(result.paths['~/Projects/app']!.allowed).toBe(true);
+    expect(result.paths['~/Downloads']!.allowed).toBe(false);
+    expect(result.paths['~/.ssh']!.allowed).toBe(false);
+    expect(result.paths['~/.ssh']!.reason).toContain('denied');
+  });
+
+  it('returns allowed/denied status for multiple commands', () => {
+    const engine = new PolicyEngine(policy);
+    const result = engine.checkAccess([], ['git status', 'rm -rf /']);
+
+    expect(result.commands['git status']!.allowed).toBe(true);
+    expect(result.commands['rm -rf /']!.allowed).toBe(false);
+  });
+
+  it('includes suggestion when any resource is denied', () => {
+    const engine = new PolicyEngine(policy);
+    const result = engine.checkAccess(['~/Downloads'], []);
+
+    expect(result.suggestion).toBeDefined();
+    expect(result.suggestion).toContain('policy.toml');
+  });
+
+  it('omits suggestion when all resources are allowed', () => {
+    const engine = new PolicyEngine(policy);
+    const result = engine.checkAccess(['~/Projects/app'], ['git status']);
+
+    expect(result.suggestion).toBeUndefined();
+  });
+
+  it('handles empty inputs', () => {
+    const engine = new PolicyEngine(policy);
+    const result = engine.checkAccess([], []);
+
+    expect(Object.keys(result.paths)).toHaveLength(0);
+    expect(Object.keys(result.commands)).toHaveLength(0);
+    expect(result.suggestion).toBeUndefined();
+  });
+});
+
+describe('getPolicySummary', () => {
+  it('includes allowed paths and shell info', () => {
+    const engine = new PolicyEngine({
+      filesystem: {
+        allowed_paths: ['~/Projects', '~/.zora/workspace'],
+        denied_paths: ['~/.ssh'],
+        resolve_symlinks: true,
+        follow_symlinks: false,
+      },
+      shell: {
+        mode: 'allowlist',
+        allowed_commands: ['git', 'npm'],
+        denied_commands: [],
+        split_chained_commands: true,
+        max_execution_time: '1m',
+      },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    });
+
+    const summary = engine.getPolicySummary();
+    expect(summary).toContain('~/Projects');
+    expect(summary).toContain('~/.ssh');
+    expect(summary).toContain('git');
+  });
+
+  it('shows LOCKED for empty allowed_paths', () => {
+    const engine = new PolicyEngine({
+      filesystem: { allowed_paths: [], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'deny_all', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    });
+
+    const summary = engine.getPolicySummary();
+    expect(summary).toContain('LOCKED');
+    expect(summary).toContain('DISABLED');
+  });
+});
+
+describe('always_flag enforcement', () => {
+  const flagPolicy: ZoraPolicy = {
+    filesystem: {
+      allowed_paths: ['/home/user'],
+      denied_paths: [],
+      resolve_symlinks: true,
+      follow_symlinks: false,
+    },
+    shell: {
+      mode: 'allowlist',
+      allowed_commands: ['git', 'ls'],
+      denied_commands: [],
+      split_chained_commands: true,
+      max_execution_time: '1m',
+    },
+    actions: {
+      reversible: ['write_file'],
+      irreversible: ['git_push'],
+      always_flag: ['git_push'],
+    },
+    network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+  };
+
+  const signal = new AbortController().signal;
+
+  it('calls flagCallback when always_flag matches git push', async () => {
+    const flagCallback = vi.fn().mockResolvedValue(true);
+    const engine = new PolicyEngine(flagPolicy, flagCallback);
+    const canUseTool = engine.createCanUseTool();
+
+    await canUseTool('Bash', { command: 'git push origin main' }, { signal });
+    expect(flagCallback).toHaveBeenCalledWith('git_push', expect.stringContaining('git push'));
+  });
+
+  it('denies when flagCallback returns false', async () => {
+    const flagCallback = vi.fn().mockResolvedValue(false);
+    const engine = new PolicyEngine(flagPolicy, flagCallback);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', { command: 'git push' }, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+
+  it('allows when flagCallback returns true', async () => {
+    const flagCallback = vi.fn().mockResolvedValue(true);
+    const engine = new PolicyEngine(flagPolicy, flagCallback);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', { command: 'git push' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('does not flag actions not in always_flag list', async () => {
+    const flagCallback = vi.fn().mockResolvedValue(true);
+    const engine = new PolicyEngine(flagPolicy, flagCallback);
+    const canUseTool = engine.createCanUseTool();
+
+    await canUseTool('Bash', { command: 'git status' }, { signal });
+    expect(flagCallback).not.toHaveBeenCalled();
+  });
+
+  it('allows without callback when always_flag is configured but no callback set', async () => {
+    const engine = new PolicyEngine(flagPolicy); // no callback
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', { command: 'git push' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('flags all actions when always_flag includes wildcard', async () => {
+    const wildcardPolicy = {
+      ...flagPolicy,
+      actions: { ...flagPolicy.actions, always_flag: ['*'] },
+    };
+    const flagCallback = vi.fn().mockResolvedValue(true);
+    const engine = new PolicyEngine(wildcardPolicy, flagCallback);
+    const canUseTool = engine.createCanUseTool();
+
+    await canUseTool('Bash', { command: 'ls -la' }, { signal });
+    expect(flagCallback).toHaveBeenCalledWith('shell_exec', expect.any(String));
+  });
+
+  it('supports setFlagCallback to add callback after construction', async () => {
+    const engine = new PolicyEngine(flagPolicy);
+    const flagCallback = vi.fn().mockResolvedValue(false);
+    engine.setFlagCallback(flagCallback);
+
+    const canUseTool = engine.createCanUseTool();
+    const result = await canUseTool('Bash', { command: 'git push' }, { signal });
+    expect(result.behavior).toBe('deny');
+    expect(flagCallback).toHaveBeenCalled();
+  });
+});
+
+describe('policy getter', () => {
+  it('exposes the policy object', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: ['~/Dev'], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: ['ls'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+    expect(engine.policy).toBe(policy);
+  });
+});
+
+describe('expandPolicy', () => {
+  it('adds new paths to allowed_paths', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: ['~/Projects'], denied_paths: ['~/.ssh'], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: ['git'], denied_commands: ['rm'], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    engine.expandPolicy({ paths: ['~/Downloads'] });
+
+    expect(engine.policy.filesystem.allowed_paths).toContain('~/Downloads');
+    expect(engine.policy.filesystem.allowed_paths).toContain('~/Projects');
+  });
+
+  it('adds new commands to allowed_commands', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: [], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: ['git'], denied_commands: ['rm'], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    engine.expandPolicy({ commands: ['curl', 'wget'] });
+
+    expect(engine.policy.shell.allowed_commands).toContain('curl');
+    expect(engine.policy.shell.allowed_commands).toContain('wget');
+    expect(engine.policy.shell.allowed_commands).toContain('git');
+  });
+
+  it('throws when trying to grant access to a permanently denied path', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: ['~/Projects'], denied_paths: ['~/.ssh'], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    expect(() => engine.expandPolicy({ paths: ['~/.ssh/keys'] })).toThrow('permanently denied');
+  });
+
+  it('throws when trying to allow a permanently denied command', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: [], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: [], denied_commands: ['rm'], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    expect(() => engine.expandPolicy({ commands: ['rm'] })).toThrow('permanently denied');
+  });
+
+  it('deduplicates when expanding with already-allowed paths', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: ['~/Projects'], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    engine.expandPolicy({ paths: ['~/Projects', '~/Downloads'] });
+
+    const count = engine.policy.filesystem.allowed_paths.filter(p => p === '~/Projects').length;
+    expect(count).toBe(1);
+    expect(engine.policy.filesystem.allowed_paths).toHaveLength(2);
+  });
+
+  it('switches shell mode from deny_all to allowlist when commands are added', () => {
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: [], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'deny_all', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+
+    engine.expandPolicy({ commands: ['ls'] });
+
+    expect(engine.policy.shell.mode).toBe('allowlist');
+    expect(engine.policy.shell.allowed_commands).toContain('ls');
+  });
+
+  it('persists changes to file when policyFilePath is set', () => {
+    const tmpFile = path.join(os.tmpdir(), `zora-policy-test-${Date.now()}.toml`);
+    const policy: ZoraPolicy = {
+      filesystem: { allowed_paths: ['~/Projects'], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
+      shell: { mode: 'allowlist', allowed_commands: ['git'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
+      actions: { reversible: [], irreversible: [], always_flag: [] },
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+    };
+    const engine = new PolicyEngine(policy);
+    engine.setPolicyFilePath(tmpFile);
+
+    engine.expandPolicy({ paths: ['~/Downloads'] });
+
+    expect(fs.existsSync(tmpFile)).toBe(true);
+    const content = fs.readFileSync(tmpFile, 'utf-8');
+    expect(content).toContain('~/Downloads');
+    expect(content).toContain('~/Projects');
+
+    // Cleanup
+    fs.unlinkSync(tmpFile);
+  });
+});

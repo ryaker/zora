@@ -19,13 +19,50 @@ export interface ValidationResult {
   resolvedPath?: string;
 }
 
-export class PolicyEngine {
-  private readonly _policy: ZoraPolicy;
-  private readonly _homeDir: string;
+export interface AccessCheckResult {
+  paths: Record<string, { allowed: boolean; reason?: string }>;
+  commands: Record<string, { allowed: boolean; reason?: string }>;
+  suggestion?: string;
+}
 
-  constructor(policy: ZoraPolicy) {
+/**
+ * Callback for flagged actions. Return true to allow, false to deny.
+ * Used when always_flag is configured in policy.
+ */
+export type FlagCallback = (action: string, detail: string) => Promise<boolean>;
+
+/**
+ * Request to expand the policy at runtime.
+ */
+export interface PolicyExpansionRequest {
+  paths?: string[];
+  commands?: string[];
+}
+
+export class PolicyEngine {
+  private _policy: ZoraPolicy;
+  private readonly _homeDir: string;
+  private _flagCallback?: FlagCallback;
+  private _policyFilePath?: string;
+
+  constructor(policy: ZoraPolicy, flagCallback?: FlagCallback) {
     this._policy = policy;
     this._homeDir = os.homedir();
+    this._flagCallback = flagCallback;
+  }
+
+  /**
+   * Sets the path to the policy.toml file for runtime persistence.
+   */
+  setPolicyFilePath(filePath: string): void {
+    this._policyFilePath = filePath;
+  }
+
+  /**
+   * Sets the flag callback for always_flag enforcement.
+   */
+  setFlagCallback(callback: FlagCallback): void {
+    this._flagCallback = callback;
   }
 
   /**
@@ -236,9 +273,222 @@ export class PolicyEngine {
         }
       }
 
+      // Check always_flag for actions that require approval
+      const action = this._classifyAction(toolName, input);
+      if (action && this._shouldFlag(action)) {
+        if (this._flagCallback) {
+          const detail = toolName === 'Bash'
+            ? `Command: ${input['command']}`
+            : `${toolName}: ${input['file_path'] ?? JSON.stringify(input)}`;
+
+          const approved = await this._flagCallback(action, detail);
+          if (!approved) {
+            return {
+              behavior: 'deny' as const,
+              message: `Action '${action}' was flagged for approval and denied by user`,
+            };
+          }
+        }
+        // No callback = no enforcement (graceful: config parsed but not blocked)
+      }
+
       // Default: allow the tool call
       return { behavior: 'allow' as const, updatedInput: input };
     };
+  }
+
+  /**
+   * Maps a tool call to an action category for always_flag matching.
+   */
+  private _classifyAction(toolName: string, input: Record<string, unknown>): string | null {
+    if (toolName === 'Bash') {
+      const command = (input['command'] as string | undefined) ?? '';
+      const base = this._extractBaseCommand(command);
+
+      // Map common commands to action categories
+      if (base === 'git') {
+        const args = command.trim().split(/\s+/);
+        if (args.includes('push')) return 'git_push';
+        if (args.includes('reset') && args.includes('--hard')) return 'shell_exec_destructive';
+        return 'git_operation';
+      }
+      if (['rm', 'rmdir'].includes(base)) return 'shell_exec_destructive';
+      if (['chmod', 'chown'].includes(base)) return 'shell_exec_destructive';
+      return 'shell_exec';
+    }
+
+    if (toolName === 'Write') return 'write_file';
+    if (toolName === 'Edit') return 'edit_file';
+
+    return null;
+  }
+
+  /**
+   * Checks if an action matches any entry in the always_flag list.
+   */
+  private _shouldFlag(action: string): boolean {
+    const flagList = this._policy.actions.always_flag;
+    if (flagList.length === 0) return false;
+    return flagList.includes('*') || flagList.includes(action);
+  }
+
+  // ─── Policy Inspection ──────────────────────────────────────────────
+
+  /**
+   * Checks access for multiple paths and commands at once.
+   * Used by the check_permissions tool so the agent can plan around its boundaries.
+   */
+  checkAccess(paths: string[], commands: string[]): AccessCheckResult {
+    const pathResults: Record<string, { allowed: boolean; reason?: string }> = {};
+    for (const p of paths) {
+      const v = this.validatePath(p);
+      pathResults[p] = { allowed: v.allowed, ...(v.reason ? { reason: v.reason } : {}) };
+    }
+
+    const commandResults: Record<string, { allowed: boolean; reason?: string }> = {};
+    for (const c of commands) {
+      const v = this.validateCommand(c);
+      commandResults[c] = { allowed: v.allowed, ...(v.reason ? { reason: v.reason } : {}) };
+    }
+
+    const denied = [
+      ...Object.entries(pathResults).filter(([, v]) => !v.allowed).map(([k]) => k),
+      ...Object.entries(commandResults).filter(([, v]) => !v.allowed).map(([k]) => k),
+    ];
+
+    return {
+      paths: pathResults,
+      commands: commandResults,
+      ...(denied.length > 0 ? { suggestion: 'To access denied resources, ask the user to grant access via `zora init --force` or by editing ~/.zora/policy.toml.' } : {}),
+    };
+  }
+
+  /**
+   * Returns a short text summary of the current policy for system prompt injection.
+   * Intentionally terse to minimize context usage.
+   */
+  getPolicySummary(): string {
+    const fs = this._policy.filesystem;
+    const sh = this._policy.shell;
+    const lines: string[] = [];
+
+    if (fs.allowed_paths.length === 0) {
+      lines.push('Filesystem: LOCKED (no paths allowed)');
+    } else {
+      lines.push(`Filesystem: ${fs.allowed_paths.join(', ')}`);
+    }
+
+    if (fs.denied_paths.length > 0) {
+      lines.push(`Denied: ${fs.denied_paths.join(', ')}`);
+    }
+
+    if (sh.mode === 'deny_all') {
+      lines.push('Shell: DISABLED (no commands allowed)');
+    } else if (sh.mode === 'allowlist') {
+      lines.push(`Shell: ${sh.allowed_commands.join(', ')}`);
+    } else {
+      lines.push('Shell: denylist mode');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Returns the raw policy object (read-only access for serialization).
+   */
+  get policy(): ZoraPolicy {
+    return this._policy;
+  }
+
+  // ─── Runtime Policy Expansion ──────────────────────────────────────
+
+  /**
+   * Expands the policy at runtime. Validates against permanent deny-list.
+   * Persists changes to policy.toml if a file path is configured.
+   */
+  expandPolicy(request: PolicyExpansionRequest): void {
+    // Validate: requested paths must not be in permanent deny-list
+    if (request.paths) {
+      for (const p of request.paths) {
+        const abs = path.resolve(this._resolveHome(p));
+        if (this._isWithinDeniedPaths(abs, this._policy.filesystem)) {
+          throw new Error(`Cannot grant access to ${p} — permanently denied by policy`);
+        }
+      }
+
+      // Add new paths (deduplicate)
+      const existing = new Set(this._policy.filesystem.allowed_paths);
+      for (const p of request.paths) {
+        existing.add(p);
+      }
+      this._policy.filesystem.allowed_paths = [...existing];
+    }
+
+    // Expand shell commands
+    if (request.commands) {
+      const existing = new Set(this._policy.shell.allowed_commands);
+      for (const c of request.commands) {
+        // Don't allow adding denied commands
+        if (this._policy.shell.denied_commands.includes(c)) {
+          throw new Error(`Cannot allow command '${c}' — permanently denied by policy`);
+        }
+        existing.add(c);
+      }
+      this._policy.shell.allowed_commands = [...existing];
+
+      // If we're adding commands and mode was deny_all, switch to allowlist
+      if (this._policy.shell.mode === 'deny_all') {
+        this._policy.shell.mode = 'allowlist';
+      }
+    }
+
+    // Persist if we have a file path
+    if (this._policyFilePath) {
+      this._writePolicyFile();
+    }
+  }
+
+  /**
+   * Writes the current policy state to the TOML file.
+   */
+  private _writePolicyFile(): void {
+    if (!this._policyFilePath) return;
+
+    try {
+      // Dynamic import would be async; since we store the import at module level, use sync write
+      // Build TOML manually for simplicity (avoids needing smol-toml at runtime here)
+      const lines: string[] = [
+        '# Zora Security Policy — auto-generated (runtime expansion applied)',
+        '',
+        '[filesystem]',
+        `allowed_paths = ${JSON.stringify(this._policy.filesystem.allowed_paths)}`,
+        `denied_paths = ${JSON.stringify(this._policy.filesystem.denied_paths)}`,
+        `resolve_symlinks = ${this._policy.filesystem.resolve_symlinks}`,
+        `follow_symlinks = ${this._policy.filesystem.follow_symlinks}`,
+        '',
+        '[shell]',
+        `mode = "${this._policy.shell.mode}"`,
+        `allowed_commands = ${JSON.stringify(this._policy.shell.allowed_commands)}`,
+        `denied_commands = ${JSON.stringify(this._policy.shell.denied_commands)}`,
+        `split_chained_commands = ${this._policy.shell.split_chained_commands}`,
+        `max_execution_time = "${this._policy.shell.max_execution_time}"`,
+        '',
+        '[actions]',
+        `reversible = ${JSON.stringify(this._policy.actions.reversible)}`,
+        `irreversible = ${JSON.stringify(this._policy.actions.irreversible)}`,
+        `always_flag = ${JSON.stringify(this._policy.actions.always_flag)}`,
+        '',
+        '[network]',
+        `allowed_domains = ${JSON.stringify(this._policy.network.allowed_domains)}`,
+        `denied_domains = ${JSON.stringify(this._policy.network.denied_domains)}`,
+        `max_request_size = "${this._policy.network.max_request_size}"`,
+        '',
+      ];
+
+      fs.writeFileSync(this._policyFilePath, lines.join('\n'), 'utf-8');
+    } catch (err) {
+      console.error('[PolicyEngine] Failed to persist policy expansion:', err instanceof Error ? err.message : String(err));
+    }
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────

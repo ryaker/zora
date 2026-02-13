@@ -27,7 +27,7 @@ afterEach(() => {
 // ── Preset validation ────────────────────────────────────────────────
 
 describe('PRESETS', () => {
-  it.each(['safe', 'balanced', 'power'] as PresetName[])('preset "%s" has all 4 sections', (name) => {
+  it.each(['locked', 'safe', 'balanced', 'power'] as PresetName[])('preset "%s" has all 4 sections', (name) => {
     const p = PRESETS[name];
     expect(p.filesystem).toBeDefined();
     expect(p.shell).toBeDefined();
@@ -35,8 +35,15 @@ describe('PRESETS', () => {
     expect(p.network).toBeDefined();
   });
 
-  it.each(['safe', 'balanced', 'power'] as PresetName[])('preset "%s" has valid shell mode', (name) => {
+  it.each(['locked', 'safe', 'balanced', 'power'] as PresetName[])('preset "%s" has valid shell mode', (name) => {
     expect(['allowlist', 'denylist', 'deny_all']).toContain(PRESETS[name].shell.mode);
+  });
+
+  it('locked preset has zero access', () => {
+    expect(PRESETS.locked.filesystem.allowed_paths).toEqual([]);
+    expect(PRESETS.locked.shell.mode).toBe('deny_all');
+    expect(PRESETS.locked.shell.allowed_commands).toEqual([]);
+    expect(PRESETS.locked.network.allowed_domains).toEqual([]);
   });
 
   it('safe preset denies all shell commands', () => {
