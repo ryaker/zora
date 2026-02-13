@@ -25,6 +25,7 @@ import { registerEditCommands } from './edit-commands.js';
 import { registerTeamCommands } from './team-commands.js';
 import { registerSteerCommands } from './steer-commands.js';
 import { registerSkillCommands } from './skill-commands.js';
+import { registerInitCommand } from './init-command.js';
 
 const program = new Command();
 
@@ -41,29 +42,54 @@ async function setupContext() {
   const configPath = path.join(configDir, 'config.toml');
   const policyPath = path.join(configDir, 'policy.toml');
 
-  // Ensure config exists or use defaults (for now we assume they exist for simplicity)
+  // Ensure config exists
   if (!fs.existsSync(configPath)) {
-    console.error(`Config not found at ${configPath}. Run zora init (future).`);
+    console.error(`Config not found at ${configPath}. Run \`zora init\` first.`);
     process.exit(1);
   }
 
   const config = await loadConfig(configPath);
 
-  // Load policy (stubbed for now if not exists)
+  // Load policy from TOML if it exists, otherwise use a safe fallback
   let policy: ZoraPolicy;
   if (fs.existsSync(policyPath)) {
+    const { parse: parseTOML } = await import('smol-toml');
+    const raw = parseTOML(fs.readFileSync(policyPath, 'utf-8')) as Record<string, unknown>;
+    const fsPol = raw['filesystem'] as Record<string, unknown> | undefined;
+    const shPol = raw['shell'] as Record<string, unknown> | undefined;
+    const actPol = raw['actions'] as Record<string, unknown> | undefined;
+    const netPol = raw['network'] as Record<string, unknown> | undefined;
     policy = {
-      filesystem: { allowed_paths: [os.homedir()], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
-      shell: { mode: 'allowlist', allowed_commands: ['ls', 'npm', 'git'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
-      actions: { reversible: [], irreversible: [], always_flag: [] },
-      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' }
+      filesystem: {
+        allowed_paths: (fsPol?.['allowed_paths'] as string[]) ?? [os.homedir()],
+        denied_paths: (fsPol?.['denied_paths'] as string[]) ?? [],
+        resolve_symlinks: (fsPol?.['resolve_symlinks'] as boolean) ?? true,
+        follow_symlinks: (fsPol?.['follow_symlinks'] as boolean) ?? false,
+      },
+      shell: {
+        mode: (shPol?.['mode'] as 'allowlist' | 'denylist' | 'deny_all') ?? 'allowlist',
+        allowed_commands: (shPol?.['allowed_commands'] as string[]) ?? ['ls', 'npm', 'git'],
+        denied_commands: (shPol?.['denied_commands'] as string[]) ?? [],
+        split_chained_commands: (shPol?.['split_chained_commands'] as boolean) ?? true,
+        max_execution_time: (shPol?.['max_execution_time'] as string) ?? '1m',
+      },
+      actions: {
+        reversible: (actPol?.['reversible'] as string[]) ?? [],
+        irreversible: (actPol?.['irreversible'] as string[]) ?? [],
+        always_flag: (actPol?.['always_flag'] as string[]) ?? [],
+      },
+      network: {
+        allowed_domains: (netPol?.['allowed_domains'] as string[]) ?? [],
+        denied_domains: (netPol?.['denied_domains'] as string[]) ?? [],
+        max_request_size: (netPol?.['max_request_size'] as string) ?? '10mb',
+      },
     };
   } else {
     policy = {
       filesystem: { allowed_paths: [os.homedir()], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
       shell: { mode: 'allowlist', allowed_commands: ['ls', 'npm', 'git'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
       actions: { reversible: [], irreversible: [], always_flag: [] },
-      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' }
+      network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
     };
   }
 
@@ -161,5 +187,6 @@ registerEditCommands(program, configDir);
 registerTeamCommands(program, configDir);
 registerSteerCommands(program, configDir);
 registerSkillCommands(program);
+registerInitCommand(program);
 
 program.parse();
