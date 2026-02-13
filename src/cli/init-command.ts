@@ -421,7 +421,17 @@ async function runWizard(opts: {
   fs.writeFileSync(policyPath, policyToml, 'utf-8');
   fs.writeFileSync(configPath, configToml, 'utf-8');
 
-  clack.outro('Zora is ready! Run `zora ask "hello"` to get started.');
+  clack.outro(`Zora is ready!
+
+Try one of these to see it in action:
+
+  zora ask "What's in my ~/Projects folder? Give me a one-line summary of each."
+  zora ask "Write me a professional email declining a meeting. Save to ~/Desktop/draft.md"
+  zora ask "Check if I have any uncommitted git changes in ~/Projects"
+
+Or start the dashboard:
+  zora start
+  Then open http://localhost:7070`);
 }
 
 /**
