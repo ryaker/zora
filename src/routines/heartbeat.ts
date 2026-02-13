@@ -10,9 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
 import cron, { type ScheduledTask } from 'node-cron';
-import type { TaskContext } from '../types.js';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
 
 export interface HeartbeatOptions {
@@ -63,21 +61,8 @@ export class HeartbeatSystem {
         
         if (match) {
           const taskText = match[1]!.trim();
-          const jobId = `heartbeat_${randomUUID()}`;
-          
-          const context: TaskContext = {
-            jobId,
-            task: taskText,
-            requiredCapabilities: [],
-            complexity: 'simple',
-            resourceType: 'mixed',
-            systemPrompt: 'You are performing a proactive heartbeat task.',
-            memoryContext: [],
-            history: [],
-          };
-
           try {
-            await this._loop.run(context);
+            await this._loop.run(taskText);
             // Mark as done: - [x] Task description
             updatedLines[i] = line.replace(/^-\s*\[\s*\]/, '- [x]');
             tasksRun++;

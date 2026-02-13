@@ -135,3 +135,97 @@ describe('PolicyEngine', () => {
     });
   });
 });
+
+describe('createCanUseTool', () => {
+  const defaultPolicy: ZoraPolicy = {
+    filesystem: {
+      allowed_paths: ['/home/user'],
+      denied_paths: ['/home/user/secrets'],
+      resolve_symlinks: true,
+      follow_symlinks: false,
+    },
+    shell: {
+      mode: 'allowlist',
+      allowed_commands: ['ls', 'npm', 'git'],
+      denied_commands: ['rm'],
+      split_chained_commands: true,
+      max_execution_time: '1m',
+    },
+    actions: { reversible: [], irreversible: [], always_flag: [] },
+    network: { allowed_domains: [], denied_domains: [], max_request_size: '10mb' },
+  };
+
+  const signal = new AbortController().signal;
+
+  it('allows Bash with permitted command', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', { command: 'ls -la' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('denies Bash with forbidden command', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', { command: 'rm -rf /' }, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+
+  it('allows Read with permitted path', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Read', { file_path: '/home/user/file.txt' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('denies Write to denied path', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Write', { file_path: '/home/user/secrets/key.pem' }, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+
+  it('denies Edit to path outside allowed boundaries', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Edit', { file_path: '/etc/passwd' }, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+
+  it('allows Glob with permitted path', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Glob', { pattern: '**/*.ts', path: '/home/user/project' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('denies Grep with denied path', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Grep', { pattern: 'secret', path: '/home/user/secrets' }, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+
+  it('allows unknown tools by default', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('WebSearch', { query: 'test' }, { signal });
+    expect(result.behavior).toBe('allow');
+  });
+
+  it('denies Bash without command input', async () => {
+    const engine = new PolicyEngine(defaultPolicy);
+    const canUseTool = engine.createCanUseTool();
+
+    const result = await canUseTool('Bash', {}, { signal });
+    expect(result.behavior).toBe('deny');
+  });
+});

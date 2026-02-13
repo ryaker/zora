@@ -10,10 +10,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
-import type { RoutineDefinition, TaskContext } from '../types.js';
+import type { RoutineDefinition } from '../types.js';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
 
 export class RoutineManager {
@@ -88,22 +87,8 @@ export class RoutineManager {
     }
 
     const scheduledTask = cron.schedule(routine.schedule, async () => {
-      const jobId = `routine_${routine.name}_${randomUUID()}`;
-      
-      const context: TaskContext = {
-        jobId,
-        task: task.prompt,
-        requiredCapabilities: [], // Router will classify
-        complexity: 'moderate',
-        resourceType: 'mixed',
-        systemPrompt: '',
-        memoryContext: [],
-        history: [],
-        modelPreference: routine.model_preference,
-      };
-
       try {
-        await this._loop.run(context);
+        await this._loop.run(task.prompt);
       } catch (err) {
         console.error(`Routine ${routine.name} failed:`, err);
       }

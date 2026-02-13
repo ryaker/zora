@@ -9,27 +9,32 @@
  */
 
 import { Command } from 'commander';
-import { loadConfig } from '../config/loader.js';
+import { loadConfig, toSdkMcpServers } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
-import { ClaudeProvider } from '../providers/claude-provider.js';
-import type { TaskContext, ZoraPolicy } from '../types.js';
+import type { ZoraPolicy } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { registerMemoryCommands } from './memory-commands.js';
+import { registerAuditCommands } from './audit-commands.js';
+import { registerEditCommands } from './edit-commands.js';
+import { registerTeamCommands } from './team-commands.js';
+import { registerSteerCommands } from './steer-commands.js';
+import { registerSkillCommands } from './skill-commands.js';
 
 const program = new Command();
 
 program
   .name('zora')
   .description('Long-running autonomous personal AI agent for macOS')
-  .version('0.5.0');
+  .version('0.6.0');
 
 /**
- * Common setup for commands that need the engine and loop.
+ * Common setup for commands that need config and services.
  */
 async function setupContext() {
   const configDir = path.join(os.homedir(), '.zora');
@@ -43,12 +48,10 @@ async function setupContext() {
   }
 
   const config = await loadConfig(configPath);
-  
+
   // Load policy (stubbed for now if not exists)
   let policy: ZoraPolicy;
   if (fs.existsSync(policyPath)) {
-    // For v1 we assume policy.toml is just a simple JSON/TOML for now
-    // Actually we need a real policy loader. Using a dummy for now.
     policy = {
       filesystem: { allowed_paths: [os.homedir()], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
       shell: { mode: 'allowlist', allowed_commands: ['ls', 'npm', 'git'], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
@@ -71,48 +74,53 @@ async function setupContext() {
 
   const memoryManager = new MemoryManager(config.memory, configDir);
   await memoryManager.init();
-  
-  // Pick the primary provider (Claude for now)
-  const claudeConfig = config.providers.find(p => p.type === 'claude-sdk' && p.enabled);
-  if (!claudeConfig) {
-    console.error('No enabled Claude provider found in config.');
-    process.exit(1);
-  }
 
-  const provider = new ClaudeProvider({ config: claudeConfig });
-  const loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager });
-
-  return { config, policy, engine, sessionManager, steeringManager, memoryManager, loop };
+  return { config, policy, engine, sessionManager, steeringManager, memoryManager };
 }
 
 program
   .command('ask')
   .description('Send a task to the agent and wait for completion')
   .argument('<prompt>', 'The task or question for the agent')
-  .action(async (prompt) => {
-    const { loop, memoryManager } = await setupContext();
-    
+  .option('-m, --model <model>', 'Model to use')
+  .option('--max-turns <n>', 'Maximum turns', parseInt)
+  .action(async (prompt, opts) => {
+    const { config, engine, memoryManager } = await setupContext();
+
     // Load context from memory tiers
     const memoryContext = await memoryManager.loadContext();
 
-    const task: TaskContext = {
-      jobId: `job_${Date.now()}`,
-      task: prompt,
-      requiredCapabilities: ['reasoning'],
-      complexity: 'moderate',
-      resourceType: 'mixed',
-      systemPrompt: 'You are Zora, a helpful agent.',
-      memoryContext,
-      history: [],
-    };
+    // Build system prompt
+    const systemPrompt = [
+      'You are Zora, a helpful autonomous agent.',
+      ...memoryContext,
+    ].join('\n\n');
 
-    console.log(`🚀 Starting task: ${task.jobId}`);
-    await loop.run(task);
-    
+    // Build MCP servers from config
+    const mcpServers = config.mcp?.servers
+      ? toSdkMcpServers(config.mcp.servers)
+      : {};
+
+    const loop = new ExecutionLoop({
+      systemPrompt,
+      model: opts.model,
+      maxTurns: opts.maxTurns,
+      mcpServers,
+      permissionMode: 'default',
+      cwd: process.cwd(),
+      canUseTool: engine.createCanUseTool(),
+    });
+
+    console.log('Starting task...');
+    const result = await loop.run(prompt);
+
+    if (result) {
+      console.log('\n' + result);
+    }
+
     // Record task in daily notes
     await memoryManager.appendDailyNote(`Completed task: ${prompt}`);
-    
-    console.log('✅ Task complete.');
+    console.log('Task complete.');
   });
 
 program
@@ -144,5 +152,14 @@ program
     console.log('Stopping Zora daemon...');
     console.log('Daemon stopped.');
   });
+
+// Register new command groups
+const configDir = path.join(os.homedir(), '.zora');
+registerMemoryCommands(program, setupContext);
+registerAuditCommands(program, () => path.join(configDir, 'audit.jsonl'));
+registerEditCommands(program, configDir);
+registerTeamCommands(program, configDir);
+registerSteerCommands(program, configDir);
+registerSkillCommands(program);
 
 program.parse();

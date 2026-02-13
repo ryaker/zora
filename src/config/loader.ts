@@ -7,7 +7,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { parse as parseTOML } from 'smol-toml';
-import type { ZoraConfig, ProviderConfig } from '../types.js';
+import type { ZoraConfig, ProviderConfig, McpServerEntry } from '../types.js';
 import { DEFAULT_CONFIG, validateConfig } from './defaults.js';
 
 export class ConfigError extends Error {
@@ -79,6 +79,16 @@ export function parseConfig(raw: Record<string, unknown>): ZoraConfig {
     );
   }
 
+  // Handle MCP config
+  if (raw['mcp'] && typeof raw['mcp'] === 'object') {
+    const mcpRaw = raw['mcp'] as Record<string, unknown>;
+    if (mcpRaw['servers'] && typeof mcpRaw['servers'] === 'object') {
+      config.mcp = {
+        servers: mcpRaw['servers'] as Record<string, McpServerEntry>,
+      };
+    }
+  }
+
   return config;
 }
 
@@ -118,4 +128,42 @@ export function loadConfigFromString(toml: string): ZoraConfig {
   }
 
   return config;
+}
+
+/**
+ * Converts Zora MCP server config to the SDK's McpServerConfig format.
+ * SDK types: McpStdioServerConfig | McpSSEServerConfig | McpHttpServerConfig
+ */
+export function toSdkMcpServers(
+  servers: Record<string, McpServerEntry>,
+): Record<string, Record<string, unknown>> {
+  const result: Record<string, Record<string, unknown>> = {};
+
+  for (const [name, server] of Object.entries(servers)) {
+    if (server.type === 'stdio' || (!server.type && server.command)) {
+      // stdio transport
+      if (!server.command) {
+        console.warn(`Skipping MCP server "${name}": stdio transport requires a command`);
+        continue;
+      }
+      result[name] = {
+        command: server.command,
+        ...(server.args && { args: server.args }),
+        ...(server.env && { env: server.env }),
+      };
+    } else {
+      // HTTP or SSE transport
+      if (!server.url) {
+        console.warn(`Skipping MCP server "${name}": http/sse transport requires a url`);
+        continue;
+      }
+      result[name] = {
+        type: server.type ?? 'http',
+        url: server.url,
+        ...(server.headers && { headers: server.headers }),
+      };
+    }
+  }
+
+  return result;
 }

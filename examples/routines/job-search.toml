@@ -1,0 +1,18 @@
+[routine]
+name = "job-search"
+schedule = "0 7 * * 1-5"
+model_preference = "gemini"
+timeout = "20m"
+
+[routine.task]
+prompt = """
+Daily job search automation:
+
+1. Search job boards for positions matching criteria in MEMORY.md
+2. Filter for remote-friendly, senior-level roles in target industries
+3. For top 3 matches, draft personalized cover letters
+4. Write results to ~/.zora/workspace/jobs/{date}-matches.md
+5. Send macOS notification with summary of new matches
+
+If no new matches found, skip cover letters and just log the search.
+"""

@@ -1,152 +1,86 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ExecutionLoop } from '../../../src/orchestrator/execution-loop.js';
-import { SessionManager } from '../../../src/orchestrator/session-manager.js';
-import { SteeringManager } from '../../../src/steering/steering-manager.js';
-import { PolicyEngine } from '../../../src/security/policy-engine.js';
-import { MockProvider } from '../../fixtures/mock-provider.js';
-import type { TaskContext } from '../../../src/types.js';
-import path from 'node:path';
-import os from 'node:os';
-import fs from 'node:fs';
+import type { ZoraExecutionOptions } from '../../../src/orchestrator/execution-loop.js';
 
 describe('ExecutionLoop', () => {
-  const testDir = path.join(os.tmpdir(), 'zora-loop-test');
-  let loop: ExecutionLoop;
-  let provider: MockProvider;
-  let sessionManager: SessionManager;
-  let steeringManager: SteeringManager;
-  let engine: PolicyEngine;
-
-  beforeEach(() => {
-    if (fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    }
-    
-    provider = new MockProvider({ name: 'mock', rank: 1 });
-    engine = new PolicyEngine({
-      filesystem: { allowed_paths: [os.tmpdir()], denied_paths: [], resolve_symlinks: true, follow_symlinks: false },
-      shell: { mode: 'deny_all', allowed_commands: [], denied_commands: [], split_chained_commands: true, max_execution_time: '1m' },
-      actions: { reversible: [], irreversible: [], always_flag: [] },
-      network: { allowed_domains: [], denied_domains: [], max_request_size: '1mb' },
-    });
-    sessionManager = new SessionManager(testDir);
-    steeringManager = new SteeringManager(testDir);
-    loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager });
-  });
-
-  const task: TaskContext = {
-    jobId: 'loop-job-1',
-    task: 'Say hello',
-    requiredCapabilities: [],
-    complexity: 'simple',
-    resourceType: 'creative',
-    systemPrompt: '',
-    memoryContext: [],
-    history: [],
+  const baseOptions: ZoraExecutionOptions = {
+    systemPrompt: 'You are Zora, a helpful agent.',
+    cwd: '/tmp',
+    model: 'sonnet',
+    maxTurns: 50,
+    permissionMode: 'default',
   };
 
-  it('runs a task to completion and persists events', async () => {
-    await loop.run(task);
-
-    const history = await sessionManager.getHistory('loop-job-1');
-    // MockProvider yields: thinking, text, done
-    expect(history).toHaveLength(3);
-    expect(history[0]!.type).toBe('thinking');
-    expect(history[1]!.type).toBe('text');
-    expect(history[2]!.type).toBe('done');
+  it('accepts ZoraExecutionOptions and stores them', () => {
+    const loop = new ExecutionLoop(baseOptions);
+    expect(loop.options).toBe(baseOptions);
   });
 
-  it('respects max turns', async () => {
-    // Override max turns to 1
-    loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager, maxTurns: 1 });
-    
-    await loop.run(task);
-
-    const history = await sessionManager.getHistory('loop-job-1');
-    // Should have: thinking, then error (max turns)
-    expect(history.some(e => e.type === 'error' && (e.content as any).message.includes('Maximum turns'))).toBe(true);
+  it('stores systemPrompt correctly', () => {
+    const loop = new ExecutionLoop(baseOptions);
+    expect(loop.options.systemPrompt).toBe('You are Zora, a helpful agent.');
   });
 
-  it('handles tool calls through the loop', async () => {
-    // Configure mock to yield a tool call
-    provider.setMockEvents([
-      { type: 'tool_call', timestamp: new Date(), content: { tool: 'read_file', arguments: { path: '/tmp/test.txt' }, toolCallId: 'c1' } },
-      { type: 'done', timestamp: new Date(), content: { text: 'Done' } }
-    ]);
-
-    await loop.run(task);
-    
-    const history = await sessionManager.getHistory('loop-job-1');
-    expect(history.some(e => e.type === 'tool_result')).toBe(true);
+  it('stores model and maxTurns correctly', () => {
+    const loop = new ExecutionLoop(baseOptions);
+    expect(loop.options.model).toBe('sonnet');
+    expect(loop.options.maxTurns).toBe(50);
   });
 
-  it('intercepts steering messages and restarts execution', async () => {
-    // 1. Queue a steer message
-    await steeringManager.init();
-    await steeringManager.injectMessage({
-      type: 'steer',
-      jobId: 'loop-job-1',
-      source: 'web',
-      author: 'rich',
-      message: 'Stop being so helpful',
-      timestamp: new Date(),
-    });
-
-    // 2. Run the loop
-    await loop.run(task);
-
-    // 3. Verify steering was injected into history
-    const history = await sessionManager.getHistory('loop-job-1');
-    expect(history.some(e => e.type === 'steering' && (e.content as any).text.includes('Stop being so helpful'))).toBe(true);
-    
-    // 4. Verify steering was archived
-    const pending = await steeringManager.getPendingMessages('loop-job-1');
-    expect(pending).toHaveLength(0);
+  it('stores permissionMode correctly', () => {
+    const loop = new ExecutionLoop(baseOptions);
+    expect(loop.options.permissionMode).toBe('default');
   });
 
-  it('interrupts execution when a steering message arrives mid-task', async () => {
-    // 1. Create a provider that yields slowly
-    let yieldCount = 0;
-    const slowExecute = async function* () {
-      yield { type: 'thinking', timestamp: new Date(), content: { text: 'Thinking...' } };
-      yieldCount++;
-      
-      // Wait for steering to be injected
-      while (yieldCount < 2) {
-        await new Promise(r => setTimeout(r, 10));
-      }
-
-      yield { type: 'text', timestamp: new Date(), content: { text: 'I should not reach this' } };
+  it('stores MCP server config', () => {
+    const opts: ZoraExecutionOptions = {
+      ...baseOptions,
+      mcpServers: {
+        github: { type: 'stdio', command: 'gh-mcp', args: ['--token', 'xxx'] },
+        web: { type: 'sse', url: 'http://localhost:9000/mcp' },
+      },
     };
+    const loop = new ExecutionLoop(opts);
+    expect(loop.options.mcpServers).toHaveProperty('github');
+    expect(loop.options.mcpServers).toHaveProperty('web');
+    expect(loop.options.mcpServers!.github.type).toBe('stdio');
+    expect(loop.options.mcpServers!.web.url).toBe('http://localhost:9000/mcp');
+  });
 
-    vi.spyOn(provider, 'execute').mockImplementation(slowExecute as any);
-    vi.spyOn(provider, 'abort').mockImplementation(async () => {
-      yieldCount = 100; // Stop the slow generator
-    });
+  it('stores agent definitions', () => {
+    const opts: ZoraExecutionOptions = {
+      ...baseOptions,
+      agents: {
+        researcher: {
+          description: 'Searches codebases',
+          prompt: 'You are a research agent.',
+          model: 'haiku',
+        },
+      },
+    };
+    const loop = new ExecutionLoop(opts);
+    expect(loop.options.agents).toHaveProperty('researcher');
+    expect(loop.options.agents!.researcher.model).toBe('haiku');
+  });
 
-    // 2. Start the loop in background
-    const runPromise = loop.run(task);
+  it('stores canUseTool callback', () => {
+    const canUseTool = async () => ({ behavior: 'allow' as const, updatedInput: {} });
+    const opts: ZoraExecutionOptions = { ...baseOptions, canUseTool };
+    const loop = new ExecutionLoop(opts);
+    expect(loop.options.canUseTool).toBe(canUseTool);
+  });
 
-    // 3. Wait for first yield, then inject steering
-    await new Promise(r => setTimeout(r, 50));
-    await steeringManager.init();
-    await steeringManager.injectMessage({
-      type: 'steer',
-      jobId: 'loop-job-1',
-      source: 'web',
-      author: 'rich',
-      message: 'Change of plans',
-      timestamp: new Date(),
-    });
+  it('stores onMessage callback', () => {
+    const onMessage = () => {};
+    const opts: ZoraExecutionOptions = { ...baseOptions, onMessage };
+    const loop = new ExecutionLoop(opts);
+    expect(loop.options.onMessage).toBe(onMessage);
+  });
 
-    // 4. Trigger the generator to "continue" (it will be interrupted by the loop check)
-    yieldCount = 2;
-
-    await runPromise;
-
-    // 5. Verify abort was called and history contains steering
-    expect(provider.abort).toHaveBeenCalledWith('loop-job-1');
-    const history = await sessionManager.getHistory('loop-job-1');
-    expect(history.some(e => e.type === 'steering' && (e.content as any).text === 'Change of plans')).toBe(true);
+  it('accepts minimal options', () => {
+    const loop = new ExecutionLoop({});
+    expect(loop.options).toEqual({});
+    expect(loop.options.systemPrompt).toBeUndefined();
+    expect(loop.options.mcpServers).toBeUndefined();
   });
 });
