@@ -130,15 +130,23 @@ export class DashboardServer {
       }
     });
 
-    /** GET /api/system — Real system metrics */
+    /** GET /api/system — Real system metrics (cached for 5s to avoid expensive listSessions per poll) */
+    let systemCache: { data: Record<string, unknown>; timestamp: number } | null = null;
+    const SYSTEM_CACHE_TTL = 5000;
+
     this._app.get('/api/system', async (_req, res) => {
       try {
+        const now = Date.now();
+        if (systemCache && now - systemCache.timestamp < SYSTEM_CACHE_TTL) {
+          return res.json(systemCache.data);
+        }
+
         const uptime = process.uptime();
         const mem = process.memoryUsage();
         const sessions = await sessionManager.listSessions();
-        const activeJobs = sessions.filter(s => s.status === 'running').length;
+        const activeJobs = sessions.reduce((count, s) => s.status === 'running' ? count + 1 : count, 0);
 
-        res.json({
+        const response = {
           ok: true,
           uptime: Math.floor(uptime),
           memory: {
@@ -149,7 +157,10 @@ export class DashboardServer {
           activeJobs,
           totalJobs: sessions.length,
           version: '0.6.0',
-        });
+        };
+
+        systemCache = { data: response, timestamp: now };
+        res.json(response);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         res.status(500).json({ ok: false, error: message });

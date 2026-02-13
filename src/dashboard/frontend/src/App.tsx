@@ -38,7 +38,7 @@ const App: React.FC = () => {
         const res = await axios.get('/api/health');
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
-        console.error('Health check failed');
+        console.error('Health check failed', err);
       }
     };
 
@@ -51,9 +51,12 @@ const App: React.FC = () => {
     const fetchSystem = async () => {
       try {
         const res = await axios.get('/api/system');
-        if (res.data.ok) setSystem(res.data);
-      } catch {
-        // System endpoint may not be available
+        if (res.data.ok) {
+          const { uptime, memory, activeJobs, totalJobs, version } = res.data;
+          setSystem({ uptime, memory, activeJobs, totalJobs, version });
+        }
+      } catch (err) {
+        console.error('Failed to fetch system info:', err);
       }
     };
 
@@ -74,7 +77,7 @@ const App: React.FC = () => {
       setLogs(prev => [`Message sent: ${steerMsg}`, ...prev].slice(0, 10));
       setSteerMsg('');
     } catch (err) {
-      setLogs(prev => ['Failed to send message', ...prev]);
+      setLogs(prev => ['Failed to send message', ...prev].slice(0, 10));
     }
   };
 
