@@ -218,7 +218,8 @@ program
 program
   .command('start')
   .description('Start the agent daemon')
-  .action(async () => {
+  .option('--no-open', 'Do not auto-open the dashboard in browser')
+  .action(async (opts) => {
     const pidFile = getPidFilePath();
 
     // Check if already running
@@ -255,6 +256,17 @@ program
       fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
       child.unref();
       console.log(`Zora daemon started (PID: ${child.pid}).`);
+
+      const dashboardPort = 7070;
+      console.log(`Dashboard: http://localhost:${dashboardPort}`);
+
+      if (opts.open !== false) {
+        // Auto-open browser (non-blocking, ignore errors)
+        const { exec } = await import('node:child_process');
+        const openCmd = process.platform === 'darwin' ? 'open' :
+                        process.platform === 'win32' ? 'start' : 'xdg-open';
+        exec(`${openCmd} http://localhost:${dashboardPort}`, () => {});
+      }
     } else {
       console.error('Failed to start daemon.');
     }
