@@ -242,7 +242,7 @@ program
     }
 
     // Fork a detached child process
-    const { fork } = await import('node:child_process');
+    const { fork, exec } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
 
@@ -257,15 +257,30 @@ program
       child.unref();
       console.log(`Zora daemon started (PID: ${child.pid}).`);
 
-      const dashboardPort = 7070;
-      console.log(`Dashboard: http://localhost:${dashboardPort}`);
+      // Read dashboard port from config, falling back to 7070
+      let dashboardPort = 7070;
+      try {
+        const configPath = path.join(os.homedir(), '.zora', 'config.toml');
+        if (fs.existsSync(configPath)) {
+          const { parse: parseTOML } = await import('smol-toml');
+          const raw = parseTOML(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+          const steering = raw['steering'] as Record<string, unknown> | undefined;
+          if (steering?.['dashboard_port']) {
+            dashboardPort = steering['dashboard_port'] as number;
+          }
+        }
+      } catch {
+        // Use default port if config can't be read
+      }
+      const dashboardUrl = `http://localhost:${dashboardPort}`;
+      console.log(`Dashboard: ${dashboardUrl}`);
 
       if (opts.open !== false) {
         // Auto-open browser (non-blocking, ignore errors)
-        const { exec } = await import('node:child_process');
-        const openCmd = process.platform === 'darwin' ? 'open' :
-                        process.platform === 'win32' ? 'start' : 'xdg-open';
-        exec(`${openCmd} http://localhost:${dashboardPort}`, () => {});
+        const openCmd = process.platform === 'darwin' ? `open ${dashboardUrl}` :
+                        process.platform === 'win32' ? `start "" ${dashboardUrl}` :
+                        `xdg-open ${dashboardUrl}`;
+        exec(openCmd, () => {});
       }
     } else {
       console.error('Failed to start daemon.');
