@@ -1,12 +1,19 @@
 {
   "name": "zora",
   "version": "0.6.0",
-  "description": "Long-running autonomous personal AI agent for macOS — multi-provider, capability-routed, memory-enriched",
+  "description": "Long-running autonomous personal AI agent — multi-provider, capability-routed, memory-enriched",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "zora": "dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "examples"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
@@ -16,7 +23,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build && npm run test:unit"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -32,7 +40,6 @@
     "autonomous",
     "claude",
     "gemini",
-    "macos",
     "llm",
     "orchestrator"
   ],

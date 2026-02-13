@@ -9,6 +9,7 @@
  */
 
 import { Command } from 'commander';
+import * as clack from '@clack/prompts';
 import { loadConfig } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
@@ -28,12 +29,13 @@ import { registerTeamCommands } from './team-commands.js';
 import { registerSteerCommands } from './steer-commands.js';
 import { registerSkillCommands } from './skill-commands.js';
 import { registerInitCommand } from './init-command.js';
+import { runDoctorChecks } from './doctor.js';
 
 const program = new Command();
 
 program
   .name('zora')
-  .description('Long-running autonomous personal AI agent for macOS')
+  .description('Long-running autonomous personal AI agent')
   .version('0.6.0');
 
 /**
@@ -77,7 +79,7 @@ async function setupContext() {
 
   // Ensure config exists
   if (!fs.existsSync(configPath)) {
-    console.error(`Config not found at ${configPath}. Run \`zora init\` first.`);
+    console.error("Zora isn't configured yet. Run 'zora init' to set up in 2 minutes.");
     process.exit(1);
   }
 
@@ -157,18 +159,20 @@ program
     await orchestrator.boot();
 
     try {
-      console.log('Starting task...');
+      const spinner = clack.spinner();
+      spinner.start('Running task...');
+
       const result = await orchestrator.submitTask({
         prompt,
         model: opts.model,
         maxTurns: opts.maxTurns,
       });
 
+      spinner.stop('Task complete.');
+
       if (result) {
         console.log('\n' + result);
       }
-
-      console.log('Task complete.');
     } finally {
       await orchestrator.shutdown();
     }
@@ -179,6 +183,15 @@ program
   .command('status')
   .description('Check the status of the agent and providers')
   .action(async () => {
+    const configDir = path.join(os.homedir(), '.zora');
+    const configPath = path.join(configDir, 'config.toml');
+
+    // Check if config exists before calling setupContext
+    if (!fs.existsSync(configPath)) {
+      console.log("Zora isn't set up yet. Run `zora init` to get started in under 2 minutes.");
+      return;
+    }
+
     const { config } = await setupContext();
     const pidFile = getPidFilePath();
 
@@ -306,6 +319,28 @@ program
         // Already removed
       }
       console.log('Daemon was not running (cleaned up stale pidfile).');
+    }
+  });
+
+// Doctor command - check system dependencies
+program
+  .command('doctor')
+  .description('Check system dependencies and configuration')
+  .action(async () => {
+    const result = await runDoctorChecks();
+
+    console.log('Zora Doctor Report:');
+    console.log(`  Node.js: ${result.node.found ? '✓' : '✗'} ${result.node.version}`);
+    console.log(`  Claude CLI: ${result.claude.found ? '✓' : '✗'}${result.claude.path ? ` (${result.claude.path})` : ''}`);
+    console.log(`  Gemini CLI: ${result.gemini.found ? '✓' : '✗'}${result.gemini.path ? ` (${result.gemini.path})` : ''}`);
+
+    if (!result.node.found) {
+      console.log('\n⚠️  Node.js 20+ is required. Please upgrade.');
+    }
+    if (!result.claude.found && !result.gemini.found) {
+      console.log('\n⚠️  No AI provider CLIs found. Install at least one:');
+      console.log('    Claude: npm install -g @anthropic-ai/claude');
+      console.log('    Gemini: npm install -g @google/generative-ai-cli');
     }
   });
 
