@@ -30,6 +30,14 @@ export class TeamManager {
   }
 
   /**
+   * Validates the team name and returns the team directory path.
+   */
+  private _teamDir(name: string): string {
+    validateName(name, 'teamName');
+    return path.join(this._teamsDir, name);
+  }
+
+  /**
    * Creates a new team with the given members.
    */
   async createTeam(
@@ -43,7 +51,7 @@ export class TeamManager {
       throw new Error(`Coordinator "${coordinatorId}" must be one of the team members`);
     }
 
-    const teamDir = path.join(this._teamsDir, name);
+    const teamDir = this._teamDir(name);
     await fs.mkdir(path.join(teamDir, 'inboxes'), { recursive: true });
 
     const fullMembers: AgentMember[] = members.map((m) => ({
@@ -77,7 +85,7 @@ export class TeamManager {
    * Reads the team config, or null if not found.
    */
   async getTeam(name: string): Promise<TeamConfig | null> {
-    const configPath = path.join(this._teamsDir, name, 'config.json');
+    const configPath = path.join(this._teamDir(name), 'config.json');
     try {
       const content = await fs.readFile(configPath, 'utf8');
       return JSON.parse(content) as TeamConfig;
@@ -117,11 +125,16 @@ export class TeamManager {
     const config = await this.getTeam(teamName);
     if (!config) throw new Error(`Team "${teamName}" not found`);
 
+    // Check for duplicate member
+    if (config.members.some((m) => m.agentId === member.agentId)) {
+      throw new Error(`Agent "${member.agentId}" is already a member of team "${teamName}"`);
+    }
+
     const fullMember: AgentMember = { ...member, isActive: true };
     config.members.push(fullMember);
 
     await writeAtomic(
-      path.join(this._teamsDir, teamName, 'config.json'),
+      path.join(this._teamDir(teamName), 'config.json'),
       JSON.stringify(config, null, 2),
     );
 
@@ -140,10 +153,14 @@ export class TeamManager {
       throw new Error(`Cannot remove coordinator "${agentId}" from team "${teamName}"`);
     }
 
+    if (!config.members.some((m) => m.agentId === agentId)) {
+      throw new Error(`Agent "${agentId}" not found in team "${teamName}"`);
+    }
+
     config.members = config.members.filter((m) => m.agentId !== agentId);
 
     await writeAtomic(
-      path.join(this._teamsDir, teamName, 'config.json'),
+      path.join(this._teamDir(teamName), 'config.json'),
       JSON.stringify(config, null, 2),
     );
   }
@@ -165,7 +182,7 @@ export class TeamManager {
     member.isActive = isActive;
 
     await writeAtomic(
-      path.join(this._teamsDir, teamName, 'config.json'),
+      path.join(this._teamDir(teamName), 'config.json'),
       JSON.stringify(config, null, 2),
     );
   }
@@ -174,8 +191,7 @@ export class TeamManager {
    * Removes the entire team directory tree.
    */
   async teardownTeam(name: string): Promise<void> {
-    validateName(name, 'teamName');
-    const teamDir = path.join(this._teamsDir, name);
+    const teamDir = this._teamDir(name);
     await fs.rm(teamDir, { recursive: true, force: true });
   }
 

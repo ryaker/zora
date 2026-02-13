@@ -15,7 +15,6 @@ import {
   type AgentDefinition,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
-import type { McpServerEntry } from '../types.js';
 
 // ─── SDK-compatible option types ─────────────────────────────────────
 // Re-export SDK types with Sdk prefix for consistency
@@ -36,7 +35,7 @@ export interface ZoraExecutionOptions {
   model?: string;
   maxTurns?: number;
   allowedTools?: string[];
-  mcpServers?: Record<string, McpServerEntry>;
+  mcpServers?: Record<string, Record<string, unknown>>;
   agents?: Record<string, SdkAgentDefinition>;
   hooks?: Partial<Record<string, SdkHookMatcher[]>>;
   canUseTool?: SdkCanUseTool;

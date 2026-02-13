@@ -85,7 +85,7 @@ program
   .option('-m, --model <model>', 'Model to use')
   .option('--max-turns <n>', 'Maximum turns', parseInt)
   .action(async (prompt, opts) => {
-    const { config, memoryManager } = await setupContext();
+    const { config, engine, memoryManager } = await setupContext();
 
     // Load context from memory tiers
     const memoryContext = await memoryManager.loadContext();
@@ -105,9 +105,10 @@ program
       systemPrompt,
       model: opts.model,
       maxTurns: opts.maxTurns,
-      mcpServers: mcpServers as any,
+      mcpServers,
       permissionMode: 'default',
       cwd: process.cwd(),
+      canUseTool: engine.createCanUseTool(),
     });
 
     console.log('Starting task...');

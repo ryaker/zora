@@ -25,9 +25,9 @@ const INJECTION_PATTERNS: RegExp[] = [
 // Encoded variants (base64 / hex of common injection phrases)
 const ENCODED_INJECTION_PATTERNS: RegExp[] = [
   // "ignore previous instructions" in base64
-  /aWdub3JlIHByZXZpb3VzIGluc3RydWN0aW9ucw/i,
+  /aWdub3JlIHByZXZpb3VzIGluc3RydWN0aW9ucw=?/i,
   // "you are now" in base64
-  /eW91IGFyZSBub3c/i,
+  /eW91IGFyZSBub3c=?/i,
 ];
 
 // ─── Suspicious Output Patterns ─────────────────────────────────────

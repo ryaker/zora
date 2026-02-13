@@ -211,14 +211,21 @@ export class AuditLogger {
     // Ensure parent directory exists
     await fs.mkdir(path.dirname(this._logPath), { recursive: true });
 
-    // Read existing entries to get the last hash and counter
+    // Read existing entries to get the last valid hash and counter
     try {
       const content = await fs.readFile(this._logPath, 'utf-8');
       const lines = content.trim().split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        const lastEntry = JSON.parse(lines[lines.length - 1]!) as AuditEntry;
-        this._previousHash = lastEntry.hash;
-        this._entryCounter = lines.length;
+
+      // Iterate backwards to find the last valid entry (resilient to corruption)
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]!) as AuditEntry;
+          this._previousHash = entry.hash;
+          this._entryCounter = lines.length;
+          break;
+        } catch {
+          // Skip malformed trailing lines, try previous
+        }
       }
     } catch {
       // File doesn't exist yet, starting fresh
