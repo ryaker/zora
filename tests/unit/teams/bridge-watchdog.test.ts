@@ -16,6 +16,7 @@ describe('BridgeWatchdog', () => {
       start: vi.fn(),
       stop: vi.fn(),
       isRunning: vi.fn().mockReturnValue(true),
+      setOnPollComplete: vi.fn(),
     } as unknown as GeminiBridge;
   });
 
