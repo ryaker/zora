@@ -20,6 +20,11 @@ import type { TaskContext, ZoraPolicy } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { registerMemoryCommands } from './memory-commands.js';
+import { registerAuditCommands } from './audit-commands.js';
+import { registerEditCommands } from './edit-commands.js';
+import { registerTeamCommands } from './team-commands.js';
+import { registerSteerCommands } from './steer-commands.js';
 
 const program = new Command();
 
@@ -144,5 +149,13 @@ program
     console.log('Stopping Zora daemon...');
     console.log('Daemon stopped.');
   });
+
+// Register new command groups
+const configDir = path.join(os.homedir(), '.zora');
+registerMemoryCommands(program, setupContext);
+registerAuditCommands(program, () => path.join(configDir, 'audit.jsonl'));
+registerEditCommands(program, configDir);
+registerTeamCommands(program, configDir);
+registerSteerCommands(program, configDir);
 
 program.parse();
