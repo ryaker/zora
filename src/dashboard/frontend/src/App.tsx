@@ -332,7 +332,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Policy & Info */}
+        {/* Right Column: Policy + Session Usage */}
         <div className="col-span-3 flex flex-col gap-4">
           <div className="lcars-bar bg-zora-amber">Security Policy</div>
           <div className="flex-1 lcars-panel border-zora-amber">
