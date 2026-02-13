@@ -320,12 +320,14 @@ export class GeminiProvider implements LLMProvider {
   private async * _streamToLines(stream: NodeJS.ReadableStream): AsyncGenerator<string> {
     let buffer = '';
     let totalBytes = 0;
+    let truncated = false;
     for await (const chunk of stream) {
       const str = chunk.toString();
       totalBytes += str.length;
       if (totalBytes > GeminiProvider.MAX_BUFFER_SIZE) {
         console.warn(`[GeminiProvider] Output exceeded ${GeminiProvider.MAX_BUFFER_SIZE} bytes, truncating stream.`);
         yield '[Output truncated: exceeded maximum buffer size]';
+        truncated = true;
         break;
       }
       buffer += str;
@@ -335,7 +337,7 @@ export class GeminiProvider implements LLMProvider {
         yield line;
       }
     }
-    if (buffer) yield buffer;
+    if (buffer && !truncated) yield buffer;
   }
 
   private async _collectStderr(stream: NodeJS.ReadableStream): Promise<string> {

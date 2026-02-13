@@ -339,6 +339,8 @@ export class Orchestrator {
             // Max retries exceeded or enqueue failed
           }
 
+          // Mark so the outer catch doesn't re-trigger failover
+          (error as any)[Orchestrator._FAILOVER_SENTINEL] = true;
           throw error;
         }
       }

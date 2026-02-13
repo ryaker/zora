@@ -193,7 +193,13 @@ export class DashboardServer {
   broadcastEvent(event: { type: string; data: unknown }): void {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of this._sseClients) {
-      client.write(payload);
+      try {
+        client.write(payload);
+      } catch {
+        // Client disconnected — remove and clean up
+        this._sseClients.delete(client);
+        try { client.end(); } catch { /* already closed */ }
+      }
     }
   }
 

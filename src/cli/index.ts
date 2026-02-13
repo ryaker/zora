@@ -233,7 +233,8 @@ program
 
     // Fork a detached child process
     const { fork } = await import('node:child_process');
-    const daemonScript = path.join(path.dirname(new URL(import.meta.url).pathname), 'daemon.js');
+    const { fileURLToPath } = await import('node:url');
+    const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
 
     // Check if daemon script exists; if not, run inline
     const child = fork(daemonScript, [], {
