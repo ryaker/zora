@@ -103,16 +103,27 @@ Zora is in active development (v0.6.0). This table reflects what actually works 
 
 ![Divider](specs/v5/assets/lcars_divider.svg)
 
+## Dashboard
+
+After starting Zora, open `http://localhost:7070` to monitor tasks, see provider status, and send messages to running jobs. First-time users will see a welcome screen with quick-start examples.
+
+New to Zora? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — paste the prompt into any AI chatbot (ChatGPT, Claude, Gemini) for a guided walkthrough of installation and configuration.
+
+---
+
+![Divider](specs/v5/assets/lcars_divider.svg)
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | **[QUICKSTART.md](QUICKSTART.md)** | Get up and running in 5 minutes |
-| **[USE_CASES.md](USE_CASES.md)** | Real-world examples for developers, writers, and business owners |
-| **[SECURITY.md](SECURITY.md)** | Plain-English security guide and policy configuration |
-| **[ROUTINES_COOKBOOK.md](ROUTINES_COOKBOOK.md)** | Copy-paste recipes for scheduled tasks |
+| **[USE_CASES.md](USE_CASES.md)** | Real-world examples and workflow patterns |
+| **[SECURITY.md](SECURITY.md)** | Policy configuration and audit logging |
+| **[ROUTINES_COOKBOOK.md](ROUTINES_COOKBOOK.md)** | Recipes for scheduled tasks |
 | **[SETUP_GUIDE.md](SETUP_GUIDE.md)** | Detailed installation and configuration |
 | **[docs/BEGINNERS_GUIDE.md](docs/BEGINNERS_GUIDE.md)** | In-depth usage guide |
+| **[docs/AI_SETUP_ASSISTANT.md](docs/AI_SETUP_ASSISTANT.md)** | Interactive AI-guided setup |
 
 ## Contributing
 
