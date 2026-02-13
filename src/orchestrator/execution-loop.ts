@@ -7,38 +7,27 @@
  * MCP server management, subagent orchestration, hooks, and permissions.
  */
 
-import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type PermissionMode,
+  type HookCallback,
+  type CanUseTool,
+  type AgentDefinition,
+} from '@anthropic-ai/claude-agent-sdk';
+import type { SDKMessage } from '../providers/index.js';
 import type { McpServerEntry } from '../types.js';
 
 // ─── SDK-compatible option types ─────────────────────────────────────
+// Re-export SDK types with Sdk prefix for consistency
 
-export type SdkPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-
-export type SdkHookCallback = (
-  input: Record<string, unknown>,
-  toolUseID: string | undefined,
-  options: { signal: AbortSignal },
-) => Promise<Record<string, unknown>>;
+export type SdkPermissionMode = PermissionMode;
+export type SdkHookCallback = HookCallback;
+export type SdkCanUseTool = CanUseTool;
+export type SdkAgentDefinition = AgentDefinition;
 
 export interface SdkHookMatcher {
   matcher?: string;
   hooks: SdkHookCallback[];
-}
-
-export type SdkCanUseTool = (
-  toolName: string,
-  input: Record<string, unknown>,
-  options: { signal: AbortSignal },
-) => Promise<
-  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
-  | { behavior: 'deny'; message: string }
->;
-
-export interface SdkAgentDefinition {
-  description: string;
-  prompt: string;
-  tools?: string[];
-  model?: 'sonnet' | 'opus' | 'haiku' | 'inherit';
 }
 
 export interface ZoraExecutionOptions {

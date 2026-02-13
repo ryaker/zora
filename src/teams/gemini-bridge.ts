@@ -106,7 +106,7 @@ export class GeminiBridge {
 
   private async _executeTask(taskText: string, fromAgent: string): Promise<void> {
     return new Promise<void>((resolve) => {
-      const child = spawn(this._geminiCliPath, [taskText], {
+      const child = spawn(this._geminiCliPath, ['chat', '--prompt', taskText], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -146,7 +146,15 @@ export class GeminiBridge {
       child.on('error', (err) => {
         this._activeProcess = null;
         console.error('[GeminiBridge] Process error:', err);
-        resolve();
+
+        // Send error result back to requesting agent
+        this._mailbox
+          .send(this._teamName, fromAgent, {
+            type: 'result',
+            text: `Error (spawn failure): ${err.message}`,
+          })
+          .then(() => resolve())
+          .catch(() => resolve());
       });
     });
   }

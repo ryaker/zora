@@ -155,6 +155,11 @@ export class FlagManager {
     }
     const entry = JSON.parse(content) as FlagEntry;
 
+    // Only resolve if still pending to avoid TOCTOU race
+    if (entry.status !== 'pending_review') {
+      return; // Already resolved
+    }
+
     entry.status = status;
     entry.resolvedAt = new Date().toISOString();
     if (reason) {

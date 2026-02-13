@@ -13,6 +13,15 @@ import { writeAtomic } from '../utils/fs.js';
 import { Mailbox } from './mailbox.js';
 import type { AgentMember, TeamConfig, MailboxMessage } from './team-types.js';
 
+/**
+ * Validates that a name does not contain path separators or traversal sequences.
+ */
+function validateName(name: string, label: string): void {
+  if (/[/\\]/.test(name) || name.includes('..')) {
+    throw new Error(`Invalid ${label}: must not contain path separators or ".." (got "${name}")`);
+  }
+}
+
 export class TeamManager {
   private readonly _teamsDir: string;
 
@@ -29,6 +38,11 @@ export class TeamManager {
     coordinatorId: string,
     persistent = false,
   ): Promise<TeamConfig> {
+    // Validate that coordinator is one of the members
+    if (!members.some((m) => m.agentId === coordinatorId)) {
+      throw new Error(`Coordinator "${coordinatorId}" must be one of the team members`);
+    }
+
     const teamDir = path.join(this._teamsDir, name);
     await fs.mkdir(path.join(teamDir, 'inboxes'), { recursive: true });
 
@@ -160,6 +174,7 @@ export class TeamManager {
    * Removes the entire team directory tree.
    */
   async teardownTeam(name: string): Promise<void> {
+    validateName(name, 'teamName');
     const teamDir = path.join(this._teamsDir, name);
     await fs.rm(teamDir, { recursive: true, force: true });
   }

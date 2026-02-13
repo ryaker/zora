@@ -221,11 +221,11 @@ describe('createCanUseTool', () => {
     expect(result.behavior).toBe('allow');
   });
 
-  it('allows Bash without command input', async () => {
+  it('denies Bash without command input', async () => {
     const engine = new PolicyEngine(defaultPolicy);
     const canUseTool = engine.createCanUseTool();
 
     const result = await canUseTool('Bash', {}, { signal });
-    expect(result.behavior).toBe('allow');
+    expect(result.behavior).toBe('deny');
   });
 });

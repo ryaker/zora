@@ -98,7 +98,7 @@ export function validateOutput(toolCall: {
 
     // Check for modifications to critical config files
     for (const criticalPath of CRITICAL_PATHS) {
-      if (command.includes(criticalPath) && (/\b(rm|mv|sed|truncate)\b/.test(command) || command.includes('>'))) {
+      if (command.includes(criticalPath) && (/\b(?:rm|mv|sed|truncate)\b/.test(command) || />/.test(command))) {
         return {
           valid: false,
           reason: `Suspicious pattern: shell command modifying critical file ${criticalPath}`,
@@ -111,7 +111,10 @@ export function validateOutput(toolCall: {
   if (tool === 'write_file' || tool === 'create_file') {
     const targetPath = String(args['path'] ?? args['file_path'] ?? '');
     for (const criticalPath of CRITICAL_PATHS) {
-      if (targetPath.endsWith(criticalPath) || targetPath.includes(`/${criticalPath}`)) {
+      // Only block if exactly the critical file or preceded by a path separator
+      if (targetPath === criticalPath ||
+          targetPath.endsWith(`/${criticalPath}`) ||
+          targetPath.endsWith(`\\${criticalPath}`)) {
         return {
           valid: false,
           reason: `Blocked: attempted write to critical configuration file ${criticalPath}`,

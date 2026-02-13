@@ -115,6 +115,10 @@ export class StructuredMemory {
   // ── Private helpers ──────────────────────────────────────────────
 
   private _itemPath(id: string): string {
+    // Validate id to prevent path traversal
+    if (/[/\\]/.test(id) || id.includes('..')) {
+      throw new Error(`Invalid item id: ${id}`);
+    }
     return path.join(this._itemsDir, `${id}.json`);
   }
 

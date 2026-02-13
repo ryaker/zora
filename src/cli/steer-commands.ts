@@ -57,6 +57,21 @@ export function registerSteerCommands(
       const fm = new FlagManager(path.join(baseDir, 'flags'), {
         timeoutMs: flagTimeoutMs,
       });
+
+      // Validate that the jobId matches the flag's actual job
+      const flags = await fm.getFlags();
+      const flag = flags.find(f => f.flagId === flagId);
+      if (!flag) {
+        console.error(`Flag not found: ${flagId}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (flag.jobId !== jobId) {
+        console.error(`Job ID mismatch: flag ${flagId} belongs to job ${flag.jobId}, not ${jobId}`);
+        process.exitCode = 1;
+        return;
+      }
+
       await fm.approve(flagId);
       const id = await injectFlagDecision(baseDir, jobId, flagId, 'approve');
       console.log(`Flag approved: ${id}`);
@@ -70,6 +85,21 @@ export function registerSteerCommands(
       const fm = new FlagManager(path.join(baseDir, 'flags'), {
         timeoutMs: flagTimeoutMs,
       });
+
+      // Validate that the jobId matches the flag's actual job
+      const flags = await fm.getFlags();
+      const flag = flags.find(f => f.flagId === flagId);
+      if (!flag) {
+        console.error(`Flag not found: ${flagId}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (flag.jobId !== jobId) {
+        console.error(`Job ID mismatch: flag ${flagId} belongs to job ${flag.jobId}, not ${jobId}`);
+        process.exitCode = 1;
+        return;
+      }
+
       await fm.reject(flagId, rejectReason);
       const id = await injectFlagDecision(
         baseDir,

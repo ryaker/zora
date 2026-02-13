@@ -167,56 +167,72 @@ export class PolicyEngine {
       // Bash / shell commands
       if (toolName === 'Bash') {
         const command = input['command'] as string | undefined;
-        if (command) {
-          const result = this.validateCommand(command);
-          if (!result.allowed) {
-            return {
-              behavior: 'deny' as const,
-              message: result.reason ?? 'Command denied by policy',
-            };
-          }
+        if (!command) {
+          return {
+            behavior: 'deny' as const,
+            message: 'Bash tool invoked without a command — denied by policy',
+          };
+        }
+        const result = this.validateCommand(command);
+        if (!result.allowed) {
+          return {
+            behavior: 'deny' as const,
+            message: result.reason ?? 'Command denied by policy',
+          };
         }
       }
 
       // File operations: Read, Write, Edit
       if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
         const filePath = input['file_path'] as string | undefined;
-        if (filePath) {
-          const result = this.validatePath(filePath);
-          if (!result.allowed) {
-            return {
-              behavior: 'deny' as const,
-              message: result.reason ?? 'Path denied by policy',
-            };
-          }
+        if (!filePath) {
+          return {
+            behavior: 'deny' as const,
+            message: `${toolName} tool invoked without a file_path — denied by policy`,
+          };
+        }
+        const result = this.validatePath(filePath);
+        if (!result.allowed) {
+          return {
+            behavior: 'deny' as const,
+            message: result.reason ?? 'Path denied by policy',
+          };
         }
       }
 
       // Glob — validate the search path if provided
       if (toolName === 'Glob') {
         const globPath = input['path'] as string | undefined;
-        if (globPath) {
-          const result = this.validatePath(globPath);
-          if (!result.allowed) {
-            return {
-              behavior: 'deny' as const,
-              message: result.reason ?? 'Path denied by policy',
-            };
-          }
+        if (!globPath) {
+          return {
+            behavior: 'deny' as const,
+            message: 'Glob tool invoked without a path — denied by policy',
+          };
+        }
+        const result = this.validatePath(globPath);
+        if (!result.allowed) {
+          return {
+            behavior: 'deny' as const,
+            message: result.reason ?? 'Path denied by policy',
+          };
         }
       }
 
       // Grep — validate the search path if provided
       if (toolName === 'Grep') {
         const grepPath = input['path'] as string | undefined;
-        if (grepPath) {
-          const result = this.validatePath(grepPath);
-          if (!result.allowed) {
-            return {
-              behavior: 'deny' as const,
-              message: result.reason ?? 'Path denied by policy',
-            };
-          }
+        if (!grepPath) {
+          return {
+            behavior: 'deny' as const,
+            message: 'Grep tool invoked without a path — denied by policy',
+          };
+        }
+        const result = this.validatePath(grepPath);
+        if (!result.allowed) {
+          return {
+            behavior: 'deny' as const,
+            message: result.reason ?? 'Path denied by policy',
+          };
         }
       }
 

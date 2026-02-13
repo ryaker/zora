@@ -72,26 +72,34 @@ export class AuditLogger {
     }
 
     const lines = content.trim().split('\n').filter(Boolean);
-    let entries = lines.map(line => JSON.parse(line) as AuditEntry);
+    const entries: AuditEntry[] = [];
+    for (const line of lines) {
+      try {
+        entries.push(JSON.parse(line) as AuditEntry);
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    let filteredEntries = entries;
 
     if (filter) {
       if (filter.jobId) {
-        entries = entries.filter(e => e.jobId === filter.jobId);
+        filteredEntries = filteredEntries.filter(e => e.jobId === filter.jobId);
       }
       if (filter.eventType) {
-        entries = entries.filter(e => e.eventType === filter.eventType);
+        filteredEntries = filteredEntries.filter(e => e.eventType === filter.eventType);
       }
       if (filter.startTime) {
         const start = filter.startTime;
-        entries = entries.filter(e => e.timestamp >= start);
+        filteredEntries = filteredEntries.filter(e => e.timestamp >= start);
       }
       if (filter.endTime) {
         const end = filter.endTime;
-        entries = entries.filter(e => e.timestamp <= end);
+        filteredEntries = filteredEntries.filter(e => e.timestamp <= end);
       }
     }
 
-    return entries;
+    return filteredEntries;
   }
 
   /**
@@ -111,7 +119,17 @@ export class AuditLogger {
     let expectedPreviousHash = GENESIS_HASH;
 
     for (let i = 0; i < lines.length; i++) {
-      const entry = JSON.parse(lines[i]!) as AuditEntry;
+      let entry: AuditEntry;
+      try {
+        entry = JSON.parse(lines[i]!) as AuditEntry;
+      } catch {
+        return {
+          valid: false,
+          entries: lines.length,
+          brokenAt: i,
+          reason: `Entry ${i} has malformed JSON`,
+        };
+      }
 
       // Check previous hash link
       if (entry.previousHash !== expectedPreviousHash) {

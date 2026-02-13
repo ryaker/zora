@@ -117,9 +117,11 @@ export class BridgeWatchdog {
           this._bridge.start();
           await this.writeHeartbeat();
 
-          state.restartCount = this._restartCount;
-          state.lastRestart = new Date().toISOString();
-          await this._writeState(state);
+          // Re-read state to avoid overwriting concurrent heartbeat updates
+          const freshState = await this._readState();
+          freshState.restartCount = this._restartCount;
+          freshState.lastRestart = new Date().toISOString();
+          await this._writeState(freshState);
         }
       }
     } catch (err) {

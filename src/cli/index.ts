@@ -9,7 +9,7 @@
  */
 
 import { Command } from 'commander';
-import { loadConfig } from '../config/loader.js';
+import { loadConfig, toSdkMcpServers } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
 import { SteeringManager } from '../steering/steering-manager.js';
@@ -97,13 +97,15 @@ program
     ].join('\n\n');
 
     // Build MCP servers from config
-    const mcpServers = config.mcp?.servers ?? {};
+    const mcpServers = config.mcp?.servers
+      ? toSdkMcpServers(config.mcp.servers)
+      : {};
 
     const loop = new ExecutionLoop({
       systemPrompt,
       model: opts.model,
       maxTurns: opts.maxTurns,
-      mcpServers,
+      mcpServers: mcpServers as any,
       permissionMode: 'default',
       cwd: process.cwd(),
     });

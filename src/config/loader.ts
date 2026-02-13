@@ -142,16 +142,24 @@ export function toSdkMcpServers(
   for (const [name, server] of Object.entries(servers)) {
     if (server.type === 'stdio' || (!server.type && server.command)) {
       // stdio transport
+      if (!server.command) {
+        console.warn(`Skipping MCP server "${name}": stdio transport requires a command`);
+        continue;
+      }
       result[name] = {
-        command: server.command!,
+        command: server.command,
         ...(server.args && { args: server.args }),
         ...(server.env && { env: server.env }),
       };
     } else {
       // HTTP or SSE transport
+      if (!server.url) {
+        console.warn(`Skipping MCP server "${name}": http/sse transport requires a url`);
+        continue;
+      }
       result[name] = {
         type: server.type ?? 'http',
-        url: server.url!,
+        url: server.url,
         ...(server.headers && { headers: server.headers }),
       };
     }

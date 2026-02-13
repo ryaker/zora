@@ -14,7 +14,7 @@ import type { SecretReference } from './security-types.js';
 
 const PBKDF2_ITERATIONS = 100_000;
 const KEY_LENGTH = 32; // 256 bits
-const IV_LENGTH = 16;
+const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D recommendation for GCM
 const SALT_LENGTH = 32;
 const AUTH_TAG_LENGTH = 16;
 
@@ -52,9 +52,11 @@ export class SecretsManager {
 
     try {
       await fs.access(this._secretsPath);
+      // Ensure existing file has correct permissions
+      await fs.chmod(this._secretsPath, 0o600);
     } catch {
       const empty: SecretsStore = { secrets: [] };
-      await fs.writeFile(this._secretsPath, JSON.stringify(empty), 'utf-8');
+      await fs.writeFile(this._secretsPath, JSON.stringify(empty), { encoding: 'utf-8', mode: 0o600 });
     }
   }
 
@@ -154,6 +156,8 @@ export class SecretsManager {
   }
 
   private async _writeStore(store: SecretsStore): Promise<void> {
-    await fs.writeFile(this._secretsPath, JSON.stringify(store, null, 2), 'utf-8');
+    const tmp = this._secretsPath + '.tmp';
+    await fs.writeFile(tmp, JSON.stringify(store, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    await fs.rename(tmp, this._secretsPath);
   }
 }
