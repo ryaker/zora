@@ -86,7 +86,8 @@ node dist/cli/index.js ask "Summarize my recent work from daily notes into MEMOR
 
 | Document | Description |
 |----------|-------------|
-| [SETUP_GUIDE.md](SETUP_GUIDE.md) | **Beginner-friendly setup guide. Start here.** |
+| [SETUP_GUIDE.md](SETUP_GUIDE.md) | **Step-by-step installation. Start here.** |
+| [docs/BEGINNERS_GUIDE.md](docs/BEGINNERS_GUIDE.md) | **What Zora can do & how to use it. Read this second.** |
 | [specs/v5/ZORA_AGENT_SPEC.md](specs/v5/ZORA_AGENT_SPEC.md) | Full technical specification. |
 | [specs/v5/IMPLEMENTATION_PLAN.md](specs/v5/IMPLEMENTATION_PLAN.md) | WSJF-prioritized build plan. |
 | [specs/v5/docs/ARCHITECTURE.md](specs/v5/docs/ARCHITECTURE.md) | System architecture overview. |
