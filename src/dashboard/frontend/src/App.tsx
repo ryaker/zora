@@ -10,12 +10,24 @@ interface ProviderStatus {
   canAutoRefresh: boolean;
 }
 
+const MAX_LOGS = 50;
+
+let logIdCounter = 0;
+
+interface LogEntry {
+  id: number;
+  message: string;
+}
+
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [taskPrompt, setTaskPrompt] = useState('');
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
-  const [logs, setLogs] = useState<string[]>(['Zora is running.', 'Waiting for tasks...']);
+  const [logs, setLogs] = useState<LogEntry[]>([
+    { id: ++logIdCounter, message: 'Zora is running.' },
+    { id: ++logIdCounter, message: 'Waiting for tasks...' },
+  ]);
   const [submitting, setSubmitting] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -25,7 +37,7 @@ const App: React.FC = () => {
         const res = await axios.get('/api/health');
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
-        console.error('Health check failed');
+        console.error('Health check failed', err);
       }
     };
 
@@ -46,25 +58,25 @@ const App: React.FC = () => {
           case 'connected':
             break;
           case 'job_started':
-            setLogs(prev => [`Task started: ${event.data?.prompt ?? event.data?.jobId}`, ...prev].slice(0, 50));
+            setLogs(prev => [{ id: ++logIdCounter, message: `Task started: ${event.data?.prompt ?? event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
             if (event.data?.jobId) setSelectedJob(event.data.jobId);
             break;
           case 'job_progress':
-            setLogs(prev => [`${event.data?.message ?? '...'}`, ...prev].slice(0, 50));
+            setLogs(prev => [{ id: ++logIdCounter, message: event.data?.message ?? '...' }, ...prev].slice(0, MAX_LOGS));
             break;
           case 'job_completed':
-            setLogs(prev => [`Task completed: ${event.data?.jobId}`, ...prev].slice(0, 50));
+            setLogs(prev => [{ id: ++logIdCounter, message: `Task completed: ${event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
             break;
           case 'job_failed':
-            setLogs(prev => [`Task failed: ${event.data?.error ?? event.data?.jobId}`, ...prev].slice(0, 50));
+            setLogs(prev => [{ id: ++logIdCounter, message: `Task failed: ${event.data?.error ?? event.data?.jobId}` }, ...prev].slice(0, MAX_LOGS));
             break;
           default:
             if (event.data?.message) {
-              setLogs(prev => [event.data.message, ...prev].slice(0, 50));
+              setLogs(prev => [{ id: ++logIdCounter, message: event.data.message }, ...prev].slice(0, MAX_LOGS));
             }
         }
-      } catch {
-        // Ignore malformed events
+      } catch (err) {
+        console.error('Failed to parse SSE event:', e.data, err);
       }
     };
 
@@ -81,7 +93,7 @@ const App: React.FC = () => {
     try {
       const res = await axios.post('/api/task', { prompt: taskPrompt.trim() });
       if (res.data.ok) {
-        setLogs(prev => [`Task submitted: ${taskPrompt.trim()}`, ...prev].slice(0, 50));
+        setLogs(prev => [{ id: ++logIdCounter, message: `Task submitted: ${taskPrompt.trim()}` }, ...prev].slice(0, MAX_LOGS));
         setSelectedJob(res.data.jobId);
         setTaskPrompt('');
       }
@@ -89,7 +101,7 @@ const App: React.FC = () => {
       const msg = axios.isAxiosError(err) && err.response?.data?.error
         ? err.response.data.error
         : 'Failed to submit task';
-      setLogs(prev => [msg, ...prev]);
+      setLogs(prev => [{ id: ++logIdCounter, message: msg }, ...prev].slice(0, MAX_LOGS));
     } finally {
       setSubmitting(false);
     }
@@ -104,10 +116,10 @@ const App: React.FC = () => {
         author: 'operator',
         source: 'dashboard'
       });
-      setLogs(prev => [`Message sent: ${steerMsg}`, ...prev].slice(0, 50));
+      setLogs(prev => [{ id: ++logIdCounter, message: `Message sent: ${steerMsg}` }, ...prev].slice(0, MAX_LOGS));
       setSteerMsg('');
     } catch (err) {
-      setLogs(prev => ['Failed to send message', ...prev]);
+      setLogs(prev => [{ id: ++logIdCounter, message: 'Failed to send message' }, ...prev].slice(0, MAX_LOGS));
     }
   };
 
@@ -182,8 +194,8 @@ const App: React.FC = () => {
           <div className="lcars-bar bg-zora-cyan">Task Activity</div>
           <div className="flex-1 lcars-panel border-zora-cyan flex flex-col gap-4">
             <div className="flex-1 bg-black/60 p-4 font-data text-sm text-zora-cyan overflow-y-auto">
-              {logs.map((log, i) => (
-                <div key={i} className="mb-1">{`> ${log}`}</div>
+              {logs.map((log) => (
+                <div key={log.id} className="mb-1">{`> ${log.message}`}</div>
               ))}
             </div>
             <div className="flex gap-2">

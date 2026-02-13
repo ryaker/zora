@@ -94,8 +94,15 @@ async function main() {
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
     submitTask: async (prompt: string) => {
-      const result = await orchestrator.submitTask({ prompt });
-      return result;
+      // Generate jobId immediately and kick off task in background (don't await)
+      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
+        dashboard.broadcastEvent({ type: event.type, data: event.content });
+      } }).catch(err => {
+        console.error(`[Daemon] Task ${jobId} failed:`, err);
+        dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
+      });
+      return jobId;
     },
     port: config.steering.dashboard_port ?? 7070,
   });

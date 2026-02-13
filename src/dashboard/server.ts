@@ -152,7 +152,7 @@ export class DashboardServer {
 
       try {
         const jobId = await submitTask(prompt.trim());
-        this.broadcastEvent({ type: 'job_started', data: { jobId, prompt: prompt.trim() } });
+        // Note: job_started event is now emitted by the orchestrator via onEvent callback
         res.json({ ok: true, jobId });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
