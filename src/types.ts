@@ -274,6 +274,22 @@ export interface ZoraConfig {
   security: SecurityConfig;
   steering: SteeringConfig;
   notifications: NotificationsConfig;
+  mcp?: McpConfig;
+}
+
+// ─── MCP Configuration ──────────────────────────────────────────────
+
+export interface McpServerEntry {
+  type?: 'stdio' | 'sse' | 'http';
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpConfig {
+  servers: Record<string, McpServerEntry>;
 }
 
 // ─── Routine Types ───────────────────────────────────────────────────
