@@ -1,9 +1,8 @@
 /**
  * Core Tools barrel exports.
+ *
+ * Zora v0.6: Built-in tools (filesystem, shell, web, MCP) are now
+ * provided by the Claude Agent SDK. Only Zora-specific tools remain.
  */
 
-export * from './filesystem.js';
-export * from './shell.js';
-export * from './web.js';
 export * from './notifications.js';
-export * from './mcp-client.js';

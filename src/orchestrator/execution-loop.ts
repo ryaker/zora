@@ -1,206 +1,118 @@
 /**
- * ExecutionLoop — The core agentic cycle (think-act-observe).
+ * ExecutionLoop — Wraps the Claude Agent SDK's query() function.
  *
- * Spec §5.2 "Execution Loop":
- *   - Receives task
- *   - Builds context
- *   - Calls LLM provider
- *   - Validates and executes tool calls
- *   - Feeds back results
- *   - Enforces max iterations and timeout
+ * Zora v0.6: Replaced the hand-rolled agentic cycle with the SDK's
+ * production execution engine. The SDK provides built-in tools
+ * (Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Task),
+ * MCP server management, subagent orchestration, hooks, and permissions.
  */
 
-import type { 
-  LLMProvider, 
-  TaskContext, 
-  AgentEvent
-} from '../types.js';
-import { FilesystemTools, ShellTools, WebTools } from '../tools/index.js';
-import { PolicyEngine } from '../security/policy-engine.js';
-import { SessionManager } from './session-manager.js';
-import { SteeringManager } from '../steering/steering-manager.js';
+import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { McpServerEntry } from '../types.js';
 
-export interface ExecutionLoopOptions {
-  provider: LLMProvider;
-  engine: PolicyEngine;
-  sessionManager: SessionManager;
-  steeringManager: SteeringManager;
+// ─── SDK-compatible option types ─────────────────────────────────────
+
+export type SdkPermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+
+export type SdkHookCallback = (
+  input: Record<string, unknown>,
+  toolUseID: string | undefined,
+  options: { signal: AbortSignal },
+) => Promise<Record<string, unknown>>;
+
+export interface SdkHookMatcher {
+  matcher?: string;
+  hooks: SdkHookCallback[];
+}
+
+export type SdkCanUseTool = (
+  toolName: string,
+  input: Record<string, unknown>,
+  options: { signal: AbortSignal },
+) => Promise<
+  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+  | { behavior: 'deny'; message: string }
+>;
+
+export interface SdkAgentDefinition {
+  description: string;
+  prompt: string;
+  tools?: string[];
+  model?: 'sonnet' | 'opus' | 'haiku' | 'inherit';
+}
+
+export interface ZoraExecutionOptions {
+  systemPrompt?: string;
+  cwd?: string;
+  model?: string;
   maxTurns?: number;
+  allowedTools?: string[];
+  mcpServers?: Record<string, McpServerEntry>;
+  agents?: Record<string, SdkAgentDefinition>;
+  hooks?: Partial<Record<string, SdkHookMatcher[]>>;
+  canUseTool?: SdkCanUseTool;
+  permissionMode?: SdkPermissionMode;
+  onMessage?: (message: SDKMessage) => void;
 }
 
-interface ToolCallContent {
-  tool: string;
-  arguments: Record<string, any>;
-  toolCallId: string;
-}
+const DEFAULT_TOOLS = [
+  'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
+  'WebSearch', 'WebFetch', 'Task',
+];
 
 export class ExecutionLoop {
-  private readonly _provider: LLMProvider;
-  private readonly _engine: PolicyEngine;
-  private readonly _sessionManager: SessionManager;
-  private readonly _steeringManager: SteeringManager;
-  private readonly _fsTools: FilesystemTools;
-  private readonly _shellTools: ShellTools;
-  private readonly _webTools: WebTools;
-  private readonly _maxTurns: number;
+  private readonly _opts: ZoraExecutionOptions;
 
-  /** Map of tool names to their handler functions for scalable dispatch */
-  private readonly _toolHandlers: Map<string, (args: any) => any>;
-
-  constructor(options: ExecutionLoopOptions) {
-    this._provider = options.provider;
-    this._engine = options.engine;
-    this._sessionManager = options.sessionManager;
-    this._steeringManager = options.steeringManager;
-    this._maxTurns = options.maxTurns ?? 200;
-
-    // Initialize tools
-    this._fsTools = new FilesystemTools(this._engine);
-    this._shellTools = new ShellTools(this._engine);
-    this._webTools = new WebTools();
-
-    // Register tool handlers (Spec §5.3)
-    this._toolHandlers = new Map<string, (args: any) => any>([
-      ['read_file', (args) => this._fsTools.readFile(args.path)],
-      ['write_file', (args) => this._fsTools.writeFile(args.path, args.content)],
-      ['edit_file', (args) => this._fsTools.editFile(args.path, args.oldString, args.newString)],
-      ['list_directory', (args) => this._fsTools.listDirectory(args.path)],
-      ['shell_exec', (args) => this._shellTools.execute(args.command)],
-      ['web_fetch', (args) => this._webTools.fetch(args.url)],
-    ] as [string, (args: any) => any][]);
+  constructor(options: ZoraExecutionOptions) {
+    this._opts = options;
   }
 
   /**
-   * Executes a single task through the agentic loop.
+   * Runs a prompt through the SDK's agentic loop.
+   * Returns the final result text.
    */
-  async run(task: TaskContext): Promise<void> {
-    let turnCount = 0;
-    const maxTurns = task.maxTurns ?? this._maxTurns;
-    let shouldRestart = false;
+  async run(prompt: string): Promise<string> {
+    let result = '';
+    let sessionId: string | undefined;
 
-    try {
-      while (turnCount < maxTurns) {
-        // 1. Check for steering messages before starting or between turns
-        const pendingSteering = await this._steeringManager.getPendingMessages(task.jobId);
-        
-        if (pendingSteering.length > 0) {
-          for (const msg of pendingSteering) {
-            if (msg.type === 'steer') {
-              const steerEvent: AgentEvent = {
-                type: 'steering',
-                timestamp: new Date(),
-                content: { 
-                  text: msg.message,
-                  source: msg.source,
-                  author: msg.author
-                },
-              };
-              task.history.push(steerEvent);
-              await this._sessionManager.appendEvent(task.jobId, steerEvent);
-              
-              // Acknowledge message
-              await this._steeringManager.archiveMessage(task.jobId, msg.id);
-              
-              shouldRestart = true;
-            }
-          }
-        }
+    const sdkOptions: Record<string, unknown> = {
+      allowedTools: this._opts.allowedTools ?? DEFAULT_TOOLS,
+      permissionMode: this._opts.permissionMode ?? 'default',
+      mcpServers: this._opts.mcpServers ?? {},
+      agents: this._opts.agents ?? {},
+      systemPrompt: this._opts.systemPrompt,
+      cwd: this._opts.cwd ?? process.cwd(),
+      model: this._opts.model,
+      maxTurns: this._opts.maxTurns,
+      hooks: this._opts.hooks ?? {},
+      canUseTool: this._opts.canUseTool,
+      settingSources: ['user', 'project'],
+    };
 
-        if (shouldRestart) {
-          shouldRestart = false;
-        }
-
-        // 2. Start provider execution
-        for await (const event of this._provider.execute(task)) {
-          // Persist the event
-          await this._sessionManager.appendEvent(task.jobId, event);
-          task.history.push(event);
-
-          // Handle specific event types
-          if (event.type === 'tool_call') {
-            turnCount++;
-            await this._handleToolCall(task, event);
-          }
-
-          if (event.type === 'text') {
-            turnCount++;
-          }
-
-          if (event.type === 'done' || event.type === 'error') {
-            return; // Task complete
-          }
-
-          // Periodic check for steering during long provider runs
-          const midTaskSteering = await this._steeringManager.getPendingMessages(task.jobId);
-          if (midTaskSteering.some(m => m.type === 'steer')) {
-            await this._provider.abort(task.jobId);
-            shouldRestart = true;
-            break; // Break the generator loop to restart with new history
-          }
-
-          if (turnCount >= maxTurns) {
-            await this._sessionManager.appendEvent(task.jobId, {
-              type: 'error',
-              timestamp: new Date(),
-              content: { message: `Maximum turns exceeded (${maxTurns})` },
-            });
-            return;
-          }
-        }
-
-        if (!shouldRestart) {
-          break; // Exit while loop if generator finished and no restart requested
-        }
+    for await (const message of query({ prompt, options: sdkOptions as any })) {
+      // Capture session ID from init message
+      if ('session_id' in message && !sessionId) {
+        sessionId = (message as any).session_id;
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await this._sessionManager.appendEvent(task.jobId, {
-        type: 'error',
-        timestamp: new Date(),
-        content: { message: `Execution loop failure: ${msg}` },
-      });
+
+      // Notify listener if registered
+      if (this._opts.onMessage) {
+        this._opts.onMessage(message);
+      }
+
+      // Extract final result
+      if ('result' in message && typeof (message as any).result === 'string') {
+        result = (message as any).result;
+      }
     }
+
+    return result;
   }
 
   /**
-   * Dispatches a tool call to the appropriate tool implementation.
+   * Returns the SDK options for inspection/testing.
    */
-  private async _handleToolCall(task: TaskContext, event: AgentEvent): Promise<void> {
-    const content = event.content as ToolCallContent;
-    const { tool, arguments: args, toolCallId } = content;
-    
-    let result: any;
-
-    try {
-      const handler = this._toolHandlers.get(tool);
-      if (handler) {
-        result = await handler(args);
-      } else {
-        result = { success: false, error: `Unknown tool: ${tool}` };
-      }
-
-      const resultEvent: AgentEvent = {
-        type: 'tool_result',
-        timestamp: new Date(),
-        content: {
-          toolCallId,
-          result,
-        },
-      };
-
-      // Record the result
-      await this._sessionManager.appendEvent(task.jobId, resultEvent);
-      // Ensure history is consistent for restarts
-      task.history.push(resultEvent);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const errorEvent: AgentEvent = {
-        type: 'error',
-        timestamp: new Date(),
-        content: { message: `Tool execution failed (${tool}): ${msg}` },
-      };
-      await this._sessionManager.appendEvent(task.jobId, errorEvent);
-      task.history.push(errorEvent);
-    }
+  get options(): ZoraExecutionOptions {
+    return this._opts;
   }
 }
