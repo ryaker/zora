@@ -8,6 +8,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { writeAtomic } from '../utils/fs.js';
 import type { MemoryItem, CategorySummary, SalienceScore } from './memory-types.js';
 import type { StructuredMemory } from './structured-memory.js';
 import type { SalienceScorer } from './salience-scorer.js';
@@ -78,10 +79,8 @@ export class CategoryOrganizer {
     };
 
     const filePath = this._categoryPath(category);
-    const tmpPath = `${filePath}.tmp`;
     await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(tmpPath, JSON.stringify(categorySummary, null, 2), { mode: 0o600 });
-    await fs.rename(tmpPath, filePath);
+    await writeAtomic(filePath, JSON.stringify(categorySummary, null, 2));
   }
 
   async listCategories(): Promise<CategorySummary[]> {

@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { writeAtomic } from '../utils/fs.js';
 import type { MemoryItem, MemoryItemType } from './memory-types.js';
 
 type CreateItemInput = Omit<MemoryItem, 'id' | 'created_at' | 'last_accessed' | 'access_count' | 'reinforcement_score'>;
@@ -119,9 +120,7 @@ export class StructuredMemory {
 
   private async _writeItem(item: MemoryItem): Promise<void> {
     const filePath = this._itemPath(item.id);
-    const tmpPath = `${filePath}.tmp`;
-    await fs.writeFile(tmpPath, JSON.stringify(item, null, 2), { mode: 0o600 });
-    await fs.rename(tmpPath, filePath);
+    await writeAtomic(filePath, JSON.stringify(item, null, 2));
   }
 
   private async _readAllItems(): Promise<MemoryItem[]> {

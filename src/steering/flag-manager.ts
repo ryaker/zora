@@ -147,7 +147,12 @@ export class FlagManager {
     }
 
     const flagPath = path.join(this._flagsDir, `${flagId}.json`);
-    const content = await fs.readFile(flagPath, 'utf8');
+    let content: string;
+    try {
+      content = await fs.readFile(flagPath, 'utf8');
+    } catch {
+      throw new Error(`Flag not found: ${flagId}`);
+    }
     const entry = JSON.parse(content) as FlagEntry;
 
     entry.status = status;
