@@ -177,7 +177,7 @@ const App: React.FC = () => {
         author: 'operator',
         source: 'dashboard'
       });
-      setLogs(prev => [`Message sent: ${steerMsg}`, ...prev].slice(0, 10));
+      setLogs(prev => [{ id: ++logIdCounter, message: `Message sent: ${steerMsg}` }, ...prev].slice(0, MAX_LOGS));
       setSteerMsg('');
     } catch (err) {
       console.error('Steering message failed', err);
@@ -277,13 +277,40 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Center: Main View / Steering */}
+        {/* Center: Task Input + Activity Feed */}
         <div className="col-span-6 flex flex-col gap-4">
+          {/* Task Submission */}
+          <div className="lcars-bar bg-zora-amber">Ask Zora</div>
+          <div className="lcars-panel border-zora-amber">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={taskPrompt}
+                onChange={(e) => setTaskPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSubmitTask()}
+                placeholder="Type your task here..."
+                disabled={submitting}
+                className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:ring-2 focus:ring-zora-cyan focus:outline-none disabled:opacity-50"
+              />
+              <button
+                onClick={handleSubmitTask}
+                disabled={submitting || !taskPrompt.trim()}
+                className="bg-zora-amber text-black px-6 py-2 font-bold hover:bg-white transition-colors flex items-center gap-2 disabled:opacity-50"
+              >
+                <Play size={16} /> {submitting ? '...' : 'RUN'}
+              </button>
+            </div>
+            <div className="mt-2 text-[10px] font-data text-white/40">
+              Examples: "Summarize ~/Projects/readme.md" &middot; "Find all TODO comments" &middot; "Review my last commit"
+            </div>
+          </div>
+
+          {/* Activity Feed */}
           <div className="lcars-bar bg-zora-cyan">Task Activity</div>
           <div className="flex-1 lcars-panel border-zora-cyan flex flex-col gap-4">
             <div className="flex-1 bg-black/60 p-4 font-data text-sm text-zora-cyan overflow-y-auto">
-              {logs.map((log, i) => (
-                <div key={i} className="mb-1">{`> ${log}`}</div>
+              {logs.map((log) => (
+                <div key={log.id} className="mb-1">{`> ${log.message}`}</div>
               ))}
             </div>
             <div className="flex gap-2">
