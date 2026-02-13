@@ -140,6 +140,51 @@ export class AuditLogger {
     return { valid: true, entries: lines.length };
   }
 
+  // ─── SDK Integration ──────────────────────────────────────────────
+
+  /**
+   * Creates a PostToolUse hook callback compatible with the Claude Agent SDK.
+   * Logs every tool execution to the hash-chained audit log.
+   */
+  createPostToolUseHook(): (
+    input: Record<string, unknown>,
+    toolUseID: string | undefined,
+    options: { signal: AbortSignal },
+  ) => Promise<Record<string, unknown>> {
+    return async (
+      input: Record<string, unknown>,
+      _toolUseID: string | undefined,
+      _options: { signal: AbortSignal },
+    ) => {
+      const toolName = (input['tool_name'] as string) ?? 'unknown';
+      const toolInput = (input['tool_input'] as Record<string, unknown>) ?? {};
+      const toolResponse = input['tool_response'];
+      const sessionId = (input['session_id'] as string) ?? 'unknown';
+
+      try {
+        await this.log({
+          jobId: sessionId,
+          eventType: 'tool_invocation',
+          timestamp: new Date().toISOString(),
+          provider: 'claude-agent-sdk',
+          toolName,
+          parameters: toolInput,
+          result: {
+            status: 'ok',
+            output:
+              typeof toolResponse === 'string'
+                ? toolResponse
+                : JSON.stringify(toolResponse),
+          },
+        });
+      } catch {
+        // Don't let audit failures break the agent loop
+      }
+
+      return {};
+    };
+  }
+
   // ─── Private Helpers ──────────────────────────────────────────────
 
   private async _ensureInitialized(): Promise<void> {

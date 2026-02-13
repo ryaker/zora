@@ -141,6 +141,90 @@ export class PolicyEngine {
     return { allowed: true };
   }
 
+  // ─── SDK Integration ──────────────────────────────────────────────
+
+  /**
+   * Creates a canUseTool callback compatible with the Claude Agent SDK.
+   * Maps Zora's policy validation to SDK permission decisions.
+   *
+   * The SDK calls this before every tool execution. Return:
+   *   { behavior: 'allow', updatedInput } to permit
+   *   { behavior: 'deny', message } to block
+   */
+  createCanUseTool(): (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { signal: AbortSignal },
+  ) => Promise<
+    | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+    | { behavior: 'deny'; message: string }
+  > {
+    return async (
+      toolName: string,
+      input: Record<string, unknown>,
+      _options: { signal: AbortSignal },
+    ) => {
+      // Bash / shell commands
+      if (toolName === 'Bash') {
+        const command = input['command'] as string | undefined;
+        if (command) {
+          const result = this.validateCommand(command);
+          if (!result.allowed) {
+            return {
+              behavior: 'deny' as const,
+              message: result.reason ?? 'Command denied by policy',
+            };
+          }
+        }
+      }
+
+      // File operations: Read, Write, Edit
+      if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
+        const filePath = input['file_path'] as string | undefined;
+        if (filePath) {
+          const result = this.validatePath(filePath);
+          if (!result.allowed) {
+            return {
+              behavior: 'deny' as const,
+              message: result.reason ?? 'Path denied by policy',
+            };
+          }
+        }
+      }
+
+      // Glob — validate the search path if provided
+      if (toolName === 'Glob') {
+        const globPath = input['path'] as string | undefined;
+        if (globPath) {
+          const result = this.validatePath(globPath);
+          if (!result.allowed) {
+            return {
+              behavior: 'deny' as const,
+              message: result.reason ?? 'Path denied by policy',
+            };
+          }
+        }
+      }
+
+      // Grep — validate the search path if provided
+      if (toolName === 'Grep') {
+        const grepPath = input['path'] as string | undefined;
+        if (grepPath) {
+          const result = this.validatePath(grepPath);
+          if (!result.allowed) {
+            return {
+              behavior: 'deny' as const,
+              message: result.reason ?? 'Path denied by policy',
+            };
+          }
+        }
+      }
+
+      // Default: allow the tool call
+      return { behavior: 'allow' as const, updatedInput: input };
+    };
+  }
+
   // ─── Private Helpers ──────────────────────────────────────────────
 
   private _resolveHome(p: string): string {
