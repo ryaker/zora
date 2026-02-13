@@ -130,6 +130,32 @@ export class DashboardServer {
       }
     });
 
+    /** GET /api/system — Real system metrics */
+    this._app.get('/api/system', async (_req, res) => {
+      try {
+        const uptime = process.uptime();
+        const mem = process.memoryUsage();
+        const sessions = await sessionManager.listSessions();
+        const activeJobs = sessions.filter(s => s.status === 'running').length;
+
+        res.json({
+          ok: true,
+          uptime: Math.floor(uptime),
+          memory: {
+            used: Math.round(mem.heapUsed / 1024 / 1024),
+            total: Math.round(mem.heapTotal / 1024 / 1024),
+            rss: Math.round(mem.rss / 1024 / 1024),
+          },
+          activeJobs,
+          totalJobs: sessions.length,
+          version: '0.6.0',
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ ok: false, error: message });
+      }
+    });
+
     // --- Steering APIs ---
 
     /** POST /api/steer — Inject a steering message */

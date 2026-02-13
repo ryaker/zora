@@ -10,8 +10,24 @@ interface ProviderStatus {
   canAutoRefresh: boolean;
 }
 
+interface SystemInfo {
+  uptime: number;
+  memory: { used: number; total: number; rss: number };
+  activeJobs: number;
+  totalJobs: number;
+  version: string;
+}
+
+function formatUptime(seconds: number): string {
+  const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
   const [logs, setLogs] = useState<string[]>(['Zora is running.', 'Waiting for tasks...']);
@@ -28,6 +44,21 @@ const App: React.FC = () => {
 
     fetchHealth();
     const interval = setInterval(fetchHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const fetchSystem = async () => {
+      try {
+        const res = await axios.get('/api/system');
+        if (res.data.ok) setSystem(res.data);
+      } catch {
+        // System endpoint may not be available
+      }
+    };
+
+    fetchSystem();
+    const interval = setInterval(fetchSystem, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -136,9 +167,9 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2 mb-2 font-bold uppercase">
               <Info size={14} /> System Info
             </div>
-            UPTIME: 04:20:12<br/>
-            MEMORY: 128MB / 512MB<br/>
-            THREADS: 04 ACTIVE
+            UPTIME: {system ? formatUptime(system.uptime) : '--:--:--'}<br/>
+            MEMORY: {system ? `${system.memory.used}MB / ${system.memory.total}MB` : '-- / --'}<br/>
+            TASKS: {system ? `${system.activeJobs} ACTIVE / ${system.totalJobs} TOTAL` : '-- / --'}
           </div>
         </div>
 
