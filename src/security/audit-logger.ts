@@ -195,8 +195,10 @@ export class AuditLogger {
                 : JSON.stringify(toolResponse),
           },
         });
-      } catch {
-        // Don't let audit failures break the agent loop
+      } catch (err) {
+        // R27: Log audit write failures instead of silently swallowing them.
+        // For an audit log, silent failure means undetectable data loss.
+        console.error(`[AuditLogger] Failed to write audit entry for tool ${toolName}:`, err instanceof Error ? err.message : String(err));
       }
 
       return {};

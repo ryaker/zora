@@ -64,6 +64,55 @@ export class SessionManager {
     }
   }
 
+  /**
+   * R16: Lists all sessions with metadata.
+   * Reads the sessions directory, parses each .jsonl file for event count,
+   * reads last line for timestamp/status.
+   */
+  async listSessions(): Promise<Array<{ jobId: string; eventCount: number; lastActivity: Date | null; status: string }>> {
+    const sessions: Array<{ jobId: string; eventCount: number; lastActivity: Date | null; status: string }> = [];
+
+    try {
+      const files = await fs.promises.readdir(this._sessionsDir);
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue;
+        const jobId = file.replace(/\.jsonl$/, '');
+        const filePath = path.join(this._sessionsDir, file);
+
+        try {
+          const content = await fs.promises.readFile(filePath, 'utf8');
+          const lines = content.split('\n').filter(line => line.trim());
+          const eventCount = lines.length;
+          let lastActivity: Date | null = null;
+          let status = 'unknown';
+
+          if (lines.length > 0) {
+            const lastLine = lines[lines.length - 1]!;
+            try {
+              const lastEvent = JSON.parse(lastLine) as AgentEvent;
+              lastActivity = new Date(lastEvent.timestamp);
+              status = lastEvent.type === 'done' ? 'completed'
+                : lastEvent.type === 'error' ? 'failed'
+                : 'running';
+            } catch {
+              // Malformed last line
+            }
+          }
+
+          sessions.push({ jobId, eventCount, lastActivity, status });
+        } catch {
+          sessions.push({ jobId, eventCount: 0, lastActivity: null, status: 'unknown' });
+        }
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    return sessions;
+  }
+
   private _getSessionPath(jobId: string): string {
     // Sanitize jobId to prevent path traversal
     const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, '_');

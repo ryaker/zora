@@ -9,13 +9,15 @@
  */
 
 import { Command } from 'commander';
-import { loadConfig, toSdkMcpServers } from '../config/loader.js';
+import { loadConfig } from '../config/loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
-import { ExecutionLoop } from '../orchestrator/execution-loop.js';
-import type { ZoraPolicy } from '../types.js';
+import { Orchestrator } from '../orchestrator/orchestrator.js';
+import { ClaudeProvider } from '../providers/claude-provider.js';
+import { GeminiProvider } from '../providers/gemini-provider.js';
+import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -33,6 +35,37 @@ program
   .name('zora')
   .description('Long-running autonomous personal AI agent for macOS')
   .version('0.6.0');
+
+/**
+ * Creates LLMProvider instances from config.
+ */
+function createProviders(config: ZoraConfig): LLMProvider[] {
+  const providers: LLMProvider[] = [];
+
+  for (const pConfig of config.providers) {
+    if (!pConfig.enabled) continue;
+
+    switch (pConfig.type) {
+      case 'claude-sdk':
+        providers.push(new ClaudeProvider({ config: pConfig }));
+        break;
+      case 'gemini-cli':
+        providers.push(new GeminiProvider({ config: pConfig }));
+        break;
+      default:
+        console.warn(`Unknown provider type: ${pConfig.type}, skipping ${pConfig.name}`);
+    }
+  }
+
+  return providers;
+}
+
+/**
+ * Returns the path to the daemon PID file.
+ */
+function getPidFilePath(): string {
+  return path.join(os.homedir(), '.zora', 'state', 'daemon.pid');
+}
 
 /**
  * Common setup for commands that need config and services.
@@ -104,6 +137,7 @@ async function setupContext() {
   return { config, policy, engine, sessionManager, steeringManager, memoryManager };
 }
 
+// R10: Refactored `ask` command to use Orchestrator
 program
   .command('ask')
   .description('Send a task to the agent and wait for completion')
@@ -111,72 +145,168 @@ program
   .option('-m, --model <model>', 'Model to use')
   .option('--max-turns <n>', 'Maximum turns', parseInt)
   .action(async (prompt, opts) => {
-    const { config, engine, memoryManager } = await setupContext();
+    const { config, policy } = await setupContext();
 
-    // Load context from memory tiers
-    const memoryContext = await memoryManager.loadContext();
-
-    // Build system prompt
-    const systemPrompt = [
-      'You are Zora, a helpful autonomous agent.',
-      ...memoryContext,
-    ].join('\n\n');
-
-    // Build MCP servers from config
-    const mcpServers = config.mcp?.servers
-      ? toSdkMcpServers(config.mcp.servers)
-      : {};
-
-    const loop = new ExecutionLoop({
-      systemPrompt,
-      model: opts.model,
-      maxTurns: opts.maxTurns,
-      mcpServers,
-      permissionMode: 'default',
-      cwd: process.cwd(),
-      canUseTool: engine.createCanUseTool(),
-    });
-
-    console.log('Starting task...');
-    const result = await loop.run(prompt);
-
-    if (result) {
-      console.log('\n' + result);
+    const providers = createProviders(config);
+    if (providers.length === 0) {
+      console.error('No enabled providers found in config.');
+      process.exit(1);
     }
 
-    // Record task in daily notes
-    await memoryManager.appendDailyNote(`Completed task: ${prompt}`);
-    console.log('Task complete.');
+    const orchestrator = new Orchestrator({ config, policy, providers });
+    await orchestrator.boot();
+
+    try {
+      console.log('Starting task...');
+      const result = await orchestrator.submitTask({
+        prompt,
+        model: opts.model,
+        maxTurns: opts.maxTurns,
+      });
+
+      if (result) {
+        console.log('\n' + result);
+      }
+
+      console.log('Task complete.');
+    } finally {
+      await orchestrator.shutdown();
+    }
   });
 
+// R13: Real status command
 program
   .command('status')
   .description('Check the status of the agent and providers')
   .action(async () => {
     const { config } = await setupContext();
+    const pidFile = getPidFilePath();
+
+    let daemonStatus = 'stopped';
+    let daemonPid: number | null = null;
+
+    if (fs.existsSync(pidFile)) {
+      try {
+        daemonPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+        // Check if process is alive
+        process.kill(daemonPid, 0);
+        daemonStatus = 'running';
+      } catch {
+        daemonStatus = 'stopped (stale pidfile)';
+        daemonPid = null;
+      }
+    }
+
     console.log('Zora Status:');
-    console.log('  Agent: running (simulated)');
+    console.log(`  Daemon: ${daemonStatus}${daemonPid ? ` (PID: ${daemonPid})` : ''}`);
     console.log(`  Providers: ${config.providers.length} registered`);
     config.providers.forEach(p => {
       console.log(`    - ${p.name} (${p.type}): ${p.enabled ? 'enabled' : 'disabled'}`);
     });
   });
 
+// R11: Real start command
 program
   .command('start')
   .description('Start the agent daemon')
-  .action(() => {
-    console.log('Starting Zora daemon...');
-    // In v1, this might just be a placeholder or start a long-running process
-    console.log('Daemon started (PID: 12345)');
+  .action(async () => {
+    const pidFile = getPidFilePath();
+
+    // Check if already running
+    if (fs.existsSync(pidFile)) {
+      try {
+        const existingPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+        process.kill(existingPid, 0);
+        console.log(`Zora daemon is already running (PID: ${existingPid}).`);
+        return;
+      } catch {
+        // Stale pidfile, clean up
+        fs.unlinkSync(pidFile);
+      }
+    }
+
+    // Ensure state directory exists
+    const stateDir = path.dirname(pidFile);
+    if (!fs.existsSync(stateDir)) {
+      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    }
+
+    // Fork a detached child process
+    const { fork } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
+
+    // Check if daemon script exists; if not, run inline
+    const child = fork(daemonScript, [], {
+      detached: true,
+      stdio: 'ignore',
+    });
+
+    if (child.pid) {
+      fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
+      child.unref();
+      console.log(`Zora daemon started (PID: ${child.pid}).`);
+    } else {
+      console.error('Failed to start daemon.');
+    }
   });
 
+// R12: Real stop command
 program
   .command('stop')
   .description('Stop the agent daemon')
-  .action(() => {
-    console.log('Stopping Zora daemon...');
-    console.log('Daemon stopped.');
+  .action(async () => {
+    const pidFile = getPidFilePath();
+
+    if (!fs.existsSync(pidFile)) {
+      console.log('Zora daemon is not running.');
+      return;
+    }
+
+    try {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+
+      // Send SIGTERM for graceful shutdown
+      process.kill(pid, 'SIGTERM');
+      console.log(`Sent SIGTERM to Zora daemon (PID: ${pid}). Waiting for graceful shutdown...`);
+
+      // Poll for process exit (up to 5 seconds), then escalate to SIGKILL
+      const maxWaitMs = 5000;
+      const pollIntervalMs = 200;
+      let waited = 0;
+      let stopped = false;
+
+      while (waited < maxWaitMs) {
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+        waited += pollIntervalMs;
+        try {
+          process.kill(pid, 0); // Check if still alive
+        } catch {
+          stopped = true;
+          break;
+        }
+      }
+
+      if (!stopped) {
+        process.kill(pid, 'SIGKILL');
+        console.log('Daemon did not stop gracefully, sent SIGKILL.');
+      }
+
+      try {
+        fs.unlinkSync(pidFile);
+      } catch {
+        // Pidfile already removed by daemon
+      }
+      console.log('Daemon stopped.');
+    } catch (err: unknown) {
+      // Process doesn't exist, clean up stale pidfile
+      try {
+        fs.unlinkSync(pidFile);
+      } catch {
+        // Already removed
+      }
+      console.log('Daemon was not running (cleaned up stale pidfile).');
+    }
   });
 
 // Register new command groups

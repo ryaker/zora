@@ -8,3 +8,4 @@ export * from './router.js';
 export * from './failover-controller.js';
 export * from './auth-monitor.js';
 export * from './retry-queue.js';
+export * from './orchestrator.js';

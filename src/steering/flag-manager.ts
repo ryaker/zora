@@ -93,13 +93,18 @@ export class FlagManager {
           if (!jobId || entry.jobId === jobId) {
             flags.push(entry);
           }
-        } catch {
-          // Skip malformed files
+        } catch (err) {
+          // R30: Log malformed flag files instead of silently skipping
+          console.warn(`[FlagManager] Failed to read flag file ${file}:`, err instanceof Error ? err.message : String(err));
         }
       }
 
       return flags;
-    } catch {
+    } catch (err) {
+      // R30: Log directory read errors instead of silently returning empty
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`[FlagManager] Failed to read flags directory:`, err instanceof Error ? err.message : String(err));
+      }
       return [];
     }
   }
@@ -129,7 +134,9 @@ export class FlagManager {
       if (entry.status === 'pending_review') return 'pending';
       if (entry.status === 'approved' || entry.status === 'timed_out') return 'approved';
       return 'rejected';
-    } catch {
+    } catch (err) {
+      // R30: Log flag read errors instead of silently defaulting
+      console.warn(`[FlagManager] Failed to read flag ${flagId}:`, err instanceof Error ? err.message : String(err));
       return 'pending';
     }
   }
@@ -185,8 +192,9 @@ export class FlagManager {
       entry.resolvedAt = new Date().toISOString();
 
       await writeAtomic(flagPath, JSON.stringify(entry, null, 2));
-    } catch {
-      // Flag may have been deleted
+    } catch (err) {
+      // R30: Log auto-resolve errors instead of silently swallowing
+      console.warn(`[FlagManager] Failed to auto-resolve flag ${flagId}:`, err instanceof Error ? err.message : String(err));
     }
   }
 }
