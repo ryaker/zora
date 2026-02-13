@@ -22,6 +22,8 @@ export interface TeamConfig {
   members: AgentMember[];
   coordinatorId: string;     // agentId of the coordinator
   persistent: boolean;       // false = ephemeral (teardown on completion)
+  prNumber?: number;         // Associated PR number (for PR-lifecycle teams)
+  prTitle?: string;          // Associated PR title (for PR-lifecycle teams)
 }
 
 export type MailboxMessageType = 'task' | 'result' | 'status' | 'steer' | 'handoff' | 'shutdown' | 'idle';

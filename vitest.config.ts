@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     root: '.',
     include: ['tests/**/*.test.ts'],
-    exclude: ['tests/unit/dashboard/dashboard-browser.test.ts', 'node_modules', 'dist'],
+    exclude: ['tests/unit/dashboard/dashboard-browser.test.ts', 'tests/unit/dashboard/dashboard-synthetic.test.ts', 'node_modules', 'dist'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

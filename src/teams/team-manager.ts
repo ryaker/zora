@@ -30,6 +30,13 @@ export class TeamManager {
   }
 
   /**
+   * Returns the base teams directory path.
+   */
+  get teamsDir(): string {
+    return this._teamsDir;
+  }
+
+  /**
    * Validates the team name and returns the team directory path.
    */
   private _teamDir(name: string): string {
