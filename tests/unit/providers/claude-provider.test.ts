@@ -159,11 +159,12 @@ describe('ClaudeProvider', () => {
 
       const events = await collectEvents(provider.execute(makeTask()));
 
-      // Events: thinking, text, tool_call, done (from result), done (final safety)
-      expect(events).toHaveLength(5);
+      // Events: thinking, text, tool_call, done (from result)
+      // Fallback done is suppressed since the SDK emitted a result message
+      expect(events).toHaveLength(4);
       expect(events[0]!.type).toBe('thinking');
       expect(events[0]!.content).toEqual({ text: 'I should write a test.' });
-      
+
       expect(events[1]!.type).toBe('text');
       expect(events[1]!.content).toEqual({ text: 'Here is your test.' });
 
@@ -181,7 +182,6 @@ describe('ClaudeProvider', () => {
         total_cost_usd: 0.05,
       });
 
-      expect(events[4]!.type).toBe('done');
       expect(provider.totalCostUsd).toBe(0.05);
     });
 

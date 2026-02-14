@@ -142,22 +142,22 @@ program
         maxTurns: opts.maxTurns,
         onEvent: (event) => {
           // Stop spinner on first substantive event so streaming output is visible
-          if (spinnerActive && (event.type === 'text' || event.type === 'tool_call')) {
+          if (spinnerActive && (event.type === 'text' || event.type === 'tool_call' || event.type === 'error')) {
             spinner.stop('Working...');
             spinnerActive = false;
           }
 
           switch (event.type) {
             case 'text':
-              console.log((event.content as any).text);
+              console.log((event.content as { text: string }).text);
               break;
             case 'tool_call': {
-              const c = event.content as any;
+              const c = event.content as { tool: string };
               console.log(`\x1b[2m  ▸ ${c.tool}()\x1b[0m`);
               break;
             }
             case 'error':
-              console.error(`\x1b[31m✗ ${(event.content as any).message}\x1b[0m`);
+              console.error(`\x1b[31m✗ ${(event.content as { message: string }).message}\x1b[0m`);
               break;
           }
         },

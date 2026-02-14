@@ -274,12 +274,14 @@ export class ClaudeProvider implements LLMProvider {
       // Register for abort support
       this._activeQueries.set(task.jobId, { abort: abortController, query: sdkQuery });
 
-      let emittedDone = false;
+      let emittedResult = false;
 
       for await (const message of sdkQuery) {
         const events = this._mapSDKMessage(message);
         for (const event of events) {
-          if (event.type === 'done') emittedDone = true;
+          if (event.type === 'done' || (event.type === 'error' && message.type === 'result')) {
+            emittedResult = true;
+          }
           yield event;
 
           // If we got a result message, update internal state
@@ -290,7 +292,7 @@ export class ClaudeProvider implements LLMProvider {
       }
 
       // Only yield fallback if the SDK never emitted a result message
-      if (!emittedDone) {
+      if (!emittedResult) {
         yield {
           type: 'done' as AgentEventType,
           timestamp: new Date(),
