@@ -411,7 +411,7 @@
         "TEST-01"
       ],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/OPERATIONAL.md",
       "wsjf": {
         "usability_value": 9,
@@ -421,7 +421,8 @@
         "job_size": 4,
         "score": 6.5
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "ops-agent"
     },
     {
       "id": "OPS-02",
