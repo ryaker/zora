@@ -53,6 +53,8 @@ export interface ZoraExecutionOptions {
   canUseTool?: SdkCanUseTool;
   permissionMode?: SdkPermissionMode;
   onMessage?: (message: SDKMessage) => void;
+  /** ERR-05: Timeout in milliseconds for stream operations (default: 30min) */
+  streamTimeout?: number;
 }
 
 const DEFAULT_TOOLS = [
@@ -70,6 +72,7 @@ export class ExecutionLoop {
   /**
    * Runs a prompt through the SDK's agentic loop.
    * Returns the final result text.
+   * ERR-05: Added timeout protection to prevent indefinite blocking on hung streams.
    */
   async run(prompt: string): Promise<string> {
     let result = '';
@@ -97,24 +100,48 @@ export class ExecutionLoop {
       ...(customToolSchemas.length > 0 ? { customTools: customToolSchemas } : {}),
     };
 
-    for await (const message of query({ prompt, options: sdkOptions as any })) {
-      // Capture session ID from init message
-      if ('session_id' in message && !sessionId) {
-        sessionId = (message as any).session_id;
+    // ERR-05: Timeout protection (default 30 minutes)
+    const streamTimeout = this._opts.streamTimeout ?? 30 * 60 * 1000;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    let lastEventTime = Date.now();
+
+    try {
+      for await (const message of query({ prompt, options: sdkOptions as any })) {
+        // Clear previous timeout and set new one (reset on each event)
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        lastEventTime = Date.now();
+
+        timeoutHandle = setTimeout(() => {
+          const elapsed = Date.now() - lastEventTime;
+          console.error('[ExecutionLoop] Stream timeout exceeded:', {
+            timeout: streamTimeout,
+            elapsed,
+            sessionId,
+          });
+          throw new Error(`Stream timeout: No events received for ${streamTimeout}ms`);
+        }, streamTimeout);
+
+        // Capture session ID from init message
+        if ('session_id' in message && !sessionId) {
+          sessionId = (message as any).session_id;
+        }
+
+        // Notify listener if registered
+        if (this._opts.onMessage) {
+          this._opts.onMessage(message);
+        }
+
+        // Extract final result
+        if ('result' in message && typeof (message as any).result === 'string') {
+          result = (message as any).result;
+        }
       }
 
-      // Notify listener if registered
-      if (this._opts.onMessage) {
-        this._opts.onMessage(message);
-      }
-
-      // Extract final result
-      if ('result' in message && typeof (message as any).result === 'string') {
-        result = (message as any).result;
-      }
+      return result;
+    } finally {
+      // Always clear timeout on exit
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
-
-    return result;
   }
 
   /**

@@ -155,7 +155,7 @@
       "blocking": true,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ERROR_HANDLING.md",
       "wsjf": {
         "usability_value": 5,
@@ -165,7 +165,8 @@
         "job_size": 2,
         "score": 9.5
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "error-hardening-agent-v2"
     },
     {
       "id": "ERR-02",
@@ -177,7 +178,7 @@
       "blocking": true,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ERROR_HANDLING.md",
       "wsjf": {
         "usability_value": 8,
@@ -187,7 +188,8 @@
         "job_size": 2,
         "score": 9.5
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "error-hardening-agent-v2"
     },
     {
       "id": "ORCH-03",
@@ -383,7 +385,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ERROR_HANDLING.md",
       "wsjf": {
         "usability_value": 7,
@@ -393,7 +395,8 @@
         "job_size": 2,
         "score": 8.5
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "error-hardening-agent-v2"
     },
     {
       "id": "OPS-01",

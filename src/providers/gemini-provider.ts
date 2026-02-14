@@ -301,8 +301,14 @@ export class GeminiProvider implements LLMProvider {
           arguments: JSON.parse(match[2]!.trim()),
         });
       } catch (e) {
-        // R18: Log malformed XML tool calls instead of silently swallowing
-        console.warn(`[GeminiProvider] Failed to parse XML tool call: ${e instanceof Error ? e.message : String(e)}`);
+        // ERR-02: Log malformed XML tool calls with full context for debugging
+        const error = e instanceof Error ? e : new Error(String(e));
+        console.error('[GeminiProvider] Failed to parse XML tool call:', {
+          tool: match[1],
+          rawContent: match[2]?.trim().slice(0, 200), // First 200 chars for context
+          error: error.message,
+          stack: error.stack,
+        });
       }
     }
 
@@ -320,8 +326,13 @@ export class GeminiProvider implements LLMProvider {
             });
           }
         } catch (e) {
-          // R18: Log malformed JSON tool calls instead of silently swallowing
-          console.warn(`[GeminiProvider] Failed to parse JSON tool call: ${e instanceof Error ? e.message : String(e)}`);
+          // ERR-02: Log malformed JSON tool calls with full context for debugging
+          const error = e instanceof Error ? e : new Error(String(e));
+          console.error('[GeminiProvider] Failed to parse JSON tool call:', {
+            rawContent: match[1]?.slice(0, 200), // First 200 chars for context
+            error: error.message,
+            stack: error.stack,
+          });
         }
       }
     }

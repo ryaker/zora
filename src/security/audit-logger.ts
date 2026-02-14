@@ -49,7 +49,10 @@ export class AuditLogger {
     // Queue the write and return the entry once written
     return new Promise<AuditEntry>((resolve, reject) => {
       this._writeQueue = this._writeQueue
-        .catch(() => {}) // Recover from previous failures
+        .catch((err) => {
+          // ERR-01: Log previous write failures instead of silently swallowing them
+          console.error('[AuditLogger] Previous write operation failed:', err instanceof Error ? err.message : String(err));
+        })
         .then(async () => {
           const entry = await this._appendEntry(input);
           resolve(entry);
@@ -262,7 +265,18 @@ export class AuditLogger {
     };
 
     // Append to file
-    await fs.appendFile(this._logPath, JSON.stringify(entry) + '\n', 'utf-8');
+    // ERR-01: Wrap file write with explicit error handling and logging
+    try {
+      await fs.appendFile(this._logPath, JSON.stringify(entry) + '\n', 'utf-8');
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error('[AuditLogger] Failed to write audit entry to disk:', {
+        path: this._logPath,
+        entryId: entry.entryId,
+        error: error.message,
+      });
+      throw new Error(`Audit log write failed: ${error.message}`, { cause: error });
+    }
 
     this._previousHash = hash;
     return entry;
