@@ -129,7 +129,7 @@ memory_limit_mb = 64
 describe('parseConfig', () => {
   it('returns defaults for empty input', () => {
     const config = parseConfig({});
-    expect(config.agent.name).toBe('zora');
+    expect(config.agent.name).toBe('zora-agent');
     expect(config.routing.mode).toBe('respect_ranking');
     expect(config.providers).toEqual([]);
   });

@@ -19,7 +19,7 @@ describe('DEFAULT_CONFIG', () => {
   });
 
   it('has correct agent defaults from spec', () => {
-    expect(DEFAULT_CONFIG.agent.name).toBe('zora');
+    expect(DEFAULT_CONFIG.agent.name).toBe('zora-agent');
     expect(DEFAULT_CONFIG.agent.max_parallel_jobs).toBe(3);
     expect(DEFAULT_CONFIG.agent.default_timeout).toBe('2h');
     expect(DEFAULT_CONFIG.agent.heartbeat_interval).toBe('30m');
