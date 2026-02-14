@@ -164,11 +164,11 @@ program
       });
 
       if (spinnerActive) {
+        // No streaming events were received — print the final result
         spinner.stop('Task complete.');
-      }
-
-      if (result) {
-        console.log('\n' + result);
+        if (result) {
+          console.log('\n' + result);
+        }
       }
     } finally {
       await orchestrator.shutdown();
