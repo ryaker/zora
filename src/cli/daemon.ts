@@ -64,7 +64,7 @@ async function main() {
 
   // Start dashboard server
   const dashboard = new DashboardServer({
-    // loop is optional — the Orchestrator owns the execution loop directly
+    providers,
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
