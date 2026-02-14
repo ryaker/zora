@@ -25,6 +25,7 @@ export interface SubmitTaskFn {
 
 export interface DashboardOptions {
   loop?: ExecutionLoop;
+  providers?: LLMProvider[];
   sessionManager: SessionManager;
   steeringManager: SteeringManager;
   authMonitor: AuthMonitor;
@@ -156,6 +157,18 @@ export class DashboardServer {
         const message = err instanceof Error ? err.message : String(err);
         res.status(500).json({ ok: false, error: message });
       }
+    });
+
+    /** GET /api/system — Real process metrics for dashboard System Info panel */
+    this._app.get('/api/system', (_req, res) => {
+      const mem = process.memoryUsage();
+      res.json({
+        uptime: Math.floor(process.uptime()),
+        memory: {
+          used: Math.round(mem.heapUsed / (1024 * 1024)),
+          total: Math.round(mem.heapTotal / (1024 * 1024)),
+        },
+      });
     });
 
     // --- Task Submission ---
