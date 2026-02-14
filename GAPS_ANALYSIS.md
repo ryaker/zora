@@ -2204,6 +2204,2128 @@ Quote-aware shell parsing is notoriously complex due to shell semantics across d
 
 ---
 
+## 9. TESTING GAPS (7 gaps)
+
+### Root Cause Analysis
+
+**Problem:** The Zora framework has 927 tests across 51 files, providing good unit test coverage. However, critical integration testing gaps prevent confidence in multi-provider failover, retry mechanisms, and operational workflows. Integration tests are minimal (only 3 files in `/tests/integration/`), and no tests validate the orchestration layer where components interact. Additionally, provider tool parsing, CLI commands, dashboard endpoints, and security-critical features lack functional validation, creating blind spots for production-critical functionality.
+
+**Risk Profile:**
+- **Orchestration (S2):** No e2e tests that boot Orchestrator + submit tasks + verify routing; integration issues only discovered in production
+- **Failover/Retry (S2):** Failover logic never validated; bugs hide until production; no tests exercise FailoverController.handleFailure() or RetryQueue retries
+- **Tool Parsing (S2):** Regex patterns for XML/JSON tool calls written speculatively; tool parsing fails on real output; users can't invoke tools
+- **CLI & Dashboard (S2):** Commands and endpoints exist untested; changes break silently; users hit regressions
+- **Security (S2):** TelegramGateway allowlist logic untested; unauthorized users could steer tasks
+
+---
+
+#### TEST-01: No Integration Tests for Orchestration
+
+**Severity:** S2 (High)
+**Effort:** 4h
+**Blocking:** Yes
+**Category:** INTEGRATION TESTING
+**Files Affected:** `/tests/integration/` (need new file)
+**Impact Level:** 5/5
+
+**Description:**
+
+The Orchestrator is the central component that boots the entire system, submits tasks to providers, routes through failover logic, persists to storage, and manages sessions. However, there is no end-to-end integration test that validates this critical workflow. Currently only unit tests validate individual Orchestrator methods in isolation.
+
+**Recommended Solution:**
+Create comprehensive integration test suite in `/tests/integration/orchestrator.test.ts` with test cases validating:
+- Orchestrator bootstrap with all dependencies (SessionManager → Router → FailoverController → AuthMonitor)
+- Task submission end-to-end (task → routing → provider → completion)
+- Event emission (submit, route, execute, complete events)
+- Session persistence and recovery across restart
+- Failover integration (primary failure → secondary provider)
+- Provider routing validation (correct provider selected by capability)
+
+**Success Criteria:**
+- `/tests/integration/orchestrator.test.ts` created with 10+ test cases
+- All critical Orchestrator workflows have integration tests
+- Tests validate component interactions
+- Tests verify task lifecycle (submit → route → execute → complete)
+- Integration test suite passes in CI/CD with < 10s duration
+- Code coverage for Orchestrator integration paths > 80%
+
+---
+
+#### TEST-02: No Failover/Retry Scenario Tests
+
+**Severity:** S2 (High)
+**Effort:** 3h
+**Blocking:** Medium
+**Category:** FAILOVER TESTING
+**Files Affected:** `/tests/integration/failover.test.ts` (new)
+**Impact Level:** 5/5
+
+**Description:**
+
+The FailoverController and RetryQueue implement critical logic that routes tasks to alternate providers when primary fails, with exponential backoff retries. However, this critical logic has zero test coverage validating it works in realistic scenarios with actual provider failures, retry timing, and state persistence.
+
+**Recommended Solution:**
+Create `/tests/integration/failover.test.ts` with test cases validating:
+- Failover triggered when primary provider fails
+- Retry executed with exponential backoff (verify timing: 1s, 2s, 4s, 8s)
+- Task abandoned after max retries exceeded
+- Concurrent task failures trigger failover independently
+- Retry state persists across orchestrator restart
+- Provider selection respects previous failures
+- Error classification determines retry eligibility
+
+**Success Criteria:**
+- `/tests/integration/failover.test.ts` with 6+ test cases
+- Tests validate failover triggered on provider errors
+- Tests validate retry queue processing with exponential backoff timing
+- Tests verify max retries enforced and retry state persisted
+- Integration test suite passes in CI/CD
+- Test coverage for FailoverController.handleFailure() > 85%
+
+---
+
+#### TEST-03: CLI Commands Lack Functional Tests
+
+**Severity:** S2 (High)
+**Effort:** 3h
+**Blocking:** No
+**Category:** FUNCTIONAL TESTING
+**Files Affected:** `/tests/cli/` (new directory)
+**Impact Level:** 4/5
+
+**Description:**
+
+The Zora CLI implements critical commands: `start`, `stop`, `status`, `memory`, `steer`, `skill`, and `audit`. Currently, only registration is tested (command exists, has help text). Command behavior is completely untested—changes break silently without warning.
+
+**Recommended Solution:**
+Create `/tests/cli/` directory with command tests validating:
+- `start` command: port validation, server startup verification
+- `stop` command: graceful shutdown, cleanup validation
+- `status` command: format and content validation
+- `memory` command: memory output and limits
+- `steer` command: flag application and persistence
+- `skill` command: enable/disable verification
+- `audit` command: log query and output validation
+- Error handling: invalid flags, missing args, help display
+
+**Success Criteria:**
+- `/tests/cli/` directory with tests for all 8 commands
+- Each command has 3+ test cases covering happy path, edge cases, errors
+- Tests validate command output format and content
+- Tests verify command effects persist (restarts, state changes)
+- All CLI tests pass in CI/CD
+- Test coverage for CLI commands > 85%
+
+---
+
+#### TEST-04: Dashboard Endpoints Untested
+
+**Severity:** S2 (High)
+**Effort:** 3h
+**Blocking:** No
+**Category:** API TESTING
+**Files Affected:** `/tests/api/` (new directory)
+**Impact Level:** 4/5
+
+**Description:**
+
+The Dashboard Server exposes REST API endpoints for querying orchestrator state, but these critical endpoints lack tests. API is used by dashboard UI to fetch job status, health information, metrics, and operational data. Without tests, API changes can break dashboard functionality silently.
+
+**Recommended Solution:**
+Create `/tests/api/` directory with endpoint tests validating:
+- Health check endpoint (format, accuracy, component status)
+- Jobs endpoint (list, pagination, filtering, field validation)
+- Auth login endpoint (valid/invalid creds, token format)
+- Metrics endpoint (structure, values)
+- Sessions endpoint (data accuracy, access control)
+- Auth middleware (token validation, expiry, 401/403 responses)
+- Error handling (404, 500, malformed requests)
+
+**Success Criteria:**
+- `/tests/api/` directory with tests for all endpoints
+- Each endpoint has 3+ test cases covering happy path, edge cases, errors, auth
+- Tests validate response structure and HTTP status codes
+- Tests verify authentication middleware works
+- All API tests pass in CI/CD
+- Test coverage for Dashboard endpoints > 85%
+
+---
+
+#### TEST-05: Provider Tool Parsing Never Validated Against Real Output
+
+**Severity:** S2 (High)
+**Effort:** 2h
+**Blocking:** Medium
+**Category:** PROVIDER VALIDATION
+**Files Affected:** `/tests/providers/tool-parsing.test.ts` (new)
+**Impact Level:** 5/5
+
+**Description:**
+
+Providers implement regex patterns to parse tool calls from provider output (XML, JSON formats). These patterns were written speculatively without validation against real provider responses. When real tool output arrives, parsing fails silently and users can't invoke tools.
+
+**Recommended Solution:**
+- Collect real provider output and create fixtures in `/tests/fixtures/`:
+  - Real Gemini XML tool call format
+  - Real Claude tool use format
+  - Real OpenAI function call format
+  - Malformed/edge case responses
+- Create `/tests/providers/tool-parsing.test.ts` with test cases validating:
+  - Parsing real Gemini/Claude/OpenAI tool call formats
+  - Multiple tool calls in single response
+  - Tool args with special characters and escaping
+  - Malformed tool calls (invalid JSON, missing args)
+  - Text content mixed with tool calls
+  - Provider-specific format variations
+
+**Success Criteria:**
+- Real provider output collected from Gemini, Claude, OpenAI APIs
+- `/tests/fixtures/` with 10+ real provider responses
+- `/tests/providers/tool-parsing.test.ts` with 15+ test cases
+- All parsing regex patterns validated against real output
+- Tests cover special characters, escaping, malformed responses
+- Test coverage for tool parsing > 90%
+
+---
+
+#### TEST-06: GeminiProvider `checkAuth()` Tests Missing
+
+**Severity:** S2 (High)
+**Effort:** 1h
+**Blocking:** No
+**Category:** PROVIDER VALIDATION
+**Files Affected:** `/tests/providers/gemini-auth.test.ts` (new)
+**Impact Level:** 3/5
+
+**Description:**
+
+The GeminiProvider implements `checkAuth()` to validate that the Gemini CLI is properly authenticated. However, authentication tests are missing. Only binary existence is tested, not actual authentication state. Invalid tokens go undetected until task execution fails.
+
+**Recommended Solution:**
+Create `/tests/providers/gemini-auth.test.ts` with test cases validating:
+- Valid authentication check returns true
+- Invalid token returns false
+- Binary not found returns false
+- Network errors handled gracefully
+- Timeout after 5 seconds
+- Retry on transient failures
+- Error classification (auth vs network vs binary issues)
+
+**Success Criteria:**
+- `/tests/providers/gemini-auth.test.ts` created with 7+ test cases
+- Tests validate successful authentication, invalid tokens, network errors
+- Tests validate error classification
+- All auth tests pass in CI/CD
+- Test coverage for GeminiProvider.checkAuth() > 85%
+
+---
+
+#### TEST-07: TelegramGateway User Allowlist Logic Untested
+
+**Severity:** S2 (High)
+**Effort:** 2h
+**Blocking:** No
+**Category:** SECURITY TESTING
+**Files Affected:** `/tests/gateways/telegram-allowlist.test.ts` (new)
+**Impact Level:** 4/5
+
+**Description:**
+
+The TelegramGateway implements security-critical allowlist logic: only allow specified users to steer tasks. This allowlist logic has zero test coverage. Unauthorized users could potentially steer tasks if the allowlist is not enforced correctly.
+
+**Recommended Solution:**
+Create `/tests/gateways/telegram-allowlist.test.ts` with test cases validating:
+- Allowed user can steer tasks
+- Denied user cannot steer tasks
+- User allowlist validation returns correct true/false
+- Allowlist loaded from config file
+- Empty allowlist handled gracefully
+- Malformed allowlist handled safely
+- User ID matching is case-sensitive
+- Multiple concurrent steering attempts from mixed users
+- Allowlist can be updated at runtime
+- Audit logging of steering attempts (allowed and denied)
+
+**Success Criteria:**
+- `/tests/gateways/telegram-allowlist.test.ts` created with 12+ test cases
+- Tests validate allowed users accepted and denied users blocked
+- Tests verify allowlist loading and configuration
+- Tests validate concurrent access control and audit logging
+- All allowlist tests pass in CI/CD
+- Test coverage for TelegramGateway access control > 90%
+
+---
+
+### Summary Table: Testing Gaps
+
+| Gap ID | Issue | Severity | Effort | Blocking | Priority |
+|--------|-------|----------|--------|----------|----------|
+| **TEST-01** | No Integration Tests for Orchestration | S2 | 4h | Yes | P1 |
+| **TEST-02** | No Failover/Retry Scenario Tests | S2 | 3h | Medium | P1 |
+| **TEST-03** | CLI Commands Lack Functional Tests | S2 | 3h | No | P2 |
+| **TEST-04** | Dashboard Endpoints Untested | S2 | 3h | No | P2 |
+| **TEST-05** | Provider Tool Parsing Never Validated | S2 | 2h | Medium | P1 |
+| **TEST-06** | GeminiProvider `checkAuth()` Tests Missing | S2 | 1h | No | P2 |
+| **TEST-07** | TelegramGateway User Allowlist Logic Untested | S2 | 2h | No | P2 |
+
+**Total Effort:** 18 hours
+**Critical Path (P1):** 9 hours (TEST-01, TEST-02, TEST-05)
+**Production Blockers:** 2 gaps (TEST-01, TEST-02)
+
+---
+
+## 10. OPERATIONAL GAPS (5 gaps)
+
+### Root Cause Analysis
+
+**Problem:** The Zora framework cannot run as a production service due to incomplete operational infrastructure. CLI daemon commands are non-functional stubs, dashboard API endpoints return placeholder data instead of real system state, and the frontend UI has never been compiled. Additionally, critical resource management gaps (unbounded buffering in streaming providers) and observability gaps (no structured logging) prevent operational monitoring and debugging.
+
+**Risk Profile:**
+- **Immediate (S2):** Cannot start/stop system as daemon; dashboard shows no active jobs; UI never loads
+- **Operational (S2):** Unbounded buffer in GeminiProvider consumes all RAM on extended sessions; scattered console.log calls prevent debugging
+- **Production Impact:** Service cannot be deployed, monitored, or managed; complete operational blindness
+- **Resource Leaks:** Streaming provider buffers accumulate indefinitely; no memory boundaries
+
+---
+
+#### OPS-01: CLI Daemon Commands Are Stubs
+
+**Severity:** S2 (High)
+**Effort:** 3h
+**Blocking:** Yes
+**Category:** SERVICE MANAGEMENT
+**Files Affected:** 1
+**Impact Level:** 5/5
+
+**Description:**
+
+The CLI daemon commands (start, stop, status) are non-functional stubs that cannot actually manage the Zora service as a daemon process:
+
+```typescript
+// Problematic code at src/cli/index.ts
+case 'start':
+  console.log('Starting Zora agent...');
+  console.log('PID: 12345'); // Hardcoded, not actual process
+  break;
+
+case 'stop':
+  console.log('Stopping Zora agent...');
+  // No-op: does nothing
+  break;
+
+case 'status':
+  console.log('Agent status: running'); // Simulated data
+  console.log('Sessions: 2, Tasks: 5'); // Placeholder values
+  break;
+```
+
+The implementation has critical deficiencies:
+
+**Specific Failure Modes:**
+- `start` command logs hardcoded PID 12345; no actual process spawned
+- `stop` command does nothing; running processes not terminated
+- `status` command returns simulated data; actual system state invisible
+- No pidfile management; multiple instances can start simultaneously
+- No signal handling (SIGTERM, SIGINT); process termination impossible
+- Cannot integrate with systemd/init systems; service unmanageable
+
+**Impact Assessment:**
+- **Service Management:** CRITICAL - Cannot start/stop Zora as service
+- **Production Readiness:** CRITICAL - No daemon process management
+- **System Integration:** SEVERE - Cannot integrate with init systems or process managers
+- **Operability:** Blocks R11, R12, R13 in roadmap (daemon service requirements)
+- **Debugging:** No PID tracking; impossible to identify running processes
+
+**Roadmap Blocking:**
+- R11: Service daemon with graceful shutdown
+- R12: Health check endpoints for monitoring
+- R13: Process lifecycle management (reload config, etc.)
+
+**Recommended Solution:**
+
+1. **Implement proper daemon spawning for `start` command:**
+   ```typescript
+   case 'start': {
+     // Check if already running
+     const pidFile = '/var/run/zora.pid';
+     if (fs.existsSync(pidFile)) {
+       const existingPid = parseInt(fs.readFileSync(pidFile, 'utf-8'));
+       try {
+         process.kill(existingPid, 0); // Check if process exists
+         console.error('Zora is already running (PID: ' + existingPid + ')');
+         process.exit(1);
+       } catch (e) {
+         // Process doesn't exist; remove stale pidfile
+         fs.unlinkSync(pidFile);
+       }
+     }
+
+     // Spawn daemon process
+     const child = spawn('node', ['src/index.ts'], {
+       detached: true,
+       stdio: 'ignore'
+     });
+
+     // Write pidfile
+     fs.writeFileSync(pidFile, String(child.pid));
+
+     // Unref child so parent can exit
+     child.unref();
+
+     console.log('Zora started successfully (PID: ' + child.pid + ')');
+     break;
+   }
+   ```
+
+2. **Implement signal handling in main process for `stop` command:**
+   ```typescript
+   process.on('SIGTERM', () => {
+     logger.info('SIGTERM received; shutting down gracefully');
+     gracefulShutdown()
+       .then(() => {
+         logger.info('Shutdown complete');
+         process.exit(0);
+       })
+       .catch((err) => {
+         logger.error('Error during shutdown', err);
+         process.exit(1);
+       });
+   });
+
+   process.on('SIGINT', () => {
+     logger.info('SIGINT received; shutting down gracefully');
+     gracefulShutdown().catch(() => process.exit(1));
+   });
+   ```
+
+3. **Implement real status checking:**
+   ```typescript
+   case 'status': {
+     const pidFile = '/var/run/zora.pid';
+     if (!fs.existsSync(pidFile)) {
+       console.log('Zora is not running');
+       process.exit(1);
+     }
+
+     const pid = parseInt(fs.readFileSync(pidFile, 'utf-8'));
+     try {
+       process.kill(pid, 0); // Check if process exists
+       console.log('Zora is running (PID: ' + pid + ')');
+
+       // Query actual status from running process
+       const status = await queryDaemonStatus(pid);
+       console.log('Status:', status.state);
+       console.log('Active sessions:', status.sessions);
+       console.log('Uptime:', formatUptime(status.uptime));
+     } catch (e) {
+       console.error('Zora is not running (stale pidfile found)');
+       fs.unlinkSync(pidFile);
+       process.exit(1);
+     }
+     break;
+   }
+   ```
+
+4. **Add pidfile and lifecycle management utilities:**
+   - Create pidfile on startup
+   - Validate pidfile on startup (remove stale files)
+   - Remove pidfile on graceful shutdown
+   - Implement process health checks via IPC or health endpoint
+   - Add configuration reload via SIGHUP
+
+5. **Integrate with systemd/init:**
+   - Create systemd unit file for Zora service
+   - Support for `systemctl start/stop/restart zora`
+   - Automatic restart on failure
+   - Proper logging integration
+
+**Success Criteria:**
+- `start` command spawns actual daemon process and writes pidfile
+- `stop` command sends SIGTERM and waits for graceful shutdown
+- `status` command reports accurate running state and active sessions
+- Multiple start attempts prevented; stale pidfiles cleaned up
+- Graceful shutdown completes within 30 seconds
+- SIGTERM/SIGINT handled properly; database connections closed
+- Process integrates with systemd unit file
+
+**Verification:**
+- Manual testing: start/stop/status work correctly
+- PID tracking: pidfile accurate after start
+- Graceful shutdown: all connections closed on SIGTERM
+- Integration tests verify daemon lifecycle
+- systemd integration verified on Linux
+
+**Dependencies:**
+- Unblocks OPS-02, OPS-03 (dashboard and frontend require running daemon)
+- Enables R11, R12, R13 in roadmap
+
+---
+
+#### OPS-02: Dashboard `GET /api/jobs` Returns Empty Placeholder
+
+**Severity:** S2 (High)
+**Effort:** 2h
+**Blocking:** Yes
+**Category:** API IMPLEMENTATION
+**Files Affected:** 1
+**Impact Level:** 4/5
+
+**Description:**
+
+The dashboard API endpoint for listing active jobs returns a hardcoded empty array instead of querying actual system state:
+
+```typescript
+// Problematic code at src/dashboard/server.ts:116
+app.get('/api/jobs', (req, res) => {
+  // return a placeholder
+  res.json({ jobs: [] });
+});
+```
+
+This endpoint is critical for dashboard functionality but currently:
+
+**Specific Failure Modes:**
+- Always returns empty array regardless of actual active sessions
+- Dashboard shows "No active jobs" even when jobs running
+- No way to monitor active sessions from UI
+- Frontend has no data to display; appears broken
+- Cannot see job progress, status, or metrics
+- Operations team cannot monitor system activity
+
+**Impact Assessment:**
+- **Dashboard Functionality:** CRITICAL - Core feature (active jobs) non-functional
+- **Operational Visibility:** CRITICAL - No way to monitor what system is doing
+- **User Feedback:** SEVERE - Dashboard appears broken; no data displayed
+- **Monitoring:** SEVERE - Cannot check system state from UI
+- **Blocking Roadmap:** Blocks R14 (operational dashboard)
+
+**Roadmap Blocking:**
+- R14: Operational dashboard with job monitoring
+
+**Recommended Solution:**
+
+1. **Query SessionManager for active sessions:**
+   ```typescript
+   app.get('/api/jobs', (req, res) => {
+     try {
+       const sessions = SessionManager.listSessions();
+
+       const jobs = sessions.map(session => ({
+         id: session.id,
+         status: session.status, // running, paused, completed, failed
+         progress: session.progress, // 0-100
+         startTime: session.startTime,
+         currentTask: session.currentTask,
+         agentId: session.agentId,
+         userId: session.userId,
+         metrics: {
+           tokensUsed: session.metrics.tokensUsed,
+           completionTime: session.metrics.completionTime,
+           errors: session.metrics.errors
+         }
+       }));
+
+       res.json({
+         jobs,
+         timestamp: Date.now(),
+         count: jobs.length
+       });
+     } catch (err) {
+       logger.error('Error listing jobs', err);
+       res.status(500).json({ error: 'Failed to list jobs' });
+     }
+   });
+   ```
+
+2. **Add additional endpoints for detailed job information:**
+   ```typescript
+   // Get specific job details
+   app.get('/api/jobs/:jobId', (req, res) => {
+     try {
+       const job = SessionManager.getSession(req.params.jobId);
+       if (!job) {
+         return res.status(404).json({ error: 'Job not found' });
+       }
+       res.json(job);
+     } catch (err) {
+       res.status(500).json({ error: err.message });
+     }
+   });
+
+   // Get job events/logs
+   app.get('/api/jobs/:jobId/events', (req, res) => {
+     try {
+       const events = EventLog.getJobEvents(req.params.jobId);
+       res.json({ events });
+     } catch (err) {
+       res.status(500).json({ error: err.message });
+     }
+   });
+   ```
+
+3. **Implement real-time updates via WebSocket:**
+   - Clients can subscribe to job updates
+   - Send events as jobs start, progress, complete
+   - Live dashboard update without polling
+
+4. **Add filtering and pagination:**
+   ```typescript
+   app.get('/api/jobs', (req, res) => {
+     const status = req.query.status; // filter by status
+     const limit = parseInt(req.query.limit) || 50; // pagination
+     const offset = parseInt(req.query.offset) || 0;
+
+     let jobs = SessionManager.listSessions();
+
+     if (status) {
+       jobs = jobs.filter(j => j.status === status);
+     }
+
+     const paginated = jobs.slice(offset, offset + limit);
+
+     res.json({
+       jobs: paginated,
+       total: jobs.length,
+       limit,
+       offset
+     });
+   });
+   ```
+
+5. **Add metrics aggregation endpoint:**
+   ```typescript
+   app.get('/api/metrics', (req, res) => {
+     const sessions = SessionManager.listSessions();
+     const metrics = {
+       totalSessions: sessions.length,
+       activeSessions: sessions.filter(s => s.status === 'running').length,
+       completedSessions: sessions.filter(s => s.status === 'completed').length,
+       failedSessions: sessions.filter(s => s.status === 'failed').length,
+       totalTokensUsed: sessions.reduce((sum, s) => sum + s.metrics.tokensUsed, 0),
+       averageCompletionTime: calculateAverage(sessions.map(s => s.metrics.completionTime))
+     };
+     res.json(metrics);
+   });
+   ```
+
+**Success Criteria:**
+- `GET /api/jobs` returns actual active sessions from SessionManager
+- Response includes job status, progress, timing, and metrics
+- Filtered and paginated results supported
+- Error handling returns appropriate HTTP status codes
+- Dashboard UI updates properly with real data
+- Performance: endpoint responds within 100ms
+
+**Verification:**
+- Unit tests verify SessionManager data reflected in response
+- Integration tests verify endpoint with multiple active sessions
+- Dashboard UI properly displays returned job data
+- Response schema validated against API specification
+
+**Dependencies:**
+- Depends on OPS-01 (daemon must be running to have sessions)
+- Unblocks dashboard functionality and R14 roadmap item
+
+---
+
+#### OPS-03: No Frontend Build Output
+
+**Severity:** S2 (High)
+**Effort:** 1h
+**Blocking:** Yes
+**Category:** BUILD SYSTEM
+**Files Affected:** 1+ (all dashboard frontend files)
+**Impact Level:** 4/5
+
+**Description:**
+
+The dashboard frontend React application exists in source form but has never been compiled to a production build. The expected output directory `/src/dashboard/frontend/dist/` is empty or missing:
+
+```
+/src/dashboard/frontend/
+├── src/
+│   ├── App.tsx
+│   ├── components/
+│   └── pages/
+├── package.json
+├── vite.config.ts
+└── dist/  ← EMPTY - no compiled output
+```
+
+This prevents the dashboard UI from loading at all:
+
+**Specific Failure Modes:**
+- Dashboard server has no static files to serve
+- Browser requests to `/` receive 404 or error
+- React components never compiled to JavaScript
+- Vite build process never run
+- No CSS compilation; styles missing
+- All frontend assets unavailable
+
+**Impact Assessment:**
+- **UI Accessibility:** CRITICAL - Dashboard UI never loads
+- **User Experience:** CRITICAL - Operators cannot use dashboard
+- **Deployment:** CRITICAL - Cannot serve dashboard in production
+- **Development:** SEVERE - Frontend changes never deployed
+- **Blocking Roadmap:** Blocks R15 (dashboard UI operational)
+
+**Roadmap Blocking:**
+- R15: Dashboard UI fully operational
+
+**Recommended Solution:**
+
+1. **Add postinstall script to build frontend automatically:**
+   ```json
+   // In package.json
+   {
+     "scripts": {
+       "build": "npm run build:frontend && npm run build:backend",
+       "build:frontend": "cd src/dashboard/frontend && npm install && npm run build",
+       "build:backend": "tsc",
+       "start": "node dist/src/cli/index.js",
+       "dev": "ts-node src/cli/index.ts"
+     }
+   }
+   ```
+
+2. **Configure dashboard server to serve built frontend:**
+   ```typescript
+   // In src/dashboard/server.ts
+   import path from 'path';
+   import express from 'express';
+
+   const app = express();
+
+   // Serve static frontend files
+   const distPath = path.join(__dirname, '../dashboard/frontend/dist');
+   app.use(express.static(distPath));
+
+   // API routes
+   app.use('/api', apiRoutes);
+
+   // Fallback to index.html for SPA routing
+   app.get('*', (req, res) => {
+     res.sendFile(path.join(distPath, 'index.html'));
+   });
+   ```
+
+3. **Run build on first startup if dist missing:**
+   ```typescript
+   async function ensureFrontendBuilt() {
+     const distPath = path.join(__dirname, '../dashboard/frontend/dist');
+
+     if (!fs.existsSync(distPath)) {
+       logger.info('Frontend build missing; building now...');
+       await exec('npm run build:frontend', { cwd: __dirname });
+       logger.info('Frontend build complete');
+     }
+   }
+
+   // Call before starting server
+   await ensureFrontendBuilt();
+   startDashboardServer();
+   ```
+
+4. **Verify build output in CI/CD:**
+   - Build frontend in CI pipeline
+   - Verify dist/ directory has expected files (index.html, main.js, etc.)
+   - Fail build if frontend compilation fails
+   - Include frontend in deployment artifacts
+
+5. **Add development hot reload:**
+   ```typescript
+   // In development mode, proxy to Vite dev server
+   if (process.env.NODE_ENV === 'development') {
+     const { createProxyMiddleware } = require('http-proxy-middleware');
+     app.use('/', createProxyMiddleware({
+       target: 'http://localhost:5173', // Vite dev server
+       changeOrigin: true,
+       ws: true
+     }));
+   }
+   ```
+
+**Success Criteria:**
+- `npm run build` compiles frontend and backend successfully
+- `/src/dashboard/frontend/dist/` contains compiled React app
+- index.html, main.js, and CSS files present in dist/
+- Dashboard server serves static files correctly
+- Browser can load dashboard UI
+- React components render without errors
+- API calls from frontend work correctly
+
+**Verification:**
+- Manual build: `npm run build` succeeds
+- Static files accessible: curl http://localhost:3000/
+- Dashboard UI renders: browser shows dashboard page
+- CI/CD verifies frontend compilation
+- Deployment includes frontend build artifacts
+
+**Dependencies:**
+- Depends on OPS-02 (API endpoints must be working)
+- Unblocks R15 and complete dashboard functionality
+
+---
+
+#### OPS-04: GeminiProvider Unbounded Buffer
+
+**Severity:** S2 (High)
+**Effort:** 1h
+**Blocking:** No
+**Category:** RESOURCE MANAGEMENT
+**Files Affected:** 1
+**Impact Level:** 3/5
+
+**Description:**
+
+The GeminiProvider accumulates streaming output in a buffer without size limits, causing runaway memory consumption on extended or high-volume sessions:
+
+```typescript
+// Problematic code at src/providers/gemini-provider.ts:149
+private buffer = '';
+
+async onStreamChunk(chunk: string) {
+  this.buffer += chunk; // Buffer grows indefinitely
+  // Process and accumulate...
+}
+```
+
+This implementation has critical resource management deficiencies:
+
+**Specific Failure Modes:**
+- Buffer accumulates all streaming output without limit
+- Long conversations or high-volume output exhaust RAM
+- No truncation or cleanup mechanism
+- Memory usage grows proportionally with session duration
+- System eventually runs out of memory; crashes or freezes
+- Particularly severe with verbose providers or large tool outputs
+
+**Impact Assessment:**
+- **Resource Leaks:** CRITICAL - Unbounded memory growth
+- **Availability:** CRITICAL - System crashes under sustained load
+- **Production Readiness:** CRITICAL - Cannot handle extended sessions
+- **Operational Impact:** SEVERE - Requires manual restart/cleanup
+- **Blocking Roadmap:** Blocks R28 (production resource management)
+
+**Roadmap Blocking:**
+- R28: Production resource management and monitoring
+
+**Recommended Solution:**
+
+1. **Implement 50MB buffer cap with truncation:**
+   ```typescript
+   private buffer = '';
+   private readonly MAX_BUFFER_SIZE = 50 * 1024 * 1024; // 50MB
+   private bufferTruncated = false;
+
+   async onStreamChunk(chunk: string) {
+     this.buffer += chunk;
+
+     if (this.buffer.length > this.MAX_BUFFER_SIZE) {
+       if (!this.bufferTruncated) {
+         logger.warn('GeminiProvider buffer exceeding limit; truncating', {
+           currentSize: this.buffer.length,
+           limit: this.MAX_BUFFER_SIZE,
+           provider: 'gemini'
+         });
+         this.bufferTruncated = true;
+       }
+
+       // Keep most recent MAX_BUFFER_SIZE bytes
+       const excess = this.buffer.length - this.MAX_BUFFER_SIZE;
+       this.buffer = this.buffer.slice(excess);
+
+       // Emit warning event
+       this.emit('warning', {
+         type: 'buffer_truncated',
+         size: excess,
+         message: 'Output buffer truncated; excess data discarded'
+       });
+     }
+
+     // Process chunk...
+     this.processChunk(chunk);
+   }
+   ```
+
+2. **Add buffer metrics and monitoring:**
+   ```typescript
+   getBufferMetrics() {
+     return {
+       currentSize: this.buffer.length,
+       maxSize: this.MAX_BUFFER_SIZE,
+       utilizationPercent: (this.buffer.length / this.MAX_BUFFER_SIZE) * 100,
+       truncated: this.bufferTruncated,
+       chunks: this.chunkCount,
+       timestamp: Date.now()
+     };
+   }
+
+   // Emit metrics periodically
+   setInterval(() => {
+     const metrics = this.getBufferMetrics();
+     if (metrics.utilizationPercent > 80) {
+       logger.warn('GeminiProvider buffer utilization high', metrics);
+     }
+   }, 30000); // Every 30 seconds
+   ```
+
+3. **Implement buffer cleanup on completion:**
+   ```typescript
+   async complete() {
+     const finalSize = this.buffer.length;
+     this.buffer = ''; // Clear buffer
+     this.bufferTruncated = false;
+
+     logger.info('GeminiProvider session complete; buffer cleared', {
+       finalSize,
+       truncated: this.bufferTruncated
+     });
+   }
+   ```
+
+4. **Add configuration for buffer limits:**
+   ```typescript
+   interface ProviderConfig {
+     maxBufferSize?: number; // Bytes
+     bufferTruncationPolicy?: 'discard' | 'spillToDisk';
+   }
+
+   // Allow operators to tune limits per environment
+   const config = {
+     maxBufferSize: process.env.PROVIDER_MAX_BUFFER || 50 * 1024 * 1024,
+     bufferTruncationPolicy: 'discard' // or 'spillToDisk' for temp storage
+   };
+   ```
+
+5. **Consider spill-to-disk for large outputs:**
+   ```typescript
+   async onStreamChunk(chunk: string) {
+     // Attempt to add to buffer
+     if (this.buffer.length + chunk.length > this.MAX_BUFFER_SIZE) {
+       // Spill to temp file instead of discarding
+       if (!this.tempFile) {
+         this.tempFile = fs.createWriteStream(
+           path.join(os.tmpdir(), `zora-buffer-${this.sessionId}.tmp`)
+         );
+       }
+       this.tempFile.write(chunk);
+     } else {
+       this.buffer += chunk;
+     }
+   }
+   ```
+
+**Success Criteria:**
+- Buffer size capped at 50MB maximum
+- Truncation warning logged when limit exceeded
+- Metrics endpoint reports buffer utilization
+- Extended sessions do not consume unlimited memory
+- No crashes due to buffer exhaustion
+- Operations can monitor buffer health
+
+**Verification:**
+- Unit tests verify buffer truncation at limit
+- Load testing with extended sessions confirms bounded memory
+- Metrics show 0% memory growth after limit reached
+- Warning events emitted correctly on truncation
+- No data corruption from truncation
+
+**Dependencies:**
+- Independent of other gaps; can be fixed immediately
+- Enables R28 (production resource management)
+
+---
+
+#### OPS-05: No Structured Logging
+
+**Severity:** S2 (High)
+**Effort:** 3h
+**Blocking:** No
+**Category:** OBSERVABILITY
+**Files Affected:** 36+ (distributed console.log calls)
+**Impact Level:** 3/5
+
+**Description:**
+
+The Zora codebase contains 136 scattered `console.log` calls with inconsistent formatting, preventing structured observability and making debugging and monitoring extremely difficult:
+
+```typescript
+// Examples of inconsistent logging scattered throughout codebase
+console.log('Agent started'); // No timestamp
+console.log(`Processing: ${task}`); // Inline data, hard to parse
+console.error('Error:', err); // Unstructured error format
+console.warn('Warning'); // No context
+// No trace IDs, no request IDs, no structured fields
+```
+
+This implementation has critical observability deficiencies:
+
+**Specific Failure Modes:**
+- No timestamp on console output; cannot correlate with events
+- No structured fields; logs hard to parse and search
+- No log levels consistently applied
+- No trace IDs for request tracking across components
+- No correlation with metrics or alarms
+- Console output lost when redirected or piped
+- Impossible to debug production issues with only console.log
+- No log rotation or storage; logs fill up disk or disappear
+
+**Impact Assessment:**
+- **Operability:** CRITICAL - Cannot debug production issues
+- **Monitoring:** CRITICAL - No structured logs for alerting/dashboards
+- **Security:** SEVERE - No audit trail or security event tracking
+- **Compliance:** SEVERE - Cannot meet audit logging requirements
+- **Troubleshooting:** SEVERE - Production support blind without logs
+- **Blocking Roadmap:** Blocks R23 (operational observability)
+
+**Roadmap Blocking:**
+- R23: Production operational observability and monitoring
+
+**Recommended Solution:**
+
+1. **Implement structured JSON logger (pino or winston):**
+   ```typescript
+   // Create logger utility
+   // src/utils/logger.ts
+   import pino from 'pino';
+   import path from 'path';
+
+   const logger = pino({
+     level: process.env.LOG_LEVEL || 'info',
+     transport: {
+       target: 'pino-pretty',
+       options: {
+         colorize: true,
+         translateTime: 'SYS:standard',
+         singleLine: false
+       }
+     },
+     timestamp: pino.stdTimeFunctions.isoTime
+   });
+
+   // In production, add file rotation
+   if (process.env.NODE_ENV === 'production') {
+     const transport = pino.transport({
+       targets: [
+         {
+           level: 'info',
+           target: 'pino/file',
+           options: { destination: '/var/log/zora/app.log' }
+         },
+         {
+           level: 'error',
+           target: 'pino/file',
+           options: { destination: '/var/log/zora/error.log' }
+         }
+       ]
+     });
+     logger.addTransport(transport);
+   }
+
+   export { logger };
+   ```
+
+2. **Replace all console.log calls with structured logging:**
+   ```typescript
+   // Before
+   console.log('Processing task:', task.id);
+   console.error('Error processing task:', err);
+
+   // After
+   logger.info({ taskId: task.id }, 'Processing task');
+   logger.error({
+     taskId: task.id,
+     error: err.message,
+     stack: err.stack
+   }, 'Error processing task');
+   ```
+
+3. **Add request/trace ID propagation:**
+   ```typescript
+   // Create middleware for request tracking
+   import { v4 as uuidv4 } from 'uuid';
+
+   app.use((req, res, next) => {
+     req.id = req.headers['x-request-id'] || uuidv4();
+     req.logger = logger.child({ requestId: req.id });
+     next();
+   });
+
+   // Use in all handlers
+   app.get('/api/jobs', (req, res) => {
+     req.logger.info('Fetching jobs list');
+     const jobs = JobManager.list();
+     req.logger.info({ jobCount: jobs.length }, 'Jobs fetched successfully');
+     res.json(jobs);
+   });
+   ```
+
+4. **Implement structured context logging:**
+   ```typescript
+   // Log events with consistent structure
+   logger.info({
+     event: 'session_started',
+     sessionId: session.id,
+     userId: session.userId,
+     timestamp: Date.now(),
+     metadata: {
+       provider: 'gemini',
+       model: 'gemini-pro',
+       maxTokens: 4096
+     }
+   }, 'Session initialized');
+
+   logger.error({
+     event: 'provider_error',
+     sessionId: session.id,
+     provider: 'gemini',
+     error: err.message,
+     errorCode: err.code,
+     retryCount: retryAttempt,
+     timestamp: Date.now()
+   }, 'Provider invocation failed');
+   ```
+
+5. **Add log levels and filtering:**
+   ```typescript
+   // Use appropriate log levels
+   logger.trace({ details }, 'Detailed trace information');
+   logger.debug({ debugInfo }, 'Debug-level information');
+   logger.info({ event }, 'Informational message');
+   logger.warn({ issue }, 'Warning condition');
+   logger.error({ error }, 'Error condition');
+   logger.fatal({ critical }, 'Fatal error requiring shutdown');
+
+   // Filter by level in different environments
+   // Development: DEBUG+
+   // Staging: INFO+
+   // Production: WARN+
+   ```
+
+6. **Add performance/metrics logging:**
+   ```typescript
+   const start = Date.now();
+   const result = await provider.invoke(request);
+   const duration = Date.now() - start;
+
+   logger.info({
+     event: 'provider_invocation_complete',
+     provider: 'gemini',
+     duration,
+     tokensUsed: result.tokens,
+     success: true,
+     durationExceeded: duration > 5000 ? 'yes' : 'no'
+   }, 'Provider invocation completed');
+   ```
+
+7. **Set up log aggregation in production:**
+   - Centralized log collection (ELK, Splunk, CloudWatch)
+   - Log retention policies
+   - Automated alerts on error patterns
+   - Dashboard for log searching and analysis
+
+**Success Criteria:**
+- All 136 console.log calls replaced with structured logger
+- Structured JSON format with timestamp, level, and context
+- Request/trace ID propagation through entire stack
+- Log rotation and retention configured
+- Error events include stack traces and context
+- Performance metrics logged for monitoring
+- Zero console.log in production code
+
+**Verification:**
+- Code audit confirms no raw console.log calls (only logger.*)
+- Integration tests verify structured log format
+- Logs can be parsed and searched programmatically
+- Metrics dashboard displays log-based statistics
+- Compliance audit confirms audit trail completeness
+- Production logs demonstrate structured format
+
+**Dependencies:**
+- Independent of other gaps; can be fixed immediately
+- Enables R23 (operational observability)
+
+---
+
+### Summary Table: Operational Gaps
+
+| Gap ID | Issue | Risk Level | Effort | Blocking | Priority |
+|--------|-------|-----------|--------|----------|----------|
+| **OPS-01** | CLI Daemon Commands Are Stubs | Service management | 3h | Yes | P0 |
+| **OPS-02** | Dashboard `GET /api/jobs` Returns Empty Placeholder | Observability | 2h | Yes | P0 |
+| **OPS-03** | No Frontend Build Output | UI delivery | 1h | Yes | P0 |
+| **OPS-04** | GeminiProvider Unbounded Buffer | Resource leak | 1h | No | P1 |
+| **OPS-05** | No Structured Logging | Observability | 3h | No | P1 |
+
+**Total Effort:** 10 hours
+**Critical Path (P0):** 6 hours (OPS-01, OPS-02, OPS-03)
+**Production Blockers:** 3 gaps (OPS-01, OPS-02, OPS-03)
+
+**Parallelization:** OPS-01, OPS-02, OPS-03 can be worked in parallel; OPS-02 requires OPS-01 for actual session data; OPS-04 and OPS-05 independent of others
+
+---
+
+## 11. LOGGING & OBSERVABILITY GAPS (4 gaps)
+
+The Zora framework uses 136 console.log calls scattered throughout the codebase without structured logging, making production debugging nearly impossible. Events lack source attribution, no metrics are exposed, and silent errors in async operations hide failures. This section details observability gaps that prevent operational visibility and reliable troubleshooting.
+
+---
+
+### LOG-01: Console.log Used Throughout
+**Severity:** S3 | **Functionality Impact:** 2 | **Reliability:** 2 | **Security:** 1
+**Effort:** 3h | **Blocking:** N | **Status:** Open
+
+#### Description
+The codebase contains 136+ console.log, console.error, and console.warn calls scattered across 15+ files with no consistent structure, formatting, or machine-parseable format. Log output is unstructured text that is impossible to search, filter, or correlate across distributed components. Production operators cannot distinguish between debug info and critical errors; logs cannot be aggregated into centralized logging systems (ELK, DataDog, Splunk, CloudWatch).
+
+#### Current State
+- **Location:** `/home/user/zora/src/orchestration/`, `/home/user/zora/src/providers/`, `/home/user/zora/src/security/`, and other directories
+- **Example Pattern:**
+```typescript
+// Scattered throughout codebase
+console.log('Task started', taskId);
+console.error('Failed to execute:', error.message);
+console.warn('Provider degraded');
+// No timestamp, no context, no machine-readable format
+// Different format in each location
+```
+- **Estimated Count:** 136+ calls across 15+ files
+- **Related Gaps:** LOG-02 (Silent Errors), LOG-03 (No Instrumentation)
+
+#### Expected State
+Unified JSON logger that emits structured logs with:
+- Timestamp (ISO 8601)
+- Log level (DEBUG, INFO, WARN, ERROR, CRITICAL)
+- Source/component name
+- Event context (task ID, provider, user, etc.)
+- Machine-parseable format for ingestion into observability platforms
+- Optional stack trace for errors
+- Correlation IDs for distributed tracing
+
+Example output:
+```json
+{
+  "timestamp": "2026-02-14T15:30:45.123Z",
+  "level": "ERROR",
+  "source": "execution-loop",
+  "message": "Task execution failed",
+  "taskId": "abc-123",
+  "provider": "claude",
+  "error": "rate_limit_error",
+  "duration_ms": 2500,
+  "correlationId": "req-xyz-789"
+}
+```
+
+#### Why It Matters
+Structured logging enables:
+1. **Production Debugging:** Search logs by task ID, provider, error type
+2. **Alerting:** Set thresholds on error rates, response times
+3. **Monitoring:** Track performance trends and degradation patterns
+4. **Compliance:** Audit trail with full context for incidents
+5. **Integration:** Send logs to DataDog, Splunk, CloudWatch, etc.
+
+Without structured logging, diagnosing production issues requires manual log review; correlation across components is impossible.
+
+#### Remediation Approach
+**Strategy:** Create a structured Logger utility (not console.log) that emits JSON-formatted logs with timestamp, level, context, and source. Replace all console.log/error/warn calls with logger.info(), logger.error(), etc. Configure log level via environment variable.
+
+**Affected Files:**
+- `/home/user/zora/src/utils/logger.ts` — Create unified logger utility
+- `/home/user/zora/src/orchestration/execution-loop.ts` — Replace console.log with logger
+- `/home/user/zora/src/providers/*.ts` — Replace console.log in all providers
+- `/home/user/zora/src/security/audit-logger.ts` — Replace console.log in audit
+- All other files with console.log calls
+
+**Dependencies:** None - can be implemented independently
+
+**Test Coverage:**
+- Verify logger outputs valid JSON
+- Verify log levels respected (DEBUG filtered when level=INFO)
+- Verify context fields included (task ID, provider, etc.)
+- Verify logs can be parsed by jq and standard JSON tools
+
+**Definition of Done:**
+- [ ] Logger utility created with DEBUG, INFO, WARN, ERROR, CRITICAL levels
+- [ ] All console.log calls replaced with logger.info/error/warn
+- [ ] Log output is valid JSON with timestamp, source, level, context
+- [ ] Configuration via LOG_LEVEL environment variable
+- [ ] No more than 2 console.log calls remaining (reserved for critical startup)
+
+---
+
+### LOG-02: Silent Errors in Async Operations
+**Severity:** S2 | **Functionality Impact:** 3 | **Reliability:** 3 | **Security:** 2
+**Effort:** 2h | **Blocking:** N | **Status:** Open
+
+#### Description
+Multiple Promise chains in the codebase use `.then(...).catch(() => {})` patterns that silently swallow errors without logging or alerting. When async operations fail (API calls, file operations, database writes), the failures are invisible. The system appears to continue working while tasks silently fail.
+
+#### Current State
+- **Location:** `/home/user/zora/src/orchestration/`, `/home/user/zora/src/providers/`
+- **Code Pattern:**
+```typescript
+// Promise handlers without error logging
+somePromise
+  .then(result => processResult(result))
+  .catch(() => {}); // Silent failure - no logging
+
+// Async function not awaited
+asyncFunction().catch(() => {}); // Silent failure
+
+// Event listener without error handling
+emitter.on('event', async (data) => {
+  await riskyOperation(); // Error ignored if no await in caller
+});
+```
+- **Estimated Count:** 10+ locations
+- **Related Gaps:** LOG-01 (Structured Logging), ERR-02 (Provider Errors)
+
+#### Expected State
+All Promise catch blocks log errors explicitly with context:
+- Error message and type
+- Stack trace for debugging
+- Context (operation name, resource, IDs)
+- Task/request correlation ID
+- Timestamp
+
+Errors propagate to error handling pipeline for retry/failover decisions or alerting.
+
+#### Why It Matters
+Silent errors hide system failures:
+1. **User Impact:** Tasks fail without any feedback; users retry manually
+2. **Debugging Difficulty:** No error logs to investigate; appears to work
+3. **Data Loss Risk:** Failed operations may not retry; data dropped
+4. **System Health:** Cannot detect widespread failures
+5. **Production Stability:** Cascading failures undetected until critical
+
+#### Remediation Approach
+**Strategy:** Replace all `.catch(() => {})` with explicit error logging. Use logger.error() with full context. For critical operations, re-throw errors or emit error events for escalation.
+
+**Affected Files:**
+- `/home/user/zora/src/orchestration/execution-loop.ts` — Promise error logging
+- `/home/user/zora/src/providers/*.ts` — API call error handling
+- All files with bare `.catch()` blocks
+
+**Dependencies:** LOG-01 (Structured Logger)
+
+**Test Coverage:**
+- Verify errors are logged when promises reject
+- Verify error context includes operation name and IDs
+- Verify errors logged at ERROR level
+- Verify critical errors propagate/re-throw
+
+**Definition of Done:**
+- [ ] No `.catch(() => {})` blocks remain (all errors logged)
+- [ ] Error logs include context (operation, resource, IDs)
+- [ ] Critical errors re-thrown or emitted for escalation
+- [ ] Integration test verifies error logging on failure scenarios
+
+---
+
+### LOG-03: No Health Check Instrumentation
+**Severity:** S2 | **Functionality Impact:** 3 | **Reliability:** 3 | **Security:** 1
+**Effort:** 2h | **Blocking:** N | **Status:** Open
+
+#### Description
+The AuthMonitor, HeartbeatSystem, and RoutineManager services run (when they run) but produce no observable metrics or health status. There is no `/metrics` endpoint, no Prometheus-style metrics, and no health check API. Operators cannot determine system health, provider availability, or service status without querying internal state directly.
+
+#### Current State
+- **Location:** `/home/user/zora/src/orchestration/auth-monitor.ts`, `/home/user/zora/src/orchestration/heartbeat-system.ts`, `/home/user/zora/src/orchestration/routine-manager.ts`
+- **Missing Instrumentation:**
+```typescript
+// AuthMonitor runs but no metrics emitted
+async checkAuth(): Promise<void> {
+  // Check provider tokens...
+  // No metrics on check results, token expiry times, failures
+}
+
+// No health endpoint
+// GET /health endpoint doesn't exist
+// No Prometheus metrics
+```
+- **Related Gaps:** LOG-01 (Structured Logging), ORCH-04 (AuthMonitor Never Scheduled)
+
+#### Expected State
+Prometheus-style metrics or health status JSON endpoint:
+- Health status: OK, DEGRADED, CRITICAL
+- Provider availability (per provider)
+- Token expiry times (hours until expiry)
+- Last health check timestamp
+- Error counts and rates
+- Resource utilization (memory, CPU if available)
+
+Example `/health` response:
+```json
+{
+  "status": "OK",
+  "timestamp": "2026-02-14T15:30:45Z",
+  "providers": {
+    "claude": { "status": "OK", "tokenExpiresIn": 86400 },
+    "ollama": { "status": "OK", "responseTime": 125 },
+    "gemini": { "status": "DEGRADED", "error": "rate_limited" }
+  },
+  "system": { "uptime": 3600, "memoryUsage": "256MB" }
+}
+```
+
+#### Why It Matters
+Observable health enables:
+1. **Operational Dashboards:** See system health at a glance
+2. **Alerting:** Alert on degraded providers, service downtime
+3. **Auto-Recovery:** Orchestration can restart services based on health
+4. **Load Balancing:** Route requests away from degraded providers
+5. **SLA Monitoring:** Track uptime and availability
+
+Without health instrumentation, operators are blind to system state.
+
+#### Remediation Approach
+**Strategy:** Add metrics collection to core services (AuthMonitor, HeartbeatSystem, etc.). Expose via `/health` HTTP endpoint (JSON) or Prometheus `/metrics` endpoint. Track provider availability, token expiry, error rates, and latencies.
+
+**Affected Files:**
+- `/home/user/zora/src/orchestration/auth-monitor.ts` — Emit provider health metrics
+- `/home/user/zora/src/orchestration/heartbeat-system.ts` — Track health status
+- `/home/user/zora/src/api/health-controller.ts` — New endpoint or extend existing API
+- `/home/user/zora/src/orchestration/metrics.ts` — Central metrics collection
+
+**Dependencies:** LOG-01 (Structured Logging)
+
+**Test Coverage:**
+- Verify `/health` endpoint returns status for all providers
+- Verify token expiry times calculated correctly
+- Verify error counts incremented on failures
+- Verify metrics updated periodically
+
+**Definition of Done:**
+- [ ] `/health` endpoint exists and returns provider status
+- [ ] Token expiry times tracked and exposed
+- [ ] Error rates and counts tracked per provider
+- [ ] Prometheus metrics endpoint `/metrics` (optional, for monitoring systems)
+- [ ] Dashboard can query and visualize health status
+
+---
+
+### LOG-04: Event Stream Lacks Source Attribution
+**Severity:** S3 | **Functionality Impact:** 2 | **Reliability:** 2 | **Security:** 1
+**Effort:** 1h | **Blocking:** N | **Status:** Open
+
+#### Description
+AgentEvent objects emitted by the system lack a `source` field identifying which provider or component emitted them. When an event of `type: 'text'` arrives at the dashboard or is logged, there's no way to know whether it came from Claude, Ollama, or Gemini. This makes debugging, attribution, and billing difficult.
+
+#### Current State
+- **Location:** `/home/user/zora/src/orchestration/event.ts`, `/home/user/zora/src/providers/*.ts`
+- **Current Event Structure:**
+```typescript
+interface AgentEvent {
+  type: 'text' | 'error' | 'tool_call' | ...;
+  timestamp: number;
+  content: string; // For text events
+  // Missing: source provider identification
+}
+
+// Example event (incomplete attribution)
+{
+  type: 'text',
+  timestamp: 1707937445123,
+  content: 'Analysis complete'
+  // Which provider sent this? Unknown!
+}
+```
+- **Affected Locations:** 5+ files using AgentEvent
+- **Related Gaps:** LOG-01 (Structured Logging)
+
+#### Expected State
+AgentEvent includes `source` field:
+```typescript
+interface AgentEvent {
+  type: 'text' | 'error' | 'tool_call' | ...;
+  timestamp: number;
+  source: 'claude' | 'ollama' | 'gemini' | 'system'; // NEW
+  content: string;
+  // Optional tracing
+  correlationId?: string;
+  taskId?: string;
+}
+
+// Example with source attribution
+{
+  type: 'text',
+  timestamp: 1707937445123,
+  source: 'claude',  // Now we know!
+  content: 'Analysis complete',
+  taskId: 'task-xyz-123'
+}
+```
+
+#### Why It Matters
+Source attribution enables:
+1. **Provider Metrics:** Track performance per provider (latency, error rate)
+2. **Billing Accuracy:** Charge correct provider for usage
+3. **Debugging:** Trace issues to specific provider behavior
+4. **Multi-Provider Failover:** Understand which provider handled each step
+5. **Audit Trails:** Prove which system produced which result
+
+#### Remediation Approach
+**Strategy:** Add `source: string` field to AgentEvent interface. Update all providers and system components to include source when emitting events. Update event serialization/deserialization to preserve source.
+
+**Affected Files:**
+- `/home/user/zora/src/orchestration/event.ts` — Add source field to interface
+- `/home/user/zora/src/providers/claude-provider.ts` — Include source in events
+- `/home/user/zora/src/providers/ollama-provider.ts` — Include source in events
+- `/home/user/zora/src/providers/gemini-provider.ts` — Include source in events
+- `/home/user/zora/src/orchestration/execution-loop.ts` — Add system as source for framework events
+
+**Dependencies:** None - can be implemented independently
+
+**Test Coverage:**
+- Verify all provider events include source field
+- Verify source value matches provider name
+- Verify system events have source='system'
+- Verify events serialized/deserialized with source preserved
+
+**Definition of Done:**
+- [ ] AgentEvent interface includes source field
+- [ ] All providers emit events with correct source
+- [ ] System components emit events with source='system'
+- [ ] Events logged/stored with source for attribution
+- [ ] Unit tests verify source field in all event types
+
+---
+
+### Summary Table: Logging & Observability Gaps
+
+| Gap ID | Issue | Severity | Effort | Files | Impact |
+|--------|-------|----------|--------|-------|--------|
+| LOG-01 | Console.log Used Throughout | S3 | 3h | 15+ | Cannot debug production issues |
+| LOG-02 | Silent Errors in Async Operations | S2 | 2h | 10+ | Failures invisible to operators |
+| LOG-03 | No Health Check Instrumentation | S2 | 2h | 3+ | No system health visibility |
+| LOG-04 | Event Stream Lacks Source Attribution | S3 | 1h | 5+ | Provider attribution impossible |
+
+**Cumulative Effort:** 8 hours
+**Impact:** Production observability severely limited; debugging nearly impossible
+
+---
+
+## 12. DOCUMENTATION GAPS (5 gaps)
+
+Zora's documentation is fragmented and incomplete: inline code comments are sparse, no architecture decision records exist explaining design choices, provider implementation is undocumented making it difficult to add new providers, configuration is partially explained, and troubleshooting guidance is absent. This section details documentation gaps that impede onboarding, maintainability, and troubleshooting.
+
+---
+
+### DOC-01: Sparse Inline Explanations in Complex Modules
+**Severity:** S3 | **Functionality Impact:** 1 | **Reliability:** 2 | **Security:** 1
+**Effort:** 2h | **Blocking:** N | **Status:** Open
+
+#### Description
+While file-level block comments are present, function-level explanations are sparse in complex modules. The orchestration layer (`/src/orchestration/`), security policy engine (`/src/security/`), and provider implementations lack inline documentation explaining non-obvious logic. New contributors cannot understand the code without extensive reverse-engineering; refactoring introduces bugs due to undocumented invariants.
+
+#### Current State
+- **Location:** `/home/user/zora/src/orchestration/`, `/home/user/zora/src/security/`
+- **Example Gap:**
+```typescript
+// File-level comment exists
+/**
+ * ExecutionLoop manages task execution pipeline
+ */
+export class ExecutionLoop {
+
+  // Function-level comment missing!
+  async executeTask(task: Task): Promise<TaskResult> {
+    // Complex logic here but no explanation
+    // Why these steps in this order?
+    // What invariants must hold?
+    // What side effects occur?
+  }
+
+  // Confusing variable name, no explanation
+  const _failoverChain = determineFailoverStrategy(task);
+  // What does this compute? How is it used?
+
+  // Non-obvious conditionals
+  if (context.priority > 50 && !context.isRetry) {
+    // Why this specific threshold?
+    // What's the semantic meaning?
+  }
+}
+```
+- **Affected Files:** 5+ modules (orchestration, security)
+- **Related Gaps:** DOC-02 (Architecture Decisions), DOC-03 (Provider Guide)
+
+#### Expected State
+Complex functions have JSDoc comments explaining:
+- Purpose and preconditions
+- Parameters and return value semantics
+- Non-obvious logic with "why" not just "what"
+- Important side effects
+- Failure modes and error handling
+
+Example:
+```typescript
+/**
+ * Execute a task through the provider, with failover if needed.
+ *
+ * Preconditions:
+ * - task.provider must be valid or Router will select default
+ * - context.history must contain previous related tasks (may be empty)
+ *
+ * Process:
+ * 1. Inject context from MemoryManager if missing
+ * 2. Call Router.selectProvider() if no provider specified
+ * 3. Execute task via provider.execute()
+ * 4. On provider error, delegate to FailoverController (see ERR-04)
+ * 5. Persist events via SessionManager for audit trail
+ *
+ * Returns: TaskResult with status (success/failure) and events
+ *
+ * Side effects:
+ * - Updates task history in SessionManager
+ * - Emits events during execution
+ * - May switch provider if failover triggered
+ */
+async executeTask(task: Task): Promise<TaskResult> {
+  // ...
+}
+```
+
+#### Why It Matters
+Clear inline documentation enables:
+1. **Onboarding:** New contributors understand code quickly
+2. **Refactoring Safety:** Document invariants; refactor without breaking assumptions
+3. **Debugging:** Understand intent when investigating issues
+4. **Maintenance:** Future changes have clear constraints
+5. **Code Review:** Reviewers understand non-obvious design decisions
+
+#### Remediation Approach
+**Strategy:** Add JSDoc comments to all public functions and complex private functions in orchestration and security modules. Focus on "why" and preconditions, not just "what". Document important invariants and side effects.
+
+**Affected Files:**
+- `/home/user/zora/src/orchestration/execution-loop.ts` — Add JSDoc to all functions
+- `/home/user/zora/src/orchestration/router.ts` — Document selection logic
+- `/home/user/zora/src/orchestration/failover-controller.ts` — Document failover strategy
+- `/home/user/zora/src/security/policy-engine.ts` — Document policy enforcement
+- Other complex modules in orchestration and security
+
+**Dependencies:** None - can be completed independently
+
+**Test Coverage:**
+- Verify all public functions have JSDoc
+- Verify comments explain "why" for non-obvious logic
+- Verify comments document preconditions and side effects
+
+**Definition of Done:**
+- [ ] All public functions in orchestration modules have JSDoc
+- [ ] All complex private functions have explanatory comments
+- [ ] Comments explain purpose, preconditions, and important side effects
+- [ ] Security module functions document policy enforcement logic
+- [ ] Code review checklist includes documentation completeness
+
+---
+
+### DOC-02: No Architecture Decision Records (ADRs)
+**Severity:** S3 | **Functionality Impact:** 1 | **Reliability:** 1 | **Security:** 2
+**Effort:** 3h | **Blocking:** N | **Status:** Open
+
+#### Description
+No architecture decision records exist. Large design decisions (orchestrator architecture, multi-provider routing, failover strategy) are documented only in REMEDIATION_ROADMAP.md or scattered in comments. New team members cannot explain "why" the system is designed this way. Teams cannot understand context for past decisions when refactoring or extending.
+
+#### Current State
+- **Location:** No `/docs/adr/` directory exists
+- **Current Documentation:** Only REMEDIATION_ROADMAP.md and inline comments
+- **Problem:**
+```
+Design decisions are not captured:
+- Why is FailoverController separate from ExecutionLoop?
+- Why does Router use classification instead of user hints only?
+- Why are events persisted to SessionManager?
+- Why this retry backoff strategy?
+- Trade-offs: performance vs. reliability, cost vs. latency
+```
+- **Related Gaps:** DOC-01 (Inline Explanations), DOC-03 (Provider Guide)
+
+#### Expected State
+Architecture Decision Records (ADRs) directory with one file per decision:
+```
+docs/adr/
+├── ADR-001-orchestrator-architecture.md
+├── ADR-002-multi-provider-routing.md
+├── ADR-003-failover-strategy.md
+├── ADR-004-event-persistence.md
+└── ADR-005-retry-backoff-algorithm.md
+```
+
+Each ADR contains:
+1. **Title and Status** (Proposed/Accepted/Superseded)
+2. **Context:** Problem being solved, constraints, requirements
+3. **Decision:** What was decided and why
+4. **Consequences:** Trade-offs, benefits, risks of decision
+5. **Alternatives Considered:** Other options and why rejected
+6. **Related Decisions:** Links to related ADRs
+
+Example ADR structure:
+```markdown
+# ADR-001: Orchestrator Architecture
+
+## Status
+Accepted
+
+## Context
+The framework needed to coordinate multiple services (ExecutionLoop,
+FailoverController, RetryQueue, AuthMonitor, etc.) but had no central
+coordinator. Each component was instantiated separately, preventing
+coordinated operation.
+
+## Decision
+Create central Orchestrator class that:
+- Instantiates all services in dependency order
+- Owns lifecycle (boot, shutdown, health checks)
+- Provides unified interface (submitTask, queryStatus)
+
+## Consequences
+- Simpler startup: one orchestrator.boot() call
+- Unified error handling and logging
+- Clearer separation of concerns
+- Central point for monitoring and control
+- Trade-off: Adding abstraction layer increases complexity
+
+## Alternatives Considered
+- Individual component startup (rejected: too error-prone)
+- Message queue coordination (rejected: overkill for single process)
+- Dependency injection framework (rejected: too heavyweight)
+```
+
+#### Why It Matters
+ADRs enable:
+1. **Knowledge Transfer:** Explain reasoning to new team members
+2. **Context for Changes:** Understand constraints when refactoring
+3. **Avoiding Regressions:** Document "why" to prevent re-breaking settled decisions
+4. **Alternative Exploration:** When considering changes, understand what was tried
+5. **Onboarding:** Faster ramp-up for new engineers
+
+#### Remediation Approach
+**Strategy:** Create `/docs/adr/` directory and write ADRs for key decisions: orchestrator design, multi-provider routing, failover/retry strategy, event persistence, error handling approach. Use standard ADR template for consistency.
+
+**Affected Files:**
+- `/home/user/zora/docs/adr/` — New directory
+- ADR files for: Orchestrator, Routing, Failover, Events, Retry
+- `/home/user/zora/docs/adr/README.md` — ADR index and template
+
+**Dependencies:** None - can be written independently
+
+**Test Coverage:**
+- N/A (documentation)
+
+**Definition of Done:**
+- [ ] `/docs/adr/` directory created with README
+- [ ] ADR template established and documented
+- [ ] At least 5 ADRs written (orchestrator, routing, failover, events, retry)
+- [ ] Each ADR explains "why" and documents trade-offs
+- [ ] ADRs linked in main README for discoverability
+
+---
+
+### DOC-03: Provider Implementation Guide Missing
+**Severity:** S3 | **Functionality Impact:** 1 | **Reliability:** 2 | **Security:** 1
+**Effort:** 2h | **Blocking:** N | **Status:** Open
+
+#### Description
+Three providers exist (Claude, Gemini, Ollama) but no template or guide for implementing a fourth provider. Adding a new provider (LLaMA, Claude Desktop, local model, etc.) requires reverse-engineering existing providers. No quick-start checklist exists.
+
+#### Current State
+- **Location:** `/home/user/zora/src/providers/`
+- **Current Providers:** claude-provider.ts, gemini-provider.ts, ollama-provider.ts
+- **Problem:**
+```
+To add a new provider, developer must:
+1. Study existing provider implementations
+2. Infer the interface and patterns
+3. Implement all methods (no clear spec)
+4. Figure out error handling patterns
+5. Update Router to include new provider
+6. Register in dependency injection
+
+There's no quickstart guide!
+```
+- **Related Gaps:** DOC-01 (Inline Explanations), DOC-02 (ADRs)
+
+#### Expected State
+Documentation at `/docs/PROVIDER_IMPLEMENTATION_GUIDE.md` with:
+1. **Provider Interface Overview:**
+   - Required methods and signatures
+   - Event types providers must emit
+   - Error handling expectations
+   - Configuration structure
+
+2. **Step-by-Step Checklist:**
+   - Copy provider template
+   - Implement required methods
+   - Add error handling
+   - Add provider to Router
+   - Register in Orchestrator
+   - Add tests
+   - Update configuration schema
+
+3. **Example Implementation:**
+   - Minimal stub provider showing all required pieces
+   - Comments explaining each section
+   - Links to full implementations for reference
+
+4. **Testing Requirements:**
+   - Unit tests for provider methods
+   - Integration tests with ExecutionLoop
+   - Error handling tests
+
+5. **Common Patterns:**
+   - How to handle streaming responses
+   - How to classify errors
+   - How to emit events correctly
+   - How to manage credentials/config
+
+Example snippet:
+```markdown
+# Provider Implementation Guide
+
+## Step 1: Create Provider File
+
+Create `/src/providers/my-provider.ts`:
+
+\`\`\`typescript
+import { LLMProvider, ExecutionRequest, AgentEvent } from '../types';
+
+export class MyProvider implements LLMProvider {
+  // 1. Constructor: accept config
+  constructor(config: MyProviderConfig) {
+    this.config = config;
+  }
+
+  // 2. Implement execute method
+  async *execute(request: ExecutionRequest): AsyncGenerator<AgentEvent> {
+    // Call your API
+    // Yield events as you receive output
+    // Handle errors properly (see error handling section)
+  }
+
+  // 3. Implement checkAuth method
+  async checkAuth(): Promise<boolean> {
+    // Validate API key/credentials
+  }
+}
+\`\`\`
+
+## Step 2: Register in Router
+...
+```
+
+#### Why It Matters
+Provider implementation guide enables:
+1. **Extensibility:** Add new providers quickly without reverse-engineering
+2. **Consistency:** New providers follow same patterns as existing ones
+3. **Reduced Errors:** Clear requirements prevent missing implementations
+4. **Community:** External contributors can add providers independently
+5. **Maintenance:** Consistent patterns easier to refactor/improve
+
+#### Remediation Approach
+**Strategy:** Create comprehensive provider implementation guide with template, checklist, examples, and links to reference implementations. Document interface, events, error handling, and testing requirements.
+
+**Affected Files:**
+- `/home/user/zora/docs/PROVIDER_IMPLEMENTATION_GUIDE.md` — New guide
+- `/home/user/zora/src/providers/provider-template.ts` — Template with comments
+- Update provider README if exists
+
+**Dependencies:** None - can be written independently
+
+**Test Coverage:**
+- N/A (documentation)
+
+**Definition of Done:**
+- [ ] Provider implementation guide created
+- [ ] Guide includes interface overview and method signatures
+- [ ] Step-by-step implementation checklist provided
+- [ ] Example provider template with comments
+- [ ] Testing requirements documented
+- [ ] Common patterns and error handling explained
+
+---
+
+### DOC-04: Configuration Reference Incomplete
+**Severity:** S3 | **Functionality Impact:** 1 | **Reliability:** 2 | **Security:** 1
+**Effort:** 1h | **Blocking:** N | **Status:** Open
+
+#### Description
+Policy file format is documented but `config.toml` is only partially explained. Users misconfigure routing rules, retry settings, budget limits, and provider fallbacks because configuration options are unclear. No examples of complete valid configuration.
+
+#### Current State
+- **Location:** `/home/user/zora/config.toml` (example/template)
+- **Current Docs:** Policy format documented; config.toml largely undocumented
+- **Problem:**
+```toml
+# Current config.toml lacks detailed explanation
+[providers]
+claude = { apiKey = "...", model = "claude-3-opus" }
+# What other fields are available?
+# What's the difference between model names?
+# What are valid timeout values?
+
+[routing]
+# How does routing work? What are valid strategies?
+# What does 'threshold' mean?
+# How are weights used?
+
+[retry]
+# What do these settings mean?
+# What are reasonable values?
+# How does backoff work?
+```
+- **Related Gaps:** DOC-01 (Inline Explanations), DOC-03 (Provider Guide)
+
+#### Expected State
+Complete TOML schema documentation with:
+1. **All Top-Level Sections:** providers, routing, retry, budget, logging, etc.
+2. **Per-Section Explanation:**
+   - Purpose of section
+   - Valid keys and value types
+   - Default values if applicable
+   - Constraints (min/max, valid options)
+
+3. **Provider-Specific Settings:**
+   - claude: valid models, parameters
+   - gemini: valid models, vision options
+   - ollama: base URL, model format, pullIfMissing
+
+4. **Routing Configuration:**
+   - Routing strategy options (classification, round-robin)
+   - Task classification thresholds
+   - Provider preferences
+   - Fallback order
+
+5. **Retry Configuration:**
+   - Max retry attempts
+   - Backoff strategy
+   - Exponential vs. linear
+   - Min/max delays
+
+6. **Example Configurations:**
+   - Simple (single provider)
+   - Multi-provider with routing
+   - High-reliability (retry+fallback)
+   - Cost-optimized (Ollama for simple tasks)
+
+Example documentation:
+```markdown
+# Configuration Reference
+
+## [providers] Section
+Configure LLM providers.
+
+### claude
+Claude API provider.
+- apiKey (string, required): Claude API key
+- model (string): "claude-3-opus", "claude-3-sonnet", "claude-3-haiku"
+  Default: "claude-3-opus"
+- maxTokens (number): Max tokens per request. Default: 4096
+- temperature (number): 0-1, creativity. Default: 0.7
+
+Example:
+\`\`\`toml
+[providers.claude]
+apiKey = "sk-ant-..."
+model = "claude-3-opus"
+temperature = 0.7
+\`\`\`
+
+### ollama
+Local Ollama provider.
+- baseUrl (string): Ollama server URL. Default: "http://localhost:11434"
+- model (string, required): Model name (e.g., "llama2", "mistral")
+- pullIfMissing (boolean): Auto-pull model if not found. Default: true
+
+...
+```
+
+#### Why It Matters
+Complete configuration documentation enables:
+1. **Correct Configuration:** Users understand all available options
+2. **Faster Troubleshooting:** Reference valid values quickly
+3. **Best Practices:** Examples show recommended configurations
+4. **Self-Service:** Users solve problems without support
+5. **Migration:** Users can adapt config when switching providers
+
+#### Remediation Approach
+**Strategy:** Create comprehensive configuration reference documenting all TOML sections, keys, valid values, defaults, and examples. Include example configurations for common use cases.
+
+**Affected Files:**
+- `/home/user/zora/docs/CONFIGURATION_REFERENCE.md` — New reference
+- `/home/user/zora/config.example.toml` — Example with comments
+
+**Dependencies:** None - can be written independently
+
+**Test Coverage:**
+- N/A (documentation)
+
+**Definition of Done:**
+- [ ] Configuration reference created with all sections documented
+- [ ] Each key documented with type, default, constraints
+- [ ] Provider-specific settings explained
+- [ ] Routing and retry configuration examples provided
+- [ ] Example configurations for common use cases
+- [ ] Reference linked from main README
+
+---
+
+### DOC-05: No Troubleshooting Guide
+**Severity:** S3 | **Functionality Impact:** 1 | **Reliability:** 2 | **Security:** 1
+**Effort:** 2h | **Blocking:** N | **Status:** Open
+
+#### Description
+When users encounter issues ("Task failed", "Provider timeout", "Authentication error"), they have no troubleshooting guide. Support burden is high; users frustrated. No common issues documented with solutions.
+
+#### Current State
+- **Location:** No troubleshooting guide exists
+- **Current Support Pattern:**
+```
+User: "My task keeps failing"
+Support: "Check logs" (logs are unstructured, not helpful)
+User: "How do I debug?"
+Support: No documented troubleshooting steps
+```
+- **Related Gaps:** LOG-01 (Structured Logging), DOC-01 (Explanations)
+
+#### Expected State
+Troubleshooting guide at `/docs/TROUBLESHOOTING.md` covering:
+
+1. **Common Issues & Solutions:**
+   - Authentication failures (token expired, invalid key)
+   - Provider timeouts (network, provider overload)
+   - Quota/rate limit errors (retry strategy, fallback)
+   - Memory/resource issues
+   - Configuration errors
+
+2. **Debugging Techniques:**
+   - How to enable debug logging (LOG_LEVEL=DEBUG)
+   - How to read structured JSON logs
+   - How to filter logs by task ID or provider
+   - How to check provider health (/health endpoint)
+   - How to review configuration (config dump)
+
+3. **Provider-Specific Issues:**
+   - Claude: rate limiting, token expiry, context overflow
+   - Gemini: auth failures, quota limits, JSON parsing errors
+   - Ollama: connection refused, model not found, memory issues
+
+4. **System-Level Issues:**
+   - No providers available (all degraded)
+   - Event stream timeout (hung provider)
+   - Audit log failures (disk space)
+   - Memory growth/leaks
+
+5. **Performance Issues:**
+   - Slow responses (provider overload, model size)
+   - High latency (network issues, retry backoff)
+   - Resource usage (memory, CPU)
+
+Example structure:
+```markdown
+# Troubleshooting Guide
+
+## Issue: "Authentication Failed"
+
+### Symptoms
+- Task fails with error: `{"type": "error", "code": "auth_failed"}`
+- Logs show: `error: "Provider authentication failed"`
+
+### Root Causes
+1. API key expired
+2. API key invalid/revoked
+3. Wrong API key for provider
+4. Insufficient permissions
+
+### Solution Steps
+
+1. **Check API key validity:**
+   - Claude: https://console.anthropic.com/account/keys
+   - Gemini: https://ai.google.dev/
+   - Verify key format and no typos
+
+2. **Enable debug logging:**
+   ```bash
+   LOG_LEVEL=DEBUG ./zora start
+   ```
+   Look for provider auth checks in logs
+
+3. **Check configuration:**
+   ```bash
+   ./zora config show
+   ```
+   Verify correct provider and API key configured
+
+4. **Test provider directly:**
+   ```bash
+   ./zora test-provider claude
+   ```
+   Verify credentials work outside orchestrator
+
+5. **Check expiry:**
+   ```bash
+   curl https://api.anthropic.com/v1/me
+   ```
+   Confirm token is not expired
+
+### Prevention
+- Set calendar reminder to rotate keys monthly
+- Monitor /health endpoint for auth warnings 24h before expiry
+- Use long-lived service account keys when possible
+
+---
+
+## Issue: "Task Timeout"
+...
+```
+
+#### Why It Matters
+Troubleshooting guide enables:
+1. **Self-Service Support:** Users solve problems independently
+2. **Reduced Support Load:** Common issues resolved without tickets
+3. **Faster Resolution:** Users know debugging steps
+4. **User Satisfaction:** Clear path to problem resolution
+5. **System Improvement:** Common issues identified for permanent fixes
+
+#### Remediation Approach
+**Strategy:** Create comprehensive troubleshooting guide with sections for common issues, debugging techniques, provider-specific problems, and performance troubleshooting. Include examples and step-by-step solutions.
+
+**Affected Files:**
+- `/home/user/zora/docs/TROUBLESHOOTING.md` — New guide
+
+**Dependencies:** LOG-01 (Structured Logging) — guide references debug logging
+
+**Test Coverage:**
+- N/A (documentation)
+
+**Definition of Done:**
+- [ ] Troubleshooting guide created with common issues
+- [ ] Each issue includes symptoms, root causes, and solutions
+- [ ] Debug techniques documented (enabling debug logs, reading logs)
+- [ ] Provider-specific issues covered
+- [ ] System-level issues covered
+- [ ] Performance troubleshooting section included
+- [ ] Guide linked from main README
+
+---
+
+### Summary Table: Documentation Gaps
+
+| Gap ID | Issue | Severity | Effort | Impact |
+|--------|-------|----------|--------|--------|
+| DOC-01 | Sparse Inline Explanations | S3 | 2h | New contributors struggle; refactoring risky |
+| DOC-02 | No Architecture Decision Records | S3 | 3h | Can't explain design to new team members |
+| DOC-03 | Provider Implementation Guide Missing | S3 | 2h | Hard to extend to new providers |
+| DOC-04 | Configuration Reference Incomplete | S3 | 1h | Users misconfigure routing/retry/budget |
+| DOC-05 | No Troubleshooting Guide | S3 | 2h | High support burden; users frustrated |
+
+**Cumulative Effort:** 10 hours
+**Impact:** Onboarding difficult; maintainability at risk; support burden high
+
+---
+
 ## Next Steps
 
 **To begin remediation:**
