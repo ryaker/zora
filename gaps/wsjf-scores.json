@@ -280,7 +280,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ORCHESTRATION.md",
       "wsjf": {
         "usability_value": 3,
@@ -290,7 +290,8 @@
         "job_size": 3,
         "score": 4.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "verified-in-code"
     },
     {
       "id": "ORCH-09",
@@ -444,7 +445,7 @@
       "blocked_by": [
         "OPS-01"
       ],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/OPERATIONAL.md",
       "wsjf": {
         "usability_value": 6,
@@ -454,7 +455,8 @@
         "job_size": 3,
         "score": 5.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "verified-in-code"
     },
     {
       "id": "OPS-03",
