@@ -1,0 +1,1163 @@
+{
+  "metadata": {
+    "total_gaps": 46,
+    "generated": "2026-02-14",
+    "categories": {
+      "orchestration": 11,
+      "type_safety": 8,
+      "error_handling": 6,
+      "testing": 7,
+      "operational": 5,
+      "logging_observability": 4,
+      "documentation": 5
+    },
+    "severity_distribution": {
+      "S1": 10,
+      "S2": 18,
+      "S3": 14,
+      "S4": 4
+    },
+    "priority_distribution": {
+      "P0": 15,
+      "P1": 19,
+      "P2": 12
+    },
+    "total_effort_hours": 100
+  },
+  "gaps": [
+    {
+      "id": "ORCH-01",
+      "title": "FailoverController Never Invoked",
+      "severity": "S1",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 2,
+      "blocking": true,
+      "blocking_gaps": ["ORCH-02", "ORCH-03"],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/failover-controller.ts"
+      ],
+      "description": "The FailoverController component exists to handle provider failover when quota limits are reached or authentication fails, but ExecutionLoop never invokes its handleFailure() method. When transient errors occur, tasks fail permanently instead of automatically switching to an alternative provider.",
+      "impact": "Transient provider failures cause total service unavailability. Users lose access during rate limit windows or token expiry, creating false reports of system unavailability.",
+      "remediation_steps": [
+        "Integrate FailoverController into ExecutionLoop's error handler",
+        "Call FailoverController.handleFailure() with error context when provider-specific errors occur",
+        "Implement retry signal with new provider selection",
+        "Add error classification for recoverable vs. permanent failures",
+        "Log failover attempts with provider name and reason"
+      ]
+    },
+    {
+      "id": "ORCH-02",
+      "title": "RetryQueue Consumer Missing",
+      "severity": "S1",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 2,
+      "blocking": true,
+      "blocking_gaps": ["ORCH-03"],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/retry-queue.ts",
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/orchestrator.ts"
+      ],
+      "description": "RetryQueue is a queue data structure for failed tasks awaiting retry, but nothing consumes it. When tasks are enqueued for retry, they remain indefinitely unless manually removed. Users must manually re-submit failed tasks.",
+      "impact": "Automatic retry logic is completely non-functional. Users cannot rely on the framework for mission-critical workloads with automatic recovery.",
+      "remediation_steps": [
+        "Create RetryQueueConsumer service that polls RetryQueue every 5 seconds",
+        "Implement exponential backoff (5s, 10s, 20s, etc.)",
+        "Track retry attempt counts and metadata",
+        "Re-submit ready tasks to ExecutionLoop",
+        "Remove tasks from queue after max retries exceeded"
+      ]
+    },
+    {
+      "id": "ORCH-03",
+      "title": "Router Not Integrated into ExecutionLoop",
+      "severity": "S2",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 2,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/router.ts"
+      ],
+      "description": "Router is a component that selects between multiple providers based on task characteristics. However, ExecutionLoop hardcodes the Claude SDK and never calls Router.selectProvider(). The framework currently works only with Claude.",
+      "impact": "Multi-provider support is completely unavailable. Users cannot leverage alternative providers for cost optimization, resilience, or workload-specific tuning.",
+      "remediation_steps": [
+        "Replace hardcoded provider instantiation in ExecutionLoop with Router.selectProvider(task)",
+        "Analyze task properties in Router for provider selection",
+        "Return appropriate provider instance based on classification",
+        "Ensure provider errors propagate to FailoverController",
+        "Test with actual multi-provider scenarios"
+      ]
+    },
+    {
+      "id": "ORCH-04",
+      "title": "AuthMonitor Never Scheduled",
+      "severity": "S2",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/orchestrator.ts",
+        "/home/user/zora/src/orchestration/auth-monitor.ts"
+      ],
+      "description": "AuthMonitor is a service that proactively detects token expiry and credential issues, but no setInterval() is called in Orchestrator. Token expiration is only discovered when the next task fails.",
+      "impact": "Token expiry causes cascading task failures instead of proactive warnings. Users see authentication errors instead of advance notice and preventive action.",
+      "remediation_steps": [
+        "Call authMonitor.start() in Orchestrator.boot()",
+        "Schedule periodic checks every 60 seconds (configurable)",
+        "Verify all configured provider credentials",
+        "Log warnings 24 hours before token expiry",
+        "Pre-refresh tokens when possible"
+      ]
+    },
+    {
+      "id": "ORCH-05",
+      "title": "Router Uses Naive Classification",
+      "severity": "S3",
+      "category": "orchestration",
+      "priority": "P1",
+      "effort_hours": 4,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-03"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/router.ts"
+      ],
+      "description": "Router's selectProvider() uses simple keyword matching to classify tasks, which is unreliable for nuanced requests. A request like 'Analyze how this code performs' incorrectly selects the coding provider when Claude is more suitable.",
+      "impact": "Incorrect provider selection degrades performance and user experience. This gap is medium priority because Router integration (ORCH-03) is more critical.",
+      "remediation_steps": [
+        "Implement multi-factor classification (token count, keywords, NLP, user hints)",
+        "Add token count heuristic (threshold: 1000 tokens)",
+        "Add reasoning keyword detection",
+        "Honor user-provided preferredProvider when set",
+        "Test classification accuracy on various task types"
+      ]
+    },
+    {
+      "id": "ORCH-06",
+      "title": "SessionManager Events Never Persisted",
+      "severity": "S1",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/orchestrator.ts",
+        "/home/user/zora/src/orchestration/session-manager.ts"
+      ],
+      "description": "SessionManager has an appendEvent() method for logging execution events, but ExecutionLoop never calls it. No audit trail exists. Cannot resume failed tasks or trace execution history.",
+      "impact": "Audit trail is completely missing. Production incidents are impossible to diagnose, and task resumption after failure is not possible. Compliance issues arise.",
+      "remediation_steps": [
+        "Create EventPersistenceService that subscribes to ExecutionLoop events",
+        "Call SessionManager.appendEvent() for each event",
+        "Persist events to storage with timestamp, task ID, type, and context",
+        "Instantiate service in Orchestrator.boot()",
+        "Ensure failed persistence doesn't crash ExecutionLoop"
+      ]
+    },
+    {
+      "id": "ORCH-07",
+      "title": "MemoryManager Context Not Injected Systematically",
+      "severity": "S2",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/memory-manager.ts"
+      ],
+      "description": "MemoryManager loads task context from memory, but only the ask command manually calls MemoryManager.loadContext(). Routine tasks and retried tasks lose historical context.",
+      "impact": "Multi-turn conversations and task chains lose context. Each task is isolated and cannot build on previous analysis or remember user preferences.",
+      "remediation_steps": [
+        "Create ContextInjectionMiddleware in ExecutionLoop",
+        "Load context via MemoryManager before provider.execute()",
+        "Include previous messages, related tasks, and session state",
+        "Automatically load context for routine and retry tasks",
+        "Test multi-turn conversation flow"
+      ]
+    },
+    {
+      "id": "ORCH-08",
+      "title": "SteeringManager Never Polled During Execution",
+      "severity": "S2",
+      "category": "orchestration",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/orchestration/steering-manager.ts"
+      ],
+      "description": "SteeringManager allows users to send mid-task steering messages, but ExecutionLoop never polls during execution. Steering messages are stored but ignored.",
+      "impact": "Real-time steering capability is unavailable. Users cannot adapt execution mid-stream or change parameters for long-running operations.",
+      "remediation_steps": [
+        "Add steering message polling every 2 seconds in ExecutionLoop",
+        "Apply steering messages to task state (provider switch, parameter changes)",
+        "Log applied steering for audit trail",
+        "Test provider switching and parameter updates mid-execution"
+      ]
+    },
+    {
+      "id": "ORCH-09",
+      "title": "HeartbeatSystem & RoutineManager Never Started",
+      "severity": "S2",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["ORCH-10"],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/orchestrator.ts",
+        "/home/user/zora/src/orchestration/heartbeat-system.ts",
+        "/home/user/zora/src/orchestration/routine-manager.ts"
+      ],
+      "description": "HeartbeatSystem and RoutineManager are implemented but Orchestrator.boot() never calls their start() methods. Health checks don't run and scheduled tasks never execute.",
+      "impact": "Health monitoring is completely unavailable. Scheduled tasks cannot run. System has no visibility into its own health.",
+      "remediation_steps": [
+        "Call heartbeatSystem.start() in Orchestrator.boot()",
+        "Call routineManager.start() in Orchestrator.boot()",
+        "Schedule health checks every 30 seconds",
+        "Poll for scheduled tasks every 1 second",
+        "Emit events to ExecutionLoop for observability"
+      ]
+    },
+    {
+      "id": "ORCH-10",
+      "title": "No Main Orchestrator Bootstrapping",
+      "severity": "S1",
+      "category": "orchestration",
+      "priority": "P0",
+      "effort_hours": 3,
+      "blocking": true,
+      "blocking_gaps": [
+        "ORCH-01",
+        "ORCH-02",
+        "ORCH-03",
+        "ORCH-04",
+        "ORCH-06",
+        "ORCH-07",
+        "ORCH-09"
+      ],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/orchestrator.ts",
+        "/home/user/zora/src/index.ts"
+      ],
+      "description": "The most critical gap: there is no central Orchestrator class or boot sequence. Individual components are implemented but never instantiated or wired together. CLI and application startup manually create components, duplicating logic.",
+      "impact": "The framework cannot start as a cohesive system. Components cannot coordinate. Production deployment is impossible. This gap blocks all other orchestration gaps.",
+      "remediation_steps": [
+        "Create Orchestrator class with boot() method",
+        "Instantiate all services in dependency order",
+        "Implement submitTask() and shutdown() methods",
+        "Replace manual wiring in CLI with Orchestrator.boot()",
+        "Update all commands to use orchestrator.submitTask()",
+        "Test complete lifecycle from boot to shutdown"
+      ]
+    },
+    {
+      "id": "ORCH-11",
+      "title": "Round-Robin Mode Actually Random",
+      "severity": "S4",
+      "category": "orchestration",
+      "priority": "P2",
+      "effort_hours": 0.5,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/router.ts"
+      ],
+      "description": "Router has a 'round-robin' mode option that should cycle through providers sequentially. However, the implementation uses Math.random() instead of sequential cycling.",
+      "impact": "This is cosmetic and doesn't block production. However, it causes confusion during load balancing testing and violates principle of least surprise.",
+      "remediation_steps": [
+        "Maintain round-robin index counter in Router",
+        "Increment counter on each selectProvider() call",
+        "Return providers[counter % providers.length]",
+        "Reset counter after cycling through all providers",
+        "Test deterministic cycling order"
+      ]
+    },
+    {
+      "id": "TYPE-01",
+      "title": "36 `as any` Assertions in Providers",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/providers/claude-provider.ts",
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts"
+      ],
+      "description": "Event content is coerced with `as any` in multiple provider implementations, bypassing type checking. This occurs when processing event responses.",
+      "impact": "No per-type interfaces for different event content shapes. Callers cannot trust event structure. Type narrowing impossible downstream. Refactoring event structures risks breaking all providers silently.",
+      "remediation_steps": [
+        "Create discriminated union for event payloads (TextEventPayload, ToolCallEventPayload, ErrorEventPayload)",
+        "Replace `as any` assertions with explicit payload construction",
+        "Update provider interfaces to use typed payloads",
+        "Add type guards for event narrowing",
+        "Test event emission and consumption"
+      ]
+    },
+    {
+      "id": "TYPE-02",
+      "title": "`err: unknown` Not Properly Narrowed",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/providers/claude-provider.ts",
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts",
+        "/home/user/zora/src/security/audit-logger.ts"
+      ],
+      "description": "Error handling throughout the codebase catches errors as `unknown` or `any` without proper type narrowing. Eight or more locations use `catch (err: any)` instead of applying `instanceof Error` checks.",
+      "impact": "Non-Error objects thrown by third-party code cause crashes. Error classification logic cannot safely inspect error details. Logging may fail when attempting to serialize non-standard error objects.",
+      "remediation_steps": [
+        "Create error type guard helpers (isError, isHttpError, getErrorMessage)",
+        "Update all catch blocks to use type guards before property access",
+        "Add `noImplicitAny: true` to tsconfig",
+        "Test handling of non-Error thrown values",
+        "Verify error logging works for all error types"
+      ]
+    },
+    {
+      "id": "TYPE-03",
+      "title": "TaskContext History Type Is `any[]`",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 4,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/types/task.ts",
+        "/home/user/zora/src/orchestration/memory-manager.ts"
+      ],
+      "description": "The `TaskContext.history` field is typed as `any[]`, preventing type-safe access to historical events. This undermines the event system's ability to provide guarantees.",
+      "impact": "Callers must re-validate and re-type events accessed from history. No compile-time guarantee that history contains Events. Corrupted history entries cause runtime failures.",
+      "remediation_steps": [
+        "Define complete event hierarchy with discriminated union",
+        "Create BaseAgentEvent with common fields",
+        "Define TextEvent, ToolCallEvent, ErrorEvent types",
+        "Update TaskContext.history to AgentEvent[] (not any[])",
+        "Replace history access with type-safe narrowing"
+      ]
+    },
+    {
+      "id": "TYPE-04",
+      "title": "ProviderConfig Missing Type Hierarchy",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/types/config.ts"
+      ],
+      "description": "Provider configuration uses a single flat `ProviderConfig` interface for all providers (Claude, Gemini, Ollama). This prevents type-specific validation and IDE assistance.",
+      "impact": "No way to enforce that Claude-specific fields only appear in Claude config. Type checking cannot catch configuration mistakes. Config validation must check fields manually at runtime.",
+      "remediation_steps": [
+        "Create BaseProviderConfig with common fields",
+        "Create provider-specific configs (ClaudeProviderConfig, GeminiProviderConfig, OllamaProviderConfig)",
+        "Use discriminated union type for ProviderConfig",
+        "Update provider instantiation for type safety",
+        "Use type guards in config loading/validation"
+      ]
+    },
+    {
+      "id": "TYPE-05",
+      "title": "Silent `JSON.parse()` Errors in Providers",
+      "severity": "S2",
+      "category": "type_safety",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts"
+      ],
+      "description": "Multiple providers silently swallow JSON parsing errors, losing tool invocations and other critical structured data. Errors are caught and ignored.",
+      "impact": "Production failures go undetected. Debugging is nearly impossible. Tool invocations lost permanently. User sees request succeed but tool never executes.",
+      "remediation_steps": [
+        "Create error event instead of silencing",
+        "Log parse errors with raw content for diagnosis",
+        "Add validation helpers (isValidToolCall)",
+        "Emit error events for invalid structures",
+        "Update error handling to emit events with context"
+      ]
+    },
+    {
+      "id": "TYPE-06",
+      "title": "No Type Definitions for Event Payloads",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/types/event.ts",
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/providers/claude-provider.ts",
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts"
+      ],
+      "description": "Event payloads throughout the system are typed as `Record<string, any>`, providing no structure or safety. Consumers cannot rely on content shape.",
+      "impact": "Runtime errors when payload structure assumed incorrectly. Refactoring payloads requires finding all consumers manually. IDE offers no completion.",
+      "remediation_steps": [
+        "Create payload type definitions with discriminated union",
+        "Define TextPayload, ToolCallPayload, ToolResultPayload, ErrorPayload",
+        "Update event emission to use typed payloads",
+        "Update consumers to use narrowed types",
+        "Add type narrowing guards for payload access"
+      ]
+    },
+    {
+      "id": "TYPE-07",
+      "title": "LLMProvider Union Types Underutilized",
+      "severity": "S3",
+      "category": "type_safety",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/types/provider.ts"
+      ],
+      "description": "The `LLMProvider` type forms a union of provider implementations, but this union is not leveraged for exhaustiveness checking. Code treats providers generically instead of using discriminated union patterns.",
+      "impact": "Adding new provider type doesn't trigger compile errors in handler code. Logic gaps only discovered at runtime. Code cannot safely use provider-specific features.",
+      "remediation_steps": [
+        "Create discriminated union with provider type field",
+        "Add type field ('claude', 'gemini', 'ollama') to each provider",
+        "Use exhaustiveness checking in switch statements",
+        "Add type guards (isClaude, isGemini, isOllama)",
+        "Test exhaustiveness checking catches missing cases"
+      ]
+    },
+    {
+      "id": "TYPE-08",
+      "title": "Missing Return Type Annotations",
+      "severity": "S4",
+      "category": "type_safety",
+      "priority": "P2",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts",
+        "/home/user/zora/src/providers/claude-provider.ts",
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts",
+        "/home/user/zora/src/utils/helpers.ts"
+      ],
+      "description": "Approximately 20 functions lack explicit return type annotations, including critical functions like `_parseToolCalls()` and `_mapEventPayload()`. Return types are inferred and may change silently.",
+      "impact": "Return type changes silently if implementation modified. Callers may depend on return type not being `any` or `undefined`. Type narrowing downstream depends on understanding return type.",
+      "remediation_steps": [
+        "Add explicit return type annotations to all functions",
+        "Include return type in signature even if inferred",
+        "Use `noImplicitAny: true` in tsconfig",
+        "Verify TypeScript strict mode produces no errors",
+        "Test that all exported functions have explicit types"
+      ]
+    },
+    {
+      "id": "ERR-01",
+      "title": "AuditLogger Silent Write Failures",
+      "severity": "S1",
+      "category": "error_handling",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/security/audit-logger.ts"
+      ],
+      "description": "The AuditLogger implements empty catch blocks that silently swallow write failures. When audit log writes fail (disk space, permission errors, database connection loss), errors are completely suppressed.",
+      "impact": "Critical data loss risk. Audit events vanish without trace. Compliance violation for SOC2, HIPAA, GDPR audit logging requirements. Security incidents cannot be retrospectively investigated.",
+      "remediation_steps": [
+        "Replace empty catch with structured error handling",
+        "Log errors to fallback system (stderr, file, metrics)",
+        "Emit metric/alert on write failures",
+        "Implement exponential backoff retry",
+        "Add circuit breaker pattern after N consecutive failures",
+        "Monitor audit subsystem health"
+      ]
+    },
+    {
+      "id": "ERR-02",
+      "title": "GeminiProvider Silent JSON Parse Failures",
+      "severity": "S1",
+      "category": "error_handling",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/providers/gemini-provider.ts"
+      ],
+      "description": "The GeminiProvider discards malformed JSON responses in empty catch blocks. When Gemini API returns malformed JSON, the error is silently swallowed and tool invocations are lost.",
+      "impact": "Critical data loss. Core functionality (tool invocation) broken. Tool calls silently disappear without feedback. Users unaware requests failed. Work permanently lost.",
+      "remediation_steps": [
+        "Replace empty catch blocks with error handling",
+        "Emit error events for parse failures",
+        "Log parse errors with raw content for diagnosis",
+        "Add validation helpers (isValidToolCall)",
+        "Emit detailed observability (metrics, traces, logs)",
+        "Implement error propagation to retry/failover"
+      ]
+    },
+    {
+      "id": "ERR-03",
+      "title": "FlagManager Silently Skips Corrupted Files",
+      "severity": "S2",
+      "category": "error_handling",
+      "priority": "P1",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/steering/flag-manager.ts"
+      ],
+      "description": "The FlagManager implements four separate catch blocks that swallow file loading errors without logging. When configuration files are corrupted or missing, errors are completely hidden.",
+      "impact": "Configuration errors completely hidden. Troubleshooting becomes guesswork. Steering flags mysteriously ignored. System reliability non-deterministic.",
+      "remediation_steps": [
+        "Implement comprehensive logging in all catch blocks",
+        "Classify errors by type (file not found, unreadable, corrupted)",
+        "Emit diagnostic events for observability",
+        "Distinguish required vs. optional files",
+        "Add health checks and diagnostics API",
+        "Display config status in startup logs"
+      ]
+    },
+    {
+      "id": "ERR-04",
+      "title": "Fragile Error Classification via String Matching",
+      "severity": "S2",
+      "category": "error_handling",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/failover-controller.ts"
+      ],
+      "description": "The FailoverController classifies errors using brittle string matching on error messages, which fails across provider variants and API version changes.",
+      "impact": "Failover behavior broken across providers. Quota handling fails. Auth errors misclassified. False positives/negatives in error detection.",
+      "remediation_steps": [
+        "Create structured error classification system",
+        "Create provider-specific error parsers",
+        "Implement multi-signal classification (code, headers, status)",
+        "Add error registry with versioning",
+        "Create comprehensive error testing matrix",
+        "Test each provider's error variants"
+      ]
+    },
+    {
+      "id": "ERR-05",
+      "title": "No Timeout on Event Streams",
+      "severity": "S2",
+      "category": "error_handling",
+      "priority": "P1",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/execution-loop.ts"
+      ],
+      "description": "The execution loop consumes provider event streams without timeout protection. A hung stream blocks the entire orchestrator indefinitely.",
+      "impact": "Critical availability impact. Single hung stream takes entire system offline. All pending and future tasks blocked until restart. No automatic recovery.",
+      "remediation_steps": [
+        "Implement AbortController-based timeout",
+        "Reset timeout on each event (stream is alive)",
+        "Add configurable timeout per provider/task",
+        "Implement graceful degradation on timeout",
+        "Trigger failover or retry with exponential backoff",
+        "Add monitoring and alerting for timeout patterns"
+      ]
+    },
+    {
+      "id": "ERR-06",
+      "title": "Command Parsing Regex Incomplete",
+      "severity": "S3",
+      "category": "error_handling",
+      "priority": "P2",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/security/policy-engine.ts"
+      ],
+      "description": "The security policy engine uses regex-based shell command parsing that doesn't handle all edge cases of shell quoting and escaping.",
+      "impact": "Potential bypass of command restrictions. Nested quotes, escape sequences, empty strings not handled. Security boundary unclear.",
+      "remediation_steps": [
+        "Audit current regex thoroughly",
+        "Document all supported patterns",
+        "Create comprehensive test matrix",
+        "Use established shell parser library (shellwords)",
+        "Or implement comprehensive regex with validation",
+        "Add security test suite with OWASP payloads"
+      ]
+    },
+    {
+      "id": "TEST-01",
+      "title": "No Integration Tests for Orchestration",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P1",
+      "effort_hours": 4,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/integration/orchestrator.test.ts"
+      ],
+      "description": "The Orchestrator is the central component but has no end-to-end integration test validating the critical workflow. Only unit tests validate individual methods in isolation.",
+      "impact": "No confidence in multi-provider failover, retry mechanisms, or operational workflows. Integration issues only discovered in production.",
+      "remediation_steps": [
+        "Create integration test suite in /tests/integration/orchestrator.test.ts",
+        "Test Orchestrator bootstrap with all dependencies",
+        "Test task submission end-to-end",
+        "Test event emission and persistence",
+        "Test session recovery across restart",
+        "Test failover integration with provider failures"
+      ]
+    },
+    {
+      "id": "TEST-02",
+      "title": "No Failover/Retry Scenario Tests",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P1",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/integration/failover.test.ts"
+      ],
+      "description": "The FailoverController and RetryQueue implement critical logic with zero test coverage validating realistic failover scenarios with actual provider failures.",
+      "impact": "Critical failover logic never validated. Bugs hide until production. No tests exercise FailoverController.handleFailure() or RetryQueue retries.",
+      "remediation_steps": [
+        "Create /tests/integration/failover.test.ts",
+        "Test failover triggered when primary provider fails",
+        "Test retry with exponential backoff timing",
+        "Test task abandonment after max retries",
+        "Test concurrent task failures",
+        "Test retry state persistence across restart"
+      ]
+    },
+    {
+      "id": "TEST-03",
+      "title": "CLI Commands Lack Functional Tests",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P2",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/cli/"
+      ],
+      "description": "The Zora CLI implements critical commands but only registration is tested. Command behavior is completely untested—changes break silently.",
+      "impact": "Commands may malfunction without warning. Changes break silently. No functional validation of start, stop, status, memory, steer, skill, audit commands.",
+      "remediation_steps": [
+        "Create /tests/cli/ directory with command tests",
+        "Test each command's happy path, edge cases, and errors",
+        "Validate command output format and content",
+        "Verify command effects persist (restarts, state changes)",
+        "Test help display and invalid arguments",
+        "Verify error handling"
+      ]
+    },
+    {
+      "id": "TEST-04",
+      "title": "Dashboard Endpoints Untested",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P2",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/api/"
+      ],
+      "description": "The Dashboard Server exposes REST API endpoints used by dashboard UI, but these critical endpoints lack tests. API is used to fetch job status, health, and metrics.",
+      "impact": "API changes can break dashboard functionality silently. No validation of response structure or HTTP status codes.",
+      "remediation_steps": [
+        "Create /tests/api/ directory with endpoint tests",
+        "Test health check endpoint",
+        "Test jobs endpoint (list, pagination, filtering)",
+        "Test auth login endpoint",
+        "Test metrics endpoint",
+        "Test auth middleware and error handling"
+      ]
+    },
+    {
+      "id": "TEST-05",
+      "title": "Provider Tool Parsing Never Validated Against Real Output",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/providers/tool-parsing.test.ts",
+        "/home/user/zora/tests/fixtures/"
+      ],
+      "description": "Providers implement regex patterns to parse tool calls from output (XML, JSON formats). These patterns were written speculatively without validation against real provider responses.",
+      "impact": "When real tool output arrives, parsing fails silently and users can't invoke tools. No validation against actual Gemini/Claude/OpenAI output.",
+      "remediation_steps": [
+        "Collect real provider output and create fixtures",
+        "Create /tests/providers/tool-parsing.test.ts",
+        "Test parsing real Gemini/Claude/OpenAI formats",
+        "Test multiple tool calls in single response",
+        "Test special characters and escaping",
+        "Test malformed responses"
+      ]
+    },
+    {
+      "id": "TEST-06",
+      "title": "GeminiProvider `checkAuth()` Tests Missing",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P2",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/providers/gemini-auth.test.ts"
+      ],
+      "description": "The GeminiProvider implements `checkAuth()` to validate proper authentication, but authentication tests are missing. Only binary existence is tested.",
+      "impact": "Invalid tokens go undetected until task execution fails. No tests for valid auth, invalid tokens, network errors, or timeout handling.",
+      "remediation_steps": [
+        "Create /tests/providers/gemini-auth.test.ts",
+        "Test valid authentication check returns true",
+        "Test invalid token returns false",
+        "Test binary not found returns false",
+        "Test network errors handled gracefully",
+        "Test timeout after 5 seconds",
+        "Test retry on transient failures"
+      ]
+    },
+    {
+      "id": "TEST-07",
+      "title": "TelegramGateway User Allowlist Logic Untested",
+      "severity": "S2",
+      "category": "testing",
+      "priority": "P2",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/tests/gateways/telegram-allowlist.test.ts"
+      ],
+      "description": "The TelegramGateway implements security-critical allowlist logic with zero test coverage. Unauthorized users could potentially steer tasks.",
+      "impact": "Security-critical access control untested. Unauthorized users might bypass restrictions. No validation of allowlist enforcement.",
+      "remediation_steps": [
+        "Create /tests/gateways/telegram-allowlist.test.ts",
+        "Test allowed user can steer tasks",
+        "Test denied user cannot steer tasks",
+        "Test allowlist validation returns correct true/false",
+        "Test allowlist loaded from config",
+        "Test concurrent steering attempts from mixed users",
+        "Test audit logging of steering attempts"
+      ]
+    },
+    {
+      "id": "OPS-01",
+      "title": "CLI Daemon Commands Are Stubs",
+      "severity": "S2",
+      "category": "operational",
+      "priority": "P0",
+      "effort_hours": 3,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/cli/index.ts"
+      ],
+      "description": "The CLI daemon commands (start, stop, status) are non-functional stubs. `start` logs hardcoded PID, `stop` does nothing, `status` returns simulated data.",
+      "impact": "Cannot start/stop Zora as daemon. Cannot integrate with systemd/init systems. No PID tracking. Multiple instances can start simultaneously.",
+      "remediation_steps": [
+        "Implement proper daemon spawning for start command",
+        "Check for existing process; prevent multiple instances",
+        "Implement signal handling (SIGTERM, SIGINT)",
+        "Implement graceful shutdown",
+        "Implement real status checking from running process",
+        "Add pidfile and lifecycle management",
+        "Create systemd unit file"
+      ]
+    },
+    {
+      "id": "OPS-02",
+      "title": "Dashboard `GET /api/jobs` Returns Empty Placeholder",
+      "severity": "S2",
+      "category": "operational",
+      "priority": "P0",
+      "effort_hours": 2,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": ["OPS-01"],
+      "files_affected": [
+        "/home/user/zora/src/dashboard/server.ts"
+      ],
+      "description": "The dashboard API endpoint for listing active jobs returns a hardcoded empty array instead of querying actual system state.",
+      "impact": "Dashboard shows 'No active jobs' even when jobs running. No way to monitor active sessions from UI. Operations team cannot monitor system activity.",
+      "remediation_steps": [
+        "Query SessionManager for active sessions",
+        "Return job data with status, progress, timing, metrics",
+        "Add filtering and pagination",
+        "Add `/api/jobs/:jobId` endpoint for job details",
+        "Add `/api/jobs/:jobId/events` endpoint for job logs",
+        "Implement real-time updates via WebSocket",
+        "Add metrics aggregation endpoint"
+      ]
+    },
+    {
+      "id": "OPS-03",
+      "title": "No Frontend Build Output",
+      "severity": "S2",
+      "category": "operational",
+      "priority": "P0",
+      "effort_hours": 1,
+      "blocking": true,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/dashboard/frontend/"
+      ],
+      "description": "The dashboard frontend React application exists in source form but has never been compiled to a production build. The `/src/dashboard/frontend/dist/` directory is empty.",
+      "impact": "Dashboard UI never loads. Operators cannot use dashboard. Cannot serve dashboard in production. Frontend changes never deployed.",
+      "remediation_steps": [
+        "Add postinstall script to build frontend automatically",
+        "Configure dashboard server to serve built frontend",
+        "Run build on first startup if dist missing",
+        "Verify build output in CI/CD",
+        "Add development hot reload",
+        "Test dashboard UI rendering"
+      ]
+    },
+    {
+      "id": "OPS-04",
+      "title": "GeminiProvider Unbounded Buffer",
+      "severity": "S2",
+      "category": "operational",
+      "priority": "P1",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/providers/gemini-provider.ts"
+      ],
+      "description": "The GeminiProvider accumulates streaming output in a buffer without size limits, causing runaway memory consumption on extended sessions.",
+      "impact": "Unbounded memory growth. System crashes under sustained load. Cannot handle extended sessions. Requires manual restart/cleanup.",
+      "remediation_steps": [
+        "Implement 50MB buffer cap with truncation",
+        "Add buffer metrics and monitoring",
+        "Implement buffer cleanup on completion",
+        "Add configuration for buffer limits",
+        "Consider spill-to-disk for large outputs",
+        "Add warning events when limit exceeded"
+      ]
+    },
+    {
+      "id": "OPS-05",
+      "title": "No Structured Logging",
+      "severity": "S2",
+      "category": "operational",
+      "priority": "P1",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/utils/logger.ts"
+      ],
+      "description": "The codebase contains 136 scattered `console.log` calls with inconsistent formatting, preventing structured observability and making debugging impossible.",
+      "impact": "Cannot debug production issues. No structured logs for alerting/dashboards. No audit trail. Cannot meet audit logging requirements.",
+      "remediation_steps": [
+        "Implement structured JSON logger (pino or winston)",
+        "Replace all console.log calls with structured logging",
+        "Add request/trace ID propagation",
+        "Implement structured context logging",
+        "Add log levels and filtering",
+        "Add performance/metrics logging",
+        "Set up log aggregation in production"
+      ]
+    },
+    {
+      "id": "LOG-01",
+      "title": "Console.log Used Throughout",
+      "severity": "S3",
+      "category": "logging_observability",
+      "priority": "P1",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/",
+        "/home/user/zora/src/providers/",
+        "/home/user/zora/src/security/"
+      ],
+      "description": "The codebase contains 136+ console.log, console.error, and console.warn calls scattered across 15+ files with no consistent structure or machine-parseable format.",
+      "impact": "Cannot search, filter, or correlate logs. Cannot aggregate into centralized logging systems. Production operators cannot distinguish between debug info and critical errors.",
+      "remediation_steps": [
+        "Create unified Logger utility with DEBUG, INFO, WARN, ERROR, CRITICAL levels",
+        "Replace all console.log calls with logger.info/error/warn",
+        "Ensure log output is valid JSON with timestamp, source, level, context",
+        "Configure log level via LOG_LEVEL environment variable",
+        "Add correlation IDs for distributed tracing"
+      ]
+    },
+    {
+      "id": "LOG-02",
+      "title": "Silent Errors in Async Operations",
+      "severity": "S2",
+      "category": "logging_observability",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/",
+        "/home/user/zora/src/providers/"
+      ],
+      "description": "Multiple Promise chains use `.then(...).catch(() => {})` patterns that silently swallow errors without logging or alerting.",
+      "impact": "When async operations fail, failures are invisible. System appears to continue working while tasks silently fail. No error logs to investigate.",
+      "remediation_steps": [
+        "Replace all `.catch(() => {})` with explicit error logging",
+        "Use logger.error() with full context",
+        "For critical operations, re-throw errors or emit error events",
+        "Include operation name, resource, and correlation IDs",
+        "Verify errors logged at ERROR level"
+      ]
+    },
+    {
+      "id": "LOG-03",
+      "title": "No Health Check Instrumentation",
+      "severity": "S2",
+      "category": "logging_observability",
+      "priority": "P1",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/auth-monitor.ts",
+        "/home/user/zora/src/orchestration/heartbeat-system.ts",
+        "/home/user/zora/src/orchestration/routine-manager.ts"
+      ],
+      "description": "The AuthMonitor, HeartbeatSystem, and RoutineManager services run but produce no observable metrics or health status. No `/health` endpoint or metrics.",
+      "impact": "Operators cannot determine system health or provider availability. Cannot detect service failures proactively. No observability into background services.",
+      "remediation_steps": [
+        "Add metrics collection to core services",
+        "Expose `/health` HTTP endpoint (JSON)",
+        "Track provider availability and token expiry",
+        "Track error rates and latencies",
+        "Emit provider health metrics",
+        "Update metrics periodically"
+      ]
+    },
+    {
+      "id": "LOG-04",
+      "title": "Event Stream Lacks Source Attribution",
+      "severity": "S3",
+      "category": "logging_observability",
+      "priority": "P1",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/event.ts",
+        "/home/user/zora/src/providers/claude-provider.ts",
+        "/home/user/zora/src/providers/gemini-provider.ts",
+        "/home/user/zora/src/providers/ollama-provider.ts"
+      ],
+      "description": "AgentEvent objects lack a `source` field identifying which provider or component emitted them. When an event arrives, there's no way to know the source.",
+      "impact": "Provider metrics cannot be tracked. Billing accuracy impossible. Debugging attribution impossible. Multi-provider failover traces are unclear.",
+      "remediation_steps": [
+        "Add `source` field to AgentEvent interface",
+        "Update all providers to include source when emitting events",
+        "Add system as source for framework events",
+        "Update event serialization/deserialization",
+        "Test events include source field"
+      ]
+    },
+    {
+      "id": "DOC-01",
+      "title": "Sparse Inline Explanations in Complex Modules",
+      "severity": "S3",
+      "category": "documentation",
+      "priority": "P2",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/src/orchestration/",
+        "/home/user/zora/src/security/"
+      ],
+      "description": "While file-level block comments are present, function-level explanations are sparse in complex modules. New contributors cannot understand the code without extensive reverse-engineering.",
+      "impact": "Onboarding is slow. Refactoring introduces bugs due to undocumented invariants. Code review difficult; non-obvious design decisions unclear.",
+      "remediation_steps": [
+        "Add JSDoc comments to all public functions",
+        "Add JSDoc to complex private functions",
+        "Explain purpose, preconditions, and side effects",
+        "Document important invariants",
+        "Explain 'why' for non-obvious logic",
+        "Document failure modes and error handling"
+      ]
+    },
+    {
+      "id": "DOC-02",
+      "title": "No Architecture Decision Records (ADRs)",
+      "severity": "S3",
+      "category": "documentation",
+      "priority": "P2",
+      "effort_hours": 3,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/docs/adr/"
+      ],
+      "description": "No architecture decision records exist. Large design decisions are documented only in REMEDIATION_ROADMAP.md or scattered in comments.",
+      "impact": "New team members cannot explain 'why' the system is designed this way. Teams cannot understand context for past decisions when refactoring.",
+      "remediation_steps": [
+        "Create `/docs/adr/` directory with README",
+        "Write ADRs for key decisions (Orchestrator, Routing, Failover, Events, Retry)",
+        "Document context, decision, consequences, and alternatives",
+        "Use standard ADR template",
+        "Link ADRs in main README"
+      ]
+    },
+    {
+      "id": "DOC-03",
+      "title": "Provider Implementation Guide Missing",
+      "severity": "S3",
+      "category": "documentation",
+      "priority": "P2",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/docs/PROVIDER_IMPLEMENTATION_GUIDE.md",
+        "/home/user/zora/src/providers/provider-template.ts"
+      ],
+      "description": "Three providers exist but no template or guide for implementing a fourth provider. Adding a new provider requires reverse-engineering existing implementations.",
+      "impact": "Extensibility is low. New providers difficult to add. Consistency problems. Community contributions hindered.",
+      "remediation_steps": [
+        "Create comprehensive provider implementation guide",
+        "Document interface overview and method signatures",
+        "Provide step-by-step implementation checklist",
+        "Create example provider template with comments",
+        "Document testing requirements",
+        "Explain common patterns and error handling"
+      ]
+    },
+    {
+      "id": "DOC-04",
+      "title": "Configuration Reference Incomplete",
+      "severity": "S3",
+      "category": "documentation",
+      "priority": "P2",
+      "effort_hours": 1,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/docs/CONFIGURATION_REFERENCE.md",
+        "/home/user/zora/config.example.toml"
+      ],
+      "description": "Policy file format is documented but `config.toml` is only partially explained. Users misconfigure routing rules, retry settings, and provider fallbacks.",
+      "impact": "Users misconfigure the system. No examples of complete valid configurations. Users need support for configuration questions.",
+      "remediation_steps": [
+        "Create comprehensive TOML schema documentation",
+        "Document all sections: providers, routing, retry, budget, logging",
+        "Document each key with type, default, constraints",
+        "Provide provider-specific settings explanation",
+        "Include example configurations for common use cases",
+        "Link from main README"
+      ]
+    },
+    {
+      "id": "DOC-05",
+      "title": "No Troubleshooting Guide",
+      "severity": "S3",
+      "category": "documentation",
+      "priority": "P2",
+      "effort_hours": 2,
+      "blocking": false,
+      "blocking_gaps": [],
+      "blocked_by": [],
+      "files_affected": [
+        "/home/user/zora/docs/TROUBLESHOOTING.md"
+      ],
+      "description": "When users encounter issues, they have no troubleshooting guide. Support burden is high; users frustrated. No common issues documented with solutions.",
+      "impact": "High support load. Users cannot solve problems independently. User frustration. System appears unreliable.",
+      "remediation_steps": [
+        "Create comprehensive troubleshooting guide",
+        "Document common issues with symptoms, root causes, solutions",
+        "Include debugging techniques (enable debug logs, read logs, check health)",
+        "Cover provider-specific issues",
+        "Cover system-level issues",
+        "Include performance troubleshooting"
+      ]
+    }
+  ]
+}
