@@ -269,20 +269,27 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // System info derived from client-side data
+  // System info from server-side process metrics
   useEffect(() => {
-    const startTime = Date.now();
-    const updateSystem = () => {
-      const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
-      setSystem({
-        uptime: uptimeSeconds,
-        memory: { used: 0, total: 0 },
-        activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
-        totalJobs: jobs.length,
-      });
+    const fetchSystem = async () => {
+      try {
+        const res = await axios.get('/api/system');
+        setSystem({
+          ...res.data,
+          activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
+          totalJobs: jobs.length,
+        });
+      } catch {
+        setSystem({
+          uptime: 0,
+          memory: { used: 0, total: 0 },
+          activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
+          totalJobs: jobs.length,
+        });
+      }
     };
-    updateSystem();
-    const interval = setInterval(updateSystem, 5000);
+    fetchSystem();
+    const interval = setInterval(fetchSystem, 5000);
     return () => clearInterval(interval);
   }, [jobs]);
 
