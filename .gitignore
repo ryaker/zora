@@ -27,6 +27,7 @@ pnpm-debug.log*
 /coverage/
 /.turbo/
 /.cache/
+src/dashboard/frontend/dist/
 
 # Logs
 logs/
