@@ -1,3 +1,8 @@
+> **NOTE (2026-02-14):** Many gaps described in this document have been resolved.
+> The authoritative status is in `gaps/wsjf-scores.json` — run `./gaps/tracker.sh stream`
+> to see current state. Code descriptions below may reference old/stub implementations
+> that have since been replaced with working code.
+
 ## 8. ERROR HANDLING GAPS (6 gaps)
 
 ### Root Cause Analysis

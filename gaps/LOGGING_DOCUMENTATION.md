@@ -1,3 +1,8 @@
+> **NOTE (2026-02-14):** Many gaps described in this document have been resolved.
+> The authoritative status is in `gaps/wsjf-scores.json` — run `./gaps/tracker.sh stream`
+> to see current state. Code descriptions below may reference old/stub implementations
+> that have since been replaced with working code.
+
 ## 11. LOGGING & OBSERVABILITY GAPS (4 gaps)
 
 The Zora framework uses 136 console.log calls scattered throughout the codebase without structured logging, making production debugging nearly impossible. Events lack source attribution, no metrics are exposed, and silent errors in async operations hide failures. This section details observability gaps that prevent operational visibility and reliable troubleshooting.
