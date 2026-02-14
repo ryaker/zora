@@ -15,6 +15,7 @@ import type {
   LLMProvider,
   AuthStatus,
   QuotaStatus,
+  ProviderUsage,
   AgentEvent,
   AgentEventType,
   TaskContext,
@@ -226,6 +227,16 @@ export class OllamaProvider implements LLMProvider {
     } finally {
       this._activeRequests.delete(task.jobId);
     }
+  }
+
+  getUsage(): ProviderUsage {
+    return {
+      totalCostUsd: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      requestCount: 0,
+      lastRequestAt: null,
+    };
   }
 
   async abort(jobId: string): Promise<void> {
