@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 
@@ -17,7 +17,28 @@ interface JobStatus {
   status: string;
 }
 
+interface LogEntry {
+  id: number;
+  message: string;
+}
+
+interface SystemInfo {
+  uptime: number;
+  memory: { used: number; total: number };
+  activeJobs: number;
+  totalJobs: number;
+}
+
 const ZORA_VERSION = 'v0.9.0';
+const MAX_LOGS = 100;
+let logIdCounter = 0;
+
+function formatUptime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+}
 
 const SETUP_PROMPT = `I want to set up Zora, an autonomous AI agent for my computer. Please walk me through the setup step by step:
 
@@ -31,7 +52,7 @@ Ask me one question at a time and wait for my response before moving on.`;
 
 const SetupNeededPanel: React.FC = () => {
   const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     return () => {
@@ -124,10 +145,16 @@ const App: React.FC = () => {
   const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
-  const [logs, setLogs] = useState<string[]>(['Zora is running.', 'Waiting for tasks...']);
+  const [logs, setLogs] = useState<LogEntry[]>([
+    { id: ++logIdCounter, message: 'Zora is running.' },
+    { id: ++logIdCounter, message: 'Waiting for tasks...' },
+  ]);
   const [healthLoaded, setHealthLoaded] = useState(false);
   const [jobsLoaded, setJobsLoaded] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  const [taskPrompt, setTaskPrompt] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -168,6 +195,97 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // SSE event stream for real-time activity feed
+  useEffect(() => {
+    const eventSource = new EventSource('/api/events');
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'connected') return;
+
+        let message: string;
+        switch (data.type) {
+          case 'thinking':
+            message = 'Agent is thinking...';
+            break;
+          case 'text':
+            message = typeof data.data === 'object' && data.data?.text
+              ? `Agent: ${data.data.text.slice(0, 200)}`
+              : 'Agent response received';
+            break;
+          case 'tool_call':
+            message = typeof data.data === 'object' && data.data?.name
+              ? `Tool call: ${data.data.name}`
+              : 'Tool invoked';
+            break;
+          case 'tool_result':
+            message = 'Tool result received';
+            break;
+          case 'error':
+            message = typeof data.data === 'object' && data.data?.message
+              ? `Error: ${data.data.message}`
+              : 'An error occurred';
+            break;
+          case 'done':
+            message = 'Task completed';
+            break;
+          case 'steering':
+            message = typeof data.data === 'object' && data.data?.message
+              ? `Steering: ${data.data.message}`
+              : 'Steering message received';
+            break;
+          case 'job_failed':
+            message = typeof data.data === 'object' && data.data?.error
+              ? `Job failed: ${data.data.error}`
+              : 'Job failed';
+            break;
+          default:
+            message = `Event: ${data.type}`;
+        }
+
+        setLogs(prev => [
+          { id: ++logIdCounter, message },
+          ...prev,
+        ].slice(0, MAX_LOGS));
+
+        // Refresh jobs list on completion/failure
+        if (data.type === 'done' || data.type === 'job_failed') {
+          axios.get('/api/jobs').then(res => {
+            if (res.data.jobs) setJobs(res.data.jobs);
+          }).catch(() => {});
+        }
+      } catch {
+        // Malformed SSE data — ignore
+      }
+    };
+
+    eventSource.onerror = () => {
+      console.warn('SSE connection lost, reconnecting...');
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
+  // System info derived from client-side data
+  useEffect(() => {
+    const startTime = Date.now();
+    const updateSystem = () => {
+      const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+      setSystem({
+        uptime: uptimeSeconds,
+        memory: { used: 0, total: 0 },
+        activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
+        totalJobs: jobs.length,
+      });
+    };
+    updateSystem();
+    const interval = setInterval(updateSystem, 5000);
+    return () => clearInterval(interval);
+  }, [jobs]);
+
   const handleSteer = async () => {
     if (!steerMsg) return;
     try {
@@ -181,7 +299,30 @@ const App: React.FC = () => {
       setSteerMsg('');
     } catch (err) {
       console.error('Steering message failed', err);
-      setLogs(prev => ['Failed to send message', ...prev].slice(0, 10));
+      setLogs(prev => [{ id: ++logIdCounter, message: 'Failed to send message' }, ...prev].slice(0, MAX_LOGS));
+    }
+  };
+
+  const handleSubmitTask = async () => {
+    if (!taskPrompt.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      const res = await axios.post('/api/task', { prompt: taskPrompt.trim() });
+      if (res.data.ok) {
+        setLogs(prev => [
+          { id: ++logIdCounter, message: `Task submitted: ${taskPrompt.trim()} (${res.data.jobId})` },
+          ...prev,
+        ].slice(0, MAX_LOGS));
+        setTaskPrompt('');
+      }
+    } catch (err) {
+      console.error('Task submission failed', err);
+      setLogs(prev => [
+        { id: ++logIdCounter, message: 'Failed to submit task' },
+        ...prev,
+      ].slice(0, MAX_LOGS));
+    } finally {
+      setSubmitting(false);
     }
   };
 
