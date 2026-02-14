@@ -37,7 +37,7 @@ const program = new Command();
 program
   .name('zora-agent')
   .description('Long-running autonomous personal AI agent')
-  .version('0.9.2');
+  .version('0.9.3');
 
 /**
  * Creates LLMProvider instances from config.
@@ -153,11 +153,11 @@ program
               break;
             case 'tool_call': {
               const c = event.content as { tool: string };
-              console.log(clack.dim(`  ▸ ${c.tool}()`));
+              console.log(`\x1b[2m  ▸ ${c.tool}()\x1b[0m`);
               break;
             }
             case 'error':
-              console.error(clack.red(`✗ ${(event.content as { message: string }).message}`));
+              console.error(`\x1b[31m✗ ${(event.content as { message: string }).message}\x1b[0m`);
               break;
           }
         },
