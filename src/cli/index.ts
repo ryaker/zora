@@ -131,6 +131,7 @@ program
     await orchestrator.boot();
 
     try {
+      let spinnerActive = true;
       const spinner = clack.spinner();
       spinner.start('Running task...');
 
@@ -139,9 +140,32 @@ program
         model: opts.model,
         maxCostTier: opts.maxCostTier,
         maxTurns: opts.maxTurns,
+        onEvent: (event) => {
+          // Stop spinner on first substantive event so streaming output is visible
+          if (spinnerActive && (event.type === 'text' || event.type === 'tool_call')) {
+            spinner.stop('Working...');
+            spinnerActive = false;
+          }
+
+          switch (event.type) {
+            case 'text':
+              console.log((event.content as any).text);
+              break;
+            case 'tool_call': {
+              const c = event.content as any;
+              console.log(`\x1b[2m  ▸ ${c.tool}()\x1b[0m`);
+              break;
+            }
+            case 'error':
+              console.error(`\x1b[31m✗ ${(event.content as any).message}\x1b[0m`);
+              break;
+          }
+        },
       });
 
-      spinner.stop('Task complete.');
+      if (spinnerActive) {
+        spinner.stop('Task complete.');
+      }
 
       if (result) {
         console.log('\n' + result);
