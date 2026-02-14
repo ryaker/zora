@@ -492,8 +492,10 @@ test.describe('Responsive Layout', () => {
 
   test('scanline overlay is present', async ({ page }) => {
     await page.goto(baseUrl);
+    // Scanline is a decorative CSS overlay (pseudo-elements/opacity) — check attachment not visibility
     const scanline = page.locator('.scanline');
-    await expect(scanline).toBeVisible();
+    await expect(scanline).toBeAttached();
+    await expect(scanline).toHaveCount(1);
   });
 
   test('page renders without JS errors', async ({ page }) => {
