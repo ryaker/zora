@@ -49,7 +49,7 @@ Then verify with:
 zora --version
 ```
 
-I should see `0.6.0`. If I get a "permission denied" error, suggest using `sudo` on macOS/Linux or running the terminal as administrator on Windows.
+I should see `0.9.0`. If I get a "permission denied" error, suggest using `sudo` on macOS/Linux or running the terminal as administrator on Windows.
 
 ### Step 3: Set Up Zora
 

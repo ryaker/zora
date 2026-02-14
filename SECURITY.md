@@ -2,7 +2,7 @@
 
 Zora is an AI agent that runs on your computer. This guide explains what it can and can't do, how permissions work, and how to stay in control.
 
-> **v0.6.0 Security Hardening** — This release includes OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026) mitigations: action budgets, dry-run preview mode, intent verification (mandate signing), and RAG/tool-output injection defense. See [What's New in v0.6 Security](#whats-new-in-v06-security) below.
+> **v0.9.0 Security Hardening** — This release includes OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026) mitigations: action budgets, dry-run preview mode, intent verification (mandate signing), and RAG/tool-output injection defense. See [What's New in v0.6 Security](#whats-new-in-v06-security) below.
 
 ---
 

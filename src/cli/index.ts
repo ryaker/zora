@@ -37,7 +37,7 @@ const program = new Command();
 program
   .name('zora')
   .description('Long-running autonomous personal AI agent')
-  .version('0.6.0');
+  .version('0.9.0');
 
 /**
  * Creates LLMProvider instances from config.

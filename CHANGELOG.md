@@ -2,21 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.1] — 2026-02-13
+## [0.9.0] — 2026-02-14
 
 ### Added
 - Granular model selection — define multiple entries per provider type (claude-opus, claude-sonnet, claude-haiku) with distinct cost tiers and capabilities
 - `max_cost_tier` field on routine config and CLI (`--max-cost-tier`) for cost-aware task routing (Router filters providers by cost ceiling)
 - Ollama provider (`type = "ollama"`) for local/OSS models (Llama, Mistral, etc.) — `cost_tier = "free"`, no API limits
 - `RoutineManager.runRoutine()` method for manual/test-triggered routine execution
+- Policy-aware orchestrator with security-first onboarding
+- Provider quota/usage tracking in dashboard
+- Docker containerization for integration testing
+- Dashboard live data — real system metrics wired to frontend
+- Dashboard task submission with SSE live feed
+- Dashboard auto-open browser on `zora start`
+- Dashboard welcome screen and onboarding for new users
+- UX overhaul — zero-to-productive onboarding flow
+- Remediation roadmap implementation (wiring components together)
+- Production readiness assessment and roadmap
 
 ### Changed
 - RoutineManager now routes tasks through `Orchestrator.submitTask()` instead of calling `ExecutionLoop.run()` directly — routines get full routing, failover, memory context, and session persistence
 - `model_preference` and `max_cost_tier` from routine TOML configs now flow through to the Router (previously silently dropped)
 - Router `_sortByCost()` uses shared `COST_ORDER` constant; new `_filterByCostCeiling()` method for soft cost constraints
+- Dashboard labels replaced jargon with plain English
+- Comprehensive security documentation update for v0.6 hardening (OWASP compliance)
 
 ### Fixed
 - Example routine TOML files used `[routine.task]` (nests under routine in TOML) instead of separate `[task]` section — validation expected `raw.task` at top level
+- PR review feedback: config-aware dashboard port, Windows start fix, non-blocking submitTask, typed log entries, SSE error logging, system metrics caching
 
 ## [0.6.0] — 2026-02-13
 

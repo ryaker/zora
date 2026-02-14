@@ -4,7 +4,7 @@
 > **Date:** 2026-02-13
 > **Companion to:** PRODUCTION_READINESS.md
 > **Methodology:** WSJF (Weighted Shortest Job First) — same scoring model as IMPLEMENTATION_PLAN.md
-> **Baseline:** v0.6.0 source audit (66 source files, 41 test files)
+> **Baseline:** v0.9.0 source audit (66 source files, 41 test files)
 
 ---
 
@@ -217,4 +217,4 @@ These items were identified during the audit but are **not** blocking production
 
 **Assessment date:** 2026-02-13
 **Companion documents:** `PRODUCTION_READINESS.md`, `specs/v5/IMPLEMENTATION_PLAN.md`
-**Version assessed:** v0.6.0
+**Version assessed:** v0.9.0

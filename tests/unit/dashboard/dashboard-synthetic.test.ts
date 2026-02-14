@@ -47,7 +47,7 @@ test.describe('Page Load Journey', () => {
     await expect(page).toHaveTitle(/Zora/);
 
     // Use getByText with case-insensitive matching to handle CSS text-transform
-    // The footer contains "Zora v0.6.0" and "Dashboard" but they're rendered as uppercase
+    // The footer contains "Zora v0.9.0" and "Dashboard" but they're rendered as uppercase
     const footer = page.locator('div.text-\\[10px\\].font-data.text-white\\/40.uppercase.tracking-widest').last();
 
     // Check footer is visible
@@ -55,7 +55,7 @@ test.describe('Page Load Journey', () => {
 
     // Verify the text content (checking actual DOM text, not rendered uppercase)
     const footerText = await footer.textContent();
-    expect(footerText).toContain('Zora v0.6.0');
+    expect(footerText).toContain('Zora v0.9.0');
     expect(footerText).toContain('Dashboard');
   });
 });
