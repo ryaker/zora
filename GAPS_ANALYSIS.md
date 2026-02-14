@@ -300,13 +300,26 @@ All 46 gaps are documented in modular files for efficient navigation:
   - Structured logging and user documentation
   - P2 Priority: Observability and maintainability
 
-### Reference Materials
-- **[APPENDICES.md](gaps/APPENDICES.md)** — Complete reference appendices
-  - Appendix A: File Impact Index (reverse lookup by file)
-  - Appendix B: Dependency DAG & Critical Path
-  - Appendix C: Severity Definitions & Examples
-  - Appendix D: Type Safety Patterns (anti-patterns → solutions)
-  - Appendix E: Test Coverage Roadmap
+### Reference Materials (Appendices)
+- **[APPENDIX_A.md](gaps/APPENDIX_A.md)** — File Impact Index
+  - Reverse lookup: which gaps affect each file
+  - Hot spots (5+ gaps), critical infrastructure, leverage points
+
+- **[APPENDIX_B.md](gaps/APPENDIX_B.md)** — Dependency DAG & Critical Path
+  - Blocking relationships and execution order
+  - P0/P1/P2 tiers with dependency analysis
+
+- **[APPENDIX_C.md](gaps/APPENDIX_C.md)** — Severity Definitions & Examples
+  - S1–S4 severity levels with concrete examples
+  - Decision tree for gap classification
+
+- **[APPENDIX_D.md](gaps/APPENDIX_D.md)** — Type Safety Patterns
+  - Anti-patterns vs. solutions for TYPE-* gaps
+  - Side-by-side comparisons with code examples
+
+- **[APPENDIX_E.md](gaps/APPENDIX_E.md)** — Test Coverage Roadmap
+  - Detailed test scenarios for TEST-* gaps
+  - Fixtures, exit criteria, and test strategy
 
 ### Machine-Readable Data
 - **gaps-analysis.json** — Complete metadata for all 46 gaps (in progress)
@@ -315,7 +328,7 @@ All 46 gaps are documented in modular files for efficient navigation:
 
 ## Quick Start
 
-1. **For architects**: Review the Executive Summary and Critical Path above, then consult [APPENDICES.md](gaps/APPENDICES.md) section B for dependency analysis.
+1. **For architects**: Review the Executive Summary and Critical Path above, then consult [APPENDIX_B.md](gaps/APPENDIX_B.md) for dependency analysis and critical path ordering.
 
 2. **For engineers fixing gaps**: 
    - Find your gap ID in the Quick Reference Matrix above
@@ -324,7 +337,7 @@ All 46 gaps are documented in modular files for efficient navigation:
 
 3. **For security review**: Filter gaps by S1 severity in the Quick Reference Matrix, then review Error Handling and Logging categories.
 
-4. **For product/ops**: Review the Executive Summary effort breakdown (P0: 16h, P1: 14h, P2: 24h) and consult [APPENDICES.md](gaps/APPENDICES.md) section B for critical path.
+4. **For product/ops**: Review the Executive Summary effort breakdown (P0: 16h, P1: 14h, P2: 24h) and consult [APPENDIX_B.md](gaps/APPENDIX_B.md) for critical path and execution sequencing.
 
 ---
 
