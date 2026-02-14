@@ -35,7 +35,7 @@ import { runDoctorChecks } from './doctor.js';
 const program = new Command();
 
 program
-  .name('zora')
+  .name('zora-agent')
   .description('Long-running autonomous personal AI agent')
   .version('0.9.0');
 
@@ -83,7 +83,7 @@ async function setupContext() {
 
   // Ensure config exists
   if (!fs.existsSync(configPath)) {
-    console.error("Zora isn't configured yet. Run 'zora init' to set up in 2 minutes.");
+    console.error("Zora isn't configured yet. Run 'zora-agent init' to set up in 2 minutes.");
     process.exit(1);
   }
 
@@ -95,7 +95,7 @@ async function setupContext() {
   try {
     policy = await loadPolicy(policyPath);
   } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora init` first.');
+    console.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -161,7 +161,7 @@ program
 
     // Check if config exists before calling setupContext
     if (!fs.existsSync(configPath)) {
-      console.log("Zora isn't set up yet. Run `zora init` to get started in under 2 minutes.");
+      console.log("Zora isn't set up yet. Run `zora-agent init` to get started in under 2 minutes.");
       return;
     }
 

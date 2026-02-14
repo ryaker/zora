@@ -11,9 +11,9 @@
 ## Install
 
 ```bash
-npm i -g zora
-zora init
-zora ask "summarize files in ~/Projects"
+npm i -g zora-agent
+zora-agent init
+zora-agent ask "summarize files in ~/Projects"
 ```
 
 That's it. Three commands from zero to productive.
@@ -30,7 +30,7 @@ That's it. Three commands from zero to productive.
 
 🧠 **Hierarchical Memory** — Zora remembers your preferences, past work, and project context across sessions. Long-term memory + daily rolling notes.
 
-🕹️ **Web Dashboard** — A local web interface for monitoring tasks, viewing provider status and quota usage, and injecting course-corrections into running workflows. Live metrics via SSE, auto-opens on `zora start`.
+🕹️ **Web Dashboard** — A local web interface for monitoring tasks, viewing provider status and quota usage, and injecting course-corrections into running workflows. Live metrics via SSE, auto-opens on `zora-agent start`.
 
 ⏰ **Scheduled Routines** — Define recurring tasks in TOML that run automatically — daily reports, weekly cleanups, nightly code reviews. Supports `model_preference` and `max_cost_tier` per routine. Trigger manually with `RoutineManager.runRoutine()`.
 
@@ -38,12 +38,12 @@ That's it. Three commands from zero to productive.
 
 ### Real Examples
 
-- **File organization** — `zora ask "Sort ~/Downloads by project and archive older than 30 days"`
-- **Code review** — `zora ask "Check all PRs in my repos and comment on style issues"`
-- **Email drafting** — `zora ask "Draft replies to unread emails about the product launch"`
-- **Git management** — `zora ask "Create feature branches from all open issues labeled 'sprint-12'"`
-- **Web research** — `zora ask "Find and summarize the latest React 19 migration guides"`
-- **Multi-step workflows** — `zora ask "Find all TODOs in my project, create a summary, and open a GitHub issue with it."`
+- **File organization** — `zora-agent ask "Sort ~/Downloads by project and archive older than 30 days"`
+- **Code review** — `zora-agent ask "Check all PRs in my repos and comment on style issues"`
+- **Email drafting** — `zora-agent ask "Draft replies to unread emails about the product launch"`
+- **Git management** — `zora-agent ask "Create feature branches from all open issues labeled 'sprint-12'"`
+- **Web research** — `zora-agent ask "Find and summarize the latest React 19 migration guides"`
+- **Multi-step workflows** — `zora-agent ask "Find all TODOs in my project, create a summary, and open a GitHub issue with it."`
 
 ---
 
@@ -126,7 +126,7 @@ Zora is in active development (v0.9.0). This table reflects what actually works 
 
 ## Dashboard
 
-After starting Zora, the dashboard auto-opens at `http://localhost:7070`. Submit tasks, monitor live progress via SSE, view provider quota/usage, and send course-corrections to running jobs. First-time users see a guided onboarding screen with quick-start examples.
+After starting the agent, the dashboard auto-opens at `http://localhost:7070`. Submit tasks, monitor live progress via SSE, view provider quota/usage, and send course-corrections to running jobs. First-time users see a guided onboarding screen with quick-start examples.
 
 New to Zora? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — paste the prompt into any AI chatbot (ChatGPT, Claude, Gemini) for a guided walkthrough of installation and configuration.
 

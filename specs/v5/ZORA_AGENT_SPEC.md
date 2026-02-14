@@ -300,7 +300,7 @@ Max parallel jobs: configurable (default 3), preventing resource exhaustion.
 - On auth restoration: resumes checkpointed jobs on the restored provider.
 - If ALL providers are down: queues work for retry, with exponential backoff per provider.
 - Cooldown tracking with exponential backoff (inspired by OpenClaw's auth profile rotation).
-- Provider health dashboard available via `zora status`.
+- Provider health dashboard available via `zora-agent status`.
 
 #### LLM Provider Layer — N-Provider Registry
 

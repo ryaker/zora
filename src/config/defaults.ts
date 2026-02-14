@@ -18,7 +18,7 @@ import type {
 } from '../types.js';
 
 export const DEFAULT_AGENT: AgentConfig = {
-  name: 'zora',
+  name: 'zora-agent',
   workspace: '~/.zora/workspace',
   max_parallel_jobs: 3,
   default_timeout: '2h',

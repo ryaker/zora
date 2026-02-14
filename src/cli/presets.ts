@@ -2,7 +2,7 @@
  * Policy Presets — Safe, Balanced, Power.
  *
  * These match the spec presets in specs/v5/docs/POLICY_PRESETS.md.
- * Used by `zora init` to generate policy.toml.
+ * Used by `zora-agent init` to generate policy.toml.
  */
 
 import type { ZoraPolicy } from '../types.js';
@@ -171,7 +171,7 @@ export const TOOL_STACKS: Record<string, string[]> = {
 };
 
 export const PRESET_DESCRIPTIONS: Record<PresetName, string> = {
-  locked: 'Zero access — fresh install default, run `zora init` to configure',
+  locked: 'Zero access — fresh install default, run `zora-agent init` to configure',
   safe: 'Read-only, no shell — best for first run or high-sensitivity environments',
   balanced: 'Read/write inside dev path plus safe shell allowlist (recommended)',
   power: 'Expanded filesystem + shell access — use only if you understand the risks',

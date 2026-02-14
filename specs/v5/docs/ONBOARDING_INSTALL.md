@@ -25,7 +25,7 @@ pnpm install
 Run the health check to detect installed tools and auth status.
 
 ```bash
-pnpm zora doctor
+pnpm zora-agent doctor
 ```
 
 Expected outcomes:
@@ -169,8 +169,8 @@ All UI state is local. No cloud calls.
 
 ## Troubleshooting
 
-- If `zora doctor` fails Claude auth, re-auth in Claude Code or Claude Desktop.
-- If Gemini CLI is installed but not authenticated, run its login flow and re-run `zora doctor`.
+- If `zora-agent doctor` fails Claude auth, re-auth in Claude Code or Claude Desktop.
+- If Gemini CLI is installed but not authenticated, run its login flow and re-run `zora-agent doctor`.
 - If a tool call fails with `policy_violation`, expand your policy intentionally or change the task.
 
 ## Security reminders

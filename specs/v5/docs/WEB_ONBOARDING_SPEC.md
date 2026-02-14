@@ -20,7 +20,7 @@ This document defines a local-only onboarding wizard to make pre-authorization s
    - Explain pre-authorization and risk boundaries
 
 2. **System Check**
-   - Run `zora doctor` and show status cards
+   - Run `zora-agent doctor` and show status cards
 
 3. **Preset Selection**
    - Safe / Balanced / Power

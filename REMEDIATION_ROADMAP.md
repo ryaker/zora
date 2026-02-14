@@ -31,7 +31,7 @@ This roadmap defines the concrete work items, ordered by WSJF priority, to take 
 
 ## P0 — Wire the Orchestrator
 
-**Goal:** Create a central `Orchestrator` class that boots, owns, and connects every component. After P0, `zora ask` uses routing, failover, retry, steering, and session persistence.
+**Goal:** Create a central `Orchestrator` class that boots, owns, and connects every component. After P0, `zora-agent ask` uses routing, failover, retry, steering, and session persistence.
 
 **Exit criteria:** A single integration test boots the Orchestrator, submits a task via mock provider, observes router selection, simulates a failure triggering failover, and verifies session JSONL was written.
 
@@ -84,13 +84,13 @@ R1 (Orchestrator class)
 
 **Goal:** Real daemon lifecycle (`start`/`stop`/`status`) and a functional dashboard with live job data. After P1, a user can start Zora as a background daemon, view active jobs in a browser, and steer tasks from the web UI.
 
-**Exit criteria:** `zora start` spawns a background process, `zora status` reports its PID and active jobs, `GET /api/jobs` returns real session data, and the frontend loads in a browser.
+**Exit criteria:** `zora-agent start` spawns a background process, `zora-agent status` reports its PID and active jobs, `GET /api/jobs` returns real session data, and the frontend loads in a browser.
 
 | # | Work Item | BV | TC | RR | Size | WSJF | Files Touched | Details |
 |---|-----------|----|----|-----|------|------|---------------|---------|
-| R11 | **Implement real `zora start`** | 5 | 4 | 3 | 3 | **4.0** | `src/cli/index.ts`, `src/orchestrator/orchestrator.ts` | Replace `console.log('Daemon started (PID: 12345)')` with a real daemonization strategy. Options: (a) `child_process.fork()` with `detached: true` + `unref()`, writing PID to `~/.zora/state/daemon.pid`; or (b) systemd/launchd integration. Store PID + port in a pidfile. Boot the Orchestrator in the child process. |
-| R12 | **Implement real `zora stop`** | 4 | 3 | 2 | 1 | **9.0** | `src/cli/index.ts` | Read PID from `~/.zora/state/daemon.pid`, send `SIGTERM`, wait for graceful shutdown (Orchestrator calls `shutdown()` on signal), remove pidfile. Currently just logs `"Daemon stopped."` — a no-op. |
-| R13 | **Implement real `zora status`** | 4 | 3 | 2 | 2 | **4.5** | `src/cli/index.ts` | Read pidfile, check if process is alive (`process.kill(pid, 0)`), query `GET /api/health` on the dashboard port for provider status. Replace the hardcoded `"running (simulated)"` string. |
+| R11 | **Implement real `zora-agent start`** | 5 | 4 | 3 | 3 | **4.0** | `src/cli/index.ts`, `src/orchestrator/orchestrator.ts` | Replace `console.log('Daemon started (PID: 12345)')` with a real daemonization strategy. Options: (a) `child_process.fork()` with `detached: true` + `unref()`, writing PID to `~/.zora/state/daemon.pid`; or (b) systemd/launchd integration. Store PID + port in a pidfile. Boot the Orchestrator in the child process. |
+| R12 | **Implement real `zora-agent stop`** | 4 | 3 | 2 | 1 | **9.0** | `src/cli/index.ts` | Read PID from `~/.zora/state/daemon.pid`, send `SIGTERM`, wait for graceful shutdown (Orchestrator calls `shutdown()` on signal), remove pidfile. Currently just logs `"Daemon stopped."` — a no-op. |
+| R13 | **Implement real `zora-agent status`** | 4 | 3 | 2 | 2 | **4.5** | `src/cli/index.ts` | Read pidfile, check if process is alive (`process.kill(pid, 0)`), query `GET /api/health` on the dashboard port for provider status. Replace the hardcoded `"running (simulated)"` string. |
 | R14 | **Wire `GET /api/jobs` to SessionManager** | 4 | 3 | 2 | 2 | **4.5** | `src/dashboard/server.ts`, `src/orchestrator/session-manager.ts` | Replace `{ jobs: [] }` placeholder with a real query. Add `SessionManager.listSessions()` that reads the `sessions/` directory and returns job metadata (jobId, event count, last activity, status). The dashboard server already has a `sessionManager` reference in its options — just use it. |
 | R15 | **Build frontend dist** | 3 | 2 | 1 | 3 | **2.0** | `src/dashboard/frontend/` | The dashboard references `frontend/dist/` but no build output exists. Either: (a) run the Vite build and commit `dist/`, or (b) add a `postinstall` script that builds it. The React app in `src/dashboard/frontend/src/App.tsx` already exists with health-check polling. |
 | R16 | **Add `SessionManager.listSessions()`** | 3 | 3 | 1 | 1 | **7.0** | `src/orchestrator/session-manager.ts` | New method that reads `sessions/` dir, parses each `.jsonl` filename for jobId, reads last line for timestamp/status. Returns `Array<{ jobId, eventCount, lastActivity, status }>`. |
@@ -103,20 +103,20 @@ R16 (SessionManager.listSessions)
 └── R14 (Wire /api/jobs)
     └── R17 (Real-time updates)
 
-R11 (zora start)
-├── R12 (zora stop)     ─── depends on R11 (pidfile format)
-└── R13 (zora status)   ─── depends on R11 (pidfile format)
+R11 (zora-agent start)
+├── R12 (zora-agent stop)     ─── depends on R11 (pidfile format)
+└── R13 (zora-agent status)   ─── depends on R11 (pidfile format)
 
 R15 (Build frontend)    ─── independent
 ```
 
 ### P1 Implementation Order
 
-1. **R12** — `zora stop` (WSJF 9.0, simple)
+1. **R12** — `zora-agent stop` (WSJF 9.0, simple)
 2. **R16** — `SessionManager.listSessions()` (WSJF 7.0, unblocks R14)
 3. **R14** — Wire `/api/jobs` (WSJF 4.5, needs R16)
-4. **R13** — `zora status` (WSJF 4.5)
-5. **R11** — `zora start` (WSJF 4.0, most complex)
+4. **R13** — `zora-agent status` (WSJF 4.5)
+5. **R11** — `zora-agent start` (WSJF 4.0, most complex)
 6. **R17** — Real-time updates (WSJF 3.0)
 7. **R15** — Build frontend (WSJF 2.0)
 

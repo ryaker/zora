@@ -1,6 +1,6 @@
 ---
 name: zora-setup-guide
-description: "Interactive hands-on setup guide for Zora. Walks the user through every step from zero to first productive task — checking prerequisites, installing, running `zora init`, executing first tasks, and verifying everything works. Use when: (1) someone is setting up Zora for the first time, (2) someone is stuck during installation, (3) someone says 'help me install Zora' or 'get me started'. Triggers on 'setup Zora', 'install Zora', 'get started with Zora', 'Zora setup help', 'walk me through setup'."
+description: "Interactive hands-on setup guide for Zora. Walks the user through every step from zero to first productive task — checking prerequisites, installing, running `zora-agent init`, executing first tasks, and verifying everything works. Use when: (1) someone is setting up Zora for the first time, (2) someone is stuck during installation, (3) someone says 'help me install Zora' or 'get me started'. Triggers on 'setup Zora', 'install Zora', 'get started with Zora', 'Zora setup help', 'walk me through setup'."
 ---
 
 # Zora Interactive Setup Guide
@@ -52,18 +52,18 @@ Here's what I found on your system:
 ## Phase 2: Install Zora
 
 ```bash
-npm install -g zora
+npm install -g zora-agent
 ```
 
 **Verify:**
 ```bash
-zora --version
+zora-agent --version
 ```
 
 Expected: `0.9.0`
 
 **If permission error on npm global install:**
-- Suggest: `sudo npm install -g zora` (explain briefly)
+- Suggest: `sudo npm install -g zora-agent` (explain briefly)
 - Or: `npm config set prefix ~/.npm-global` and add to PATH
 
 **If already installed:**
@@ -71,7 +71,7 @@ Expected: `0.9.0`
 
 ## Phase 3: Run the Setup Wizard
 
-Ask the user a few questions BEFORE running `zora init`, so you can pass the right flags:
+Ask the user a few questions BEFORE running `zora-agent init`, so you can pass the right flags:
 
 ### Question 1: Security comfort level
 
@@ -91,8 +91,8 @@ Suggest whichever exists. If none exist, ask where they keep their projects.
 
 ### Question 3: Quick or custom?
 
-- **Quick** (recommended for first-timers): `zora init -y --preset balanced`
-- **Custom**: `zora init` (full interactive wizard)
+- **Quick** (recommended for first-timers): `zora-agent init -y --preset balanced`
+- **Custom**: `zora-agent init` (full interactive wizard)
 
 Then run the appropriate command.
 
@@ -120,12 +120,12 @@ Now the fun part. Pick a task based on what's on their system:
 
 **If they have a dev directory with projects:**
 ```bash
-zora ask "List everything in my ~/Dev folder and give me a one-line summary of each project"
+zora-agent ask "List everything in my ~/Dev folder and give me a one-line summary of each project"
 ```
 
 **If they don't have projects yet:**
 ```bash
-zora ask "Write a short professional bio for me based on what you can see on this system. Save it to ~/Desktop/bio.md"
+zora-agent ask "Write a short professional bio for me based on what you can see on this system. Save it to ~/Desktop/bio.md"
 ```
 
 **If the task succeeds:**
@@ -133,19 +133,19 @@ zora ask "Write a short professional bio for me based on what you can see on thi
 - Show the audit log: `tail -3 ~/.zora/audit/audit.jsonl`
 
 **If the task fails:**
-- Run `zora doctor` to diagnose
+- Run `zora-agent doctor` to diagnose
 - Check for common issues: no API key, provider not found, permission denied
 - Fix and retry
 
 ## Phase 5: Show Off Memory
 
 ```bash
-zora ask "Remember that I prefer concise responses and TypeScript over JavaScript"
+zora-agent ask "Remember that I prefer concise responses and TypeScript over JavaScript"
 ```
 
 Then:
 ```bash
-zora ask "Write a function that validates an email address"
+zora-agent ask "Write a function that validates an email address"
 ```
 
 Point out: "Notice it wrote TypeScript and kept it short — Zora remembered your preferences."
@@ -157,10 +157,10 @@ Wrap up with a summary of what they now have and where to go:
 ```
 You're all set! Here's what you have:
 
-  zora ask "..."     — Give Zora any task
-  zora status        — Check if everything's healthy
-  zora doctor        — Diagnose environment issues
-  zora start         — Launch the dashboard at http://localhost:7070
+  zora-agent ask "..."     — Give Zora any task
+  zora-agent status        — Check if everything's healthy
+  zora-agent doctor        — Diagnose environment issues
+  zora-agent start         — Launch the dashboard at http://localhost:7070
 
 Want to learn more?
   - QUICKSTART.md    — More example tasks
@@ -175,11 +175,11 @@ Ask: "Want me to help you set up a routine, customize SOUL.md, or try another ta
 
 | Problem | Fix |
 |---------|-----|
-| `command not found: zora` | npm global bin not in PATH. Run `npm bin -g` and add to PATH |
-| `Config not found` | Run `zora init` |
+| `command not found: zora-agent` | npm global bin not in PATH. Run `npm bin -g` and add to PATH |
+| `Config not found` | Run `zora-agent init` |
 | `No providers found` | Install Claude CLI: `npm install -g @anthropic-ai/claude` |
 | `Permission denied` | Check `~/.zora/policy.toml` — path may not be in allowed_paths |
-| `EACCES on npm install` | Use `sudo npm install -g zora` or fix npm permissions |
+| `EACCES on npm install` | Use `sudo npm install -g zora-agent` or fix npm permissions |
 
 ## Guidelines
 

@@ -1,11 +1,11 @@
 {
-  "name": "zora",
+  "name": "zora-agent",
   "version": "0.9.0",
   "description": "Long-running autonomous personal AI agent — multi-provider, capability-routed, memory-enriched",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "zora": "dist/cli/index.js"
+    "zora-agent": "dist/cli/index.js"
   },
   "files": [
     "dist",

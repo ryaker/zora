@@ -11,7 +11,7 @@ Zora is an AI agent that can complete complex workflows on your computer. Here's
 ### "Review my PR and find bugs"
 
 ```bash
-zora ask "Review PR #42 for potential bugs and edge cases"
+zora-agent ask "Review PR #42 for potential bugs and edge cases"
 ```
 
 **What happens:**
@@ -27,7 +27,7 @@ zora ask "Review PR #42 for potential bugs and edge cases"
 ### "Run tests, fix failures, run again"
 
 ```bash
-zora ask "Run the test suite. If any tests fail, analyze the errors, fix them, and re-run until all pass."
+zora-agent ask "Run the test suite. If any tests fail, analyze the errors, fix them, and re-run until all pass."
 ```
 
 **What happens:**
@@ -44,7 +44,7 @@ zora ask "Run the test suite. If any tests fail, analyze the errors, fix them, a
 ### "Clean up stale git branches across all my repos"
 
 ```bash
-zora ask "Find all git repos in ~/Projects, check for branches merged >30 days ago, and delete them locally"
+zora-agent ask "Find all git repos in ~/Projects, check for branches merged >30 days ago, and delete them locally"
 ```
 
 **What happens:**
@@ -60,7 +60,7 @@ zora ask "Find all git repos in ~/Projects, check for branches merged >30 days a
 ### "Refactor this function to use async/await"
 
 ```bash
-zora ask "Refactor the fetchData function in src/api.ts to use async/await instead of promises"
+zora-agent ask "Refactor the fetchData function in src/api.ts to use async/await instead of promises"
 ```
 
 **What happens:**
@@ -81,7 +81,7 @@ zora ask "Refactor the fetchData function in src/api.ts to use async/await inste
 ### "Write a blog post about X in my voice"
 
 ```bash
-zora ask "Write a 1200-word blog post about remote work trends in 2026. Use the tone and style from my previous posts in ~/Writing/blog/"
+zora-agent ask "Write a 1200-word blog post about remote work trends in 2026. Use the tone and style from my previous posts in ~/Writing/blog/"
 ```
 
 **What happens:**
@@ -97,7 +97,7 @@ zora ask "Write a 1200-word blog post about remote work trends in 2026. Use the 
 ### "Summarize these meeting notes"
 
 ```bash
-zora ask "Summarize the 5 meeting notes in ~/Meetings/ from this week into action items and key decisions"
+zora-agent ask "Summarize the 5 meeting notes in ~/Meetings/ from this week into action items and key decisions"
 ```
 
 **What happens:**
@@ -113,7 +113,7 @@ zora ask "Summarize the 5 meeting notes in ~/Meetings/ from this week into actio
 ### "Draft 5 social media posts from this article"
 
 ```bash
-zora ask "Read my latest blog post and draft 5 social media posts (Twitter, LinkedIn, Instagram) promoting it"
+zora-agent ask "Read my latest blog post and draft 5 social media posts (Twitter, LinkedIn, Instagram) promoting it"
 ```
 
 **What happens:**
@@ -129,7 +129,7 @@ zora ask "Read my latest blog post and draft 5 social media posts (Twitter, Link
 ### "Proofread this document and fix grammar"
 
 ```bash
-zora ask "Proofread ~/Documents/proposal.md, fix grammar/spelling, improve clarity, but keep my voice"
+zora-agent ask "Proofread ~/Documents/proposal.md, fix grammar/spelling, improve clarity, but keep my voice"
 ```
 
 **What happens:**
@@ -149,7 +149,7 @@ zora ask "Proofread ~/Documents/proposal.md, fix grammar/spelling, improve clari
 ### "Organize my invoices folder by client and date"
 
 ```bash
-zora ask "Organize all PDFs in ~/Downloads/Invoices/ into folders by client name and year"
+zora-agent ask "Organize all PDFs in ~/Downloads/Invoices/ into folders by client name and year"
 ```
 
 **What happens:**
@@ -165,7 +165,7 @@ zora ask "Organize all PDFs in ~/Downloads/Invoices/ into folders by client name
 ### "Write a follow-up email to all clients I met this week"
 
 ```bash
-zora ask "Read my calendar for this week, find all client meetings, and draft personalized follow-up emails"
+zora-agent ask "Read my calendar for this week, find all client meetings, and draft personalized follow-up emails"
 ```
 
 **What happens:**
@@ -181,7 +181,7 @@ zora ask "Read my calendar for this week, find all client meetings, and draft pe
 ### "Create a weekly report of what happened in my business"
 
 ```bash
-zora ask "Summarize this week's activity: completed projects, new clients, revenue, and open tasks"
+zora-agent ask "Summarize this week's activity: completed projects, new clients, revenue, and open tasks"
 ```
 
 **What happens:**
@@ -197,7 +197,7 @@ zora ask "Summarize this week's activity: completed projects, new clients, reven
 ### "Convert this spreadsheet data into a formatted PDF"
 
 ```bash
-zora ask "Take the client data in ~/Data/clients.csv and create a professional PDF report with charts"
+zora-agent ask "Take the client data in ~/Data/clients.csv and create a professional PDF report with charts"
 ```
 
 **What happens:**
@@ -212,6 +212,6 @@ zora ask "Take the client data in ~/Data/clients.csv and create a professional P
 
 ## Next Steps
 
-- **Want to try Zora?** Run `zora ask "..."` with your own task.
+- **Want to try Zora?** Run `zora-agent ask "..."` with your own task.
 - **Need security details?** See [SECURITY.md](./SECURITY.md) for what Zora can and can't do.
 - **Want to automate recurring tasks?** Check out [ROUTINES_COOKBOOK.md](./ROUTINES_COOKBOOK.md) for copy-paste templates.

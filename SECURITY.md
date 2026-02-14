@@ -49,7 +49,7 @@ Zora needs to read code to understand it, write files to edit them, and run dev 
 
 ## The Four Trust Levels
 
-When you run `zora init`, you choose a preset. Here's what each one means:
+When you run `zora-agent init`, you choose a preset. Here's what each one means:
 
 ### 0. Locked (Fresh Install Default)
 
@@ -279,10 +279,10 @@ If the chain is intact, you'll see "Audit log verified (N entries)". If it's bro
 
 You have two options:
 
-### Option 1: Re-run `zora init`
+### Option 1: Re-run `zora-agent init`
 
 ```bash
-zora init --force
+zora-agent init --force
 ```
 
 This will prompt you to choose a preset again (locked, safe, balanced, or power). Your existing audit logs and memory are preserved.
