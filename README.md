@@ -24,15 +24,15 @@ That's it. Three commands from zero to productive.
 
 ## What It Can Do
 
-🚀 **Multi-Model with Automatic Failover** — Claude (Opus/Sonnet/Haiku), Gemini, and Ollama (local models). Pick the right model per task — Opus for hard problems, Haiku for cheap content, Ollama for zero-cost local work. Failover is automatic.
+🚀 **Multi-Model with Automatic Failover** — Claude (Opus/Sonnet/Haiku), Gemini, and Ollama (local models). Pick the right model per task — Opus for hard problems, Haiku for cheap content, Ollama for zero-cost local work. Use `--max-cost-tier` to cap routing by cost budget. Failover is automatic.
 
 🛡️ **Policy-Enforced Autonomy** — Work freely within boundaries you define. The security engine enforces strict allow/deny rules for filesystem, shell, and network with action budgets, dry-run preview mode, and intent verification. [OWASP LLM Top 10 and Agentic Top 10 hardened](SECURITY.md).
 
 🧠 **Hierarchical Memory** — Zora remembers your preferences, past work, and project context across sessions. Long-term memory + daily rolling notes.
 
-🕹️ **Web Dashboard** — A local web interface for monitoring tasks, viewing provider status, and injecting course-corrections into running workflows.
+🕹️ **Web Dashboard** — A local web interface for monitoring tasks, viewing provider status and quota usage, and injecting course-corrections into running workflows. Live metrics via SSE, auto-opens on `zora start`.
 
-⏰ **Scheduled Routines** — Define recurring tasks in TOML that run automatically — daily reports, weekly cleanups, nightly code reviews.
+⏰ **Scheduled Routines** — Define recurring tasks in TOML that run automatically — daily reports, weekly cleanups, nightly code reviews. Supports `model_preference` and `max_cost_tier` per routine. Trigger manually with `RoutineManager.runRoutine()`.
 
 🔄 **Persistent Retry Queue** — Failed tasks are persisted to disk and retried with intelligent backoff. Resilient to transient errors.
 
@@ -53,7 +53,7 @@ That's it. Three commands from zero to productive.
 
 Zora operates within strict boundaries you define. A policy file (`~/.zora/policy.toml`) specifies allowed filesystem paths, shell commands, and network access. The agent self-corrects when it hits policy limits — no data leaves your machine except API calls to Claude/Gemini. Every action is logged to a tamper-proof audit trail.
 
-**v0.6 Security Hardening** — Audited against OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026):
+**Security Hardening** — Audited against OWASP LLM Top 10 (2025) and OWASP Agentic Top 10 (ASI-2026):
 
 | Defense | What It Does |
 |---------|-------------|
@@ -110,8 +110,12 @@ Zora is in active development (v0.9.0). This table reflects what actually works 
 | SOUL.md personality loading | ✅ Working |
 | Hierarchical memory (long-term + daily notes) | ✅ Working |
 | Scheduled routines via cron | ✅ Working |
-| Web dashboard for monitoring and task injection | ✅ Working |
+| Web dashboard with live SSE feed, task submission, and onboarding | ✅ Working |
+| Provider quota/usage tracking in dashboard | ✅ Working |
+| Cost-aware routing via `--max-cost-tier` | ✅ Working |
+| Manual routine execution (`runRoutine()`) | ✅ Working |
 | Persistent retry queue with backoff | ✅ Working |
+| Docker containerization for integration testing | ✅ Working |
 | Interactive approval for flagged actions (`always_flag`) | 🚧 Config parsed, enforcement in progress |
 | Runtime permission expansion (grant access mid-task) | 🚧 Planned |
 | Cross-platform support (macOS, Linux, Windows) | 🚧 macOS tested, others in progress |
@@ -122,7 +126,7 @@ Zora is in active development (v0.9.0). This table reflects what actually works 
 
 ## Dashboard
 
-After starting Zora, open `http://localhost:7070` to monitor tasks, see provider status, and send messages to running jobs. First-time users will see a welcome screen with quick-start examples.
+After starting Zora, the dashboard auto-opens at `http://localhost:7070`. Submit tasks, monitor live progress via SSE, view provider quota/usage, and send course-corrections to running jobs. First-time users see a guided onboarding screen with quick-start examples.
 
 New to Zora? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — paste the prompt into any AI chatbot (ChatGPT, Claude, Gemini) for a guided walkthrough of installation and configuration.
 
