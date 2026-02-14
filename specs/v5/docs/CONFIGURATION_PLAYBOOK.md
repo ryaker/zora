@@ -10,7 +10,7 @@ A guided walkthrough for you and your AI assistant to dial in a Zora setup for y
 2. Tell it: *"I want to configure Zora for [your workflow]. Let's walk through the Configuration Playbook."*
 3. Work through each section together — the assistant asks questions, you answer, and it builds your config
 
-You can also read this solo and fill in the answers yourself, then run `zora init` with the right flags.
+You can also read this solo and fill in the answers yourself, then run `zora-agent init` with the right flags.
 
 ---
 
@@ -254,7 +254,7 @@ which gemini && gemini --version
 node --version
 ```
 
-Or run `zora init` which does this automatically.
+Or run `zora-agent init` which does this automatically.
 
 ### 6.2 Provider types
 
@@ -378,10 +378,10 @@ Skills auto-activate based on their description matching your request. You don't
 
 Now that you've answered all the questions above, you can generate your config.
 
-### Option A: Use `zora init` with flags
+### Option A: Use `zora-agent init` with flags
 
 ```bash
-zora init --preset balanced --dev-path ~/Dev -y
+zora-agent init --preset balanced --dev-path ~/Dev -y
 ```
 
 Then manually edit the generated files to match your answers.
@@ -501,7 +501,7 @@ always_flag = []
 
 ### "Config not found" error
 
-Run `zora init` to generate initial config files.
+Run `zora-agent init` to generate initial config files.
 
 ### Policy violations in audit log
 
@@ -511,7 +511,7 @@ This means Zora tried to do something your policy doesn't allow. Either:
 
 ### Provider not available
 
-Check `zora status` and verify:
+Check `zora-agent status` and verify:
 - The CLI is installed and on PATH
 - Authentication is valid
 - The provider is `enabled = true` in config

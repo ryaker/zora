@@ -38,7 +38,7 @@ brew install node
 ## 2. Install Zora
 
 ```bash
-npm install -g zora
+npm install -g zora-agent
 ```
 
 **What you should see:**
@@ -48,7 +48,7 @@ added 1 package in 2s
 
 Verify the installation:
 ```bash
-zora --version
+zora-agent --version
 ```
 
 **What you should see:**
@@ -62,7 +62,7 @@ zora --version
 
 Run the interactive setup wizard:
 ```bash
-zora init
+zora-agent init
 ```
 
 ### What happens during setup
@@ -119,7 +119,7 @@ These commands are added to your shell allowlist (unless you chose "Safe" preset
 
 If you just want to get going with sensible defaults:
 ```bash
-zora init -y
+zora-agent init -y
 ```
 
 This automatically chooses:
@@ -130,7 +130,7 @@ This automatically chooses:
 
 **What you should see after setup:**
 ```
-✔ Zora is ready! Run `zora ask "hello"` to get started.
+✔ Zora is ready! Run `zora-agent ask "hello"` to get started.
 ```
 
 Behind the scenes, Zora created:
@@ -148,7 +148,7 @@ Behind the scenes, Zora created:
 Let's do something actually useful — analyze a directory:
 
 ```bash
-zora ask "List everything in my ~/Projects folder and give me a one-line summary of each"
+zora-agent ask "List everything in my ~/Projects folder and give me a one-line summary of each"
 ```
 
 ### What happens:
@@ -176,7 +176,7 @@ old-prototype/   — Archived experiment, last updated 2023
 Teach Zora your preferences:
 
 ```bash
-zora ask "Remember that I prefer TypeScript over JavaScript and concise responses over verbose ones"
+zora-agent ask "Remember that I prefer TypeScript over JavaScript and concise responses over verbose ones"
 ```
 
 **What you should see:**
@@ -190,7 +190,7 @@ Memory saved to ~/.zora/memory/items/
 
 Now test it:
 ```bash
-zora ask "Write a utility function to deep-merge two objects"
+zora-agent ask "Write a utility function to deep-merge two objects"
 ```
 
 **What you should see:**
@@ -225,7 +225,7 @@ Notice:
 Let Zora analyze code and create output:
 
 ```bash
-zora ask "Find all TODO comments in ~/Projects/my-app and create a summary markdown file in ~/Projects/my-app/TODO_SUMMARY.md"
+zora-agent ask "Find all TODO comments in ~/Projects/my-app and create a summary markdown file in ~/Projects/my-app/TODO_SUMMARY.md"
 ```
 
 ### What happens:
@@ -245,7 +245,7 @@ Grouping by file and priority...
 
 Open `~/Projects/my-app/TODO_SUMMARY.md` to see the structured summary.
 
-> **Note:** The "Safe" preset blocks file writes outside `~/.zora/workspace`. If you chose Safe mode and need to write project files, switch to Balanced: `zora init --preset balanced --force`
+> **Note:** The "Safe" preset blocks file writes outside `~/.zora/workspace`. If you chose Safe mode and need to write project files, switch to Balanced: `zora-agent init --preset balanced --force`
 
 ---
 
@@ -256,7 +256,7 @@ Here's the flow that ran in the background:
 ```
 Your command
     ↓
-CLI (zora ask)
+CLI (zora-agent ask)
     ↓
 Orchestrator
     ↓
@@ -301,7 +301,7 @@ These are automatically loaded as context in future conversations.
 Launch the web dashboard to monitor tasks, see provider status, and send messages to running jobs:
 
 ```bash
-zora start
+zora-agent start
 ```
 
 Your browser will open automatically to `http://localhost:7070`. (Use `--no-open` to suppress this.)
@@ -366,9 +366,9 @@ Zora reads this file before every task and adapts accordingly.
 
 ### "No providers detected"
 
-Run `zora doctor` to check your environment:
+Run `zora-agent doctor` to check your environment:
 ```bash
-zora doctor
+zora-agent doctor
 ```
 
 If Claude or Gemini CLI isn't installed, see [SETUP_GUIDE.md](./docs/SETUP_GUIDE.md) for installation instructions.
@@ -390,7 +390,7 @@ Error: Command 'xyz' is not in the shell allowlist
 ```
 
 Either:
-1. Switch to a less restrictive preset (`zora init --preset power --force`)
+1. Switch to a less restrictive preset (`zora-agent init --preset power --force`)
 2. Or manually add the command to `~/.zora/policy.toml` under `[shell] → allowed_commands`
 
 ### Need help?

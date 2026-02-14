@@ -9,14 +9,14 @@ Zora routines run on a schedule (like cron jobs) and execute AI-powered workflow
 1. Open `~/.zora/config.toml` in a text editor
 2. Copy the entire `[[routines]]` block from below
 3. Paste it at the end of your config file
-4. Save and run `zora routines list` to verify
+4. Save and run `zora-agent routines list` to verify
 
 **Example:**
 ```bash
 nano ~/.zora/config.toml  # or vim, VS Code, etc.
 # Paste routine below
 # Save and exit
-zora routines list
+zora-agent routines list
 ```
 
 ---
@@ -335,7 +335,7 @@ Include `Send macOS notification with summary` in the prompt to get alerts when 
 Run it manually first:
 
 ```bash
-zora ask "$(cat <<EOF
+zora-agent ask "$(cat <<EOF
 [paste the prompt from the routine here]
 EOF
 )"
@@ -356,7 +356,7 @@ cat ~/.zora/audit/audit.jsonl | grep "routine:"
 Or list all routines:
 
 ```bash
-zora routines list
+zora-agent routines list
 ```
 
 ---
@@ -364,7 +364,7 @@ zora routines list
 ## Next Steps
 
 - **Copy a routine** from above and add it to `~/.zora/config.toml`
-- **Test it manually** with `zora ask "..."`
+- **Test it manually** with `zora-agent ask "..."`
 - **Let it run on schedule** and check `~/.zora/workspace/` for output
 - **Iterate** — adjust the prompt, schedule, or timeout based on results
 

@@ -21,11 +21,11 @@ This document turns the v0.5 journeys and success criteria into explicit, testab
 
 ## Journey 1: First Run (Trust Establishment)
 
-- `zora init` creates workspace at `~/.zora/` with:
+- `zora-agent init` creates workspace at `~/.zora/` with:
   - `config.toml`, `policy.toml`, `SOUL.md`, memory directories
 - Integrity baselines are computed and stored.
 - Default policy limits access to `~/Projects` and `~/.zora` only.
-- `zora doctor` reports Claude status and Gemini status (if configured).
+- `zora-agent doctor` reports Claude status and Gemini status (if configured).
 
 ## Journey 2: Long Task With Failover
 

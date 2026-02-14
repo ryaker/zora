@@ -2,7 +2,7 @@
 /**
  * Zora Daemon — Background process that runs the Orchestrator and Dashboard.
  *
- * Launched by `zora start` via child_process.fork().
+ * Launched by `zora-agent start` via child_process.fork().
  * Handles SIGTERM/SIGINT for graceful shutdown.
  */
 
@@ -42,7 +42,7 @@ async function main() {
   const policyPath = path.join(configDir, 'policy.toml');
 
   if (!fs.existsSync(configPath)) {
-    console.error('Config not found. Run `zora init` first.');
+    console.error('Config not found. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -54,7 +54,7 @@ async function main() {
   try {
     policy = await loadPolicy(policyPath);
   } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora init` first.');
+    console.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 

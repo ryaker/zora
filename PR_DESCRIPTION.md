@@ -121,7 +121,7 @@ This is a foundation PR. These are all in scope for subsequent branches:
 - **No LLM providers** — `ClaudeProvider`, `GeminiProvider` come in `feature/t1-claude-provider` (Item 4)
 - **No tool implementations** — `read_file`, `shell_exec`, etc. come in `feature/t1-core-tools` (Items 5–6)
 - **No execution loop** — The agentic think-act-observe cycle comes in `feature/t1-execution-loop` (Items 7–8)
-- **No CLI commands** — `zora start`, `zora ask`, etc. come in `feature/t1-cli` (Item 9)
+- **No CLI commands** — `zora-agent start`, `zora-agent ask`, etc. come in `feature/t1-cli` (Item 9)
 - **No security enforcement** — Policy engine, critical file protection, atomic writes come in `feature/t1-protections` (Items 10–11)
 
 ---
@@ -156,4 +156,4 @@ npm run lint       # tsc --noEmit — clean compile, zero warnings
 
 **Item 4: Claude Provider** (`feature/t1-claude-provider`) — Implement `ClaudeProvider` against the `LLMProvider` interface using the `@anthropic-ai/claude-agent-sdk`. Mac session token auth, `execute()` as AsyncGenerator, dependency-injected `queryFn` for testability.
 
-Full remaining Tier 1 roadmap: Items 4–11, estimated ~12 hours to a working single-provider agent that can `zora ask "write me a blog post"` and produce output.
+Full remaining Tier 1 roadmap: Items 4–11, estimated ~12 hours to a working single-provider agent that can `zora-agent ask "write me a blog post"` and produce output.

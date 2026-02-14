@@ -432,7 +432,7 @@ Pick a starting point that matches your comfort level:
 │                                                              │
 │  LOCKED (Fresh install default)                              │
 │  ├── Zero access -- nothing is permitted                     │
-│  ├── Run `zora init` to choose a real preset                 │
+│  ├── Run `zora-agent init` to choose a real preset                 │
 │  └── Budget: 0 actions, 0 tokens                             │
 │                                                              │
 │  SAFE (Start here if nervous)                                │

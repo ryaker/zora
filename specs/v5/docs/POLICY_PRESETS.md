@@ -6,7 +6,7 @@ These presets are starting points for pre-authorized execution. Choose the small
 
 ## Preset: Locked (fresh install default)
 
-Zero access. No filesystem, shell, network, or actions permitted. Run `zora init` to configure.
+Zero access. No filesystem, shell, network, or actions permitted. Run `zora-agent init` to configure.
 
 ```toml
 [filesystem]

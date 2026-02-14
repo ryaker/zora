@@ -41,12 +41,12 @@ If I don't have Node.js 20+, help me install it:
 
 Tell me to run:
 ```
-npm install -g zora
+npm install -g zora-agent
 ```
 
 Then verify with:
 ```
-zora --version
+zora-agent --version
 ```
 
 I should see `0.9.0`. If I get a "permission denied" error, suggest using `sudo` on macOS/Linux or running the terminal as administrator on Windows.
@@ -55,7 +55,7 @@ I should see `0.9.0`. If I get a "permission denied" error, suggest using `sudo`
 
 Tell me to run:
 ```
-zora init
+zora-agent init
 ```
 
 Before I run it, explain what each step of the wizard means:
@@ -73,14 +73,14 @@ Before I run it, explain what each step of the wizard means:
 
 If I want to skip all the questions and use sensible defaults, I can run:
 ```
-zora init -y
+zora-agent init -y
 ```
 
 ### Step 4: First Task
 
 Once setup is done, tell me to try:
 ```
-zora ask "List the files in my home directory and give me a one-line summary of what each folder contains"
+zora-agent ask "List the files in my home directory and give me a one-line summary of what each folder contains"
 ```
 
 Explain what's happening: Zora reads my filesystem (within the boundaries I set), sends the task to Claude or Gemini, and returns a structured answer.
@@ -89,12 +89,12 @@ Explain what's happening: Zora reads my filesystem (within the boundaries I set)
 
 Tell me to run:
 ```
-zora ask "Remember that I prefer short, direct answers"
+zora-agent ask "Remember that I prefer short, direct answers"
 ```
 
 Then:
 ```
-zora ask "Explain what a REST API is"
+zora-agent ask "Explain what a REST API is"
 ```
 
 Point out that the second answer should be concise because Zora remembered my preference.
@@ -102,10 +102,10 @@ Point out that the second answer should be concise because Zora remembered my pr
 ### Step 6: Wrap Up
 
 Summarize what I now have:
-- `zora ask "..."` — Give Zora any task
-- `zora status` — Check system health
-- `zora doctor` — Diagnose environment issues
-- `zora start` — Launch the web dashboard at http://localhost:7070
+- `zora-agent ask "..."` — Give Zora any task
+- `zora-agent status` — Check system health
+- `zora-agent doctor` — Diagnose environment issues
+- `zora-agent start` — Launch the web dashboard at http://localhost:7070
 
 Point me to these docs for more:
 - QUICKSTART.md — More guided examples

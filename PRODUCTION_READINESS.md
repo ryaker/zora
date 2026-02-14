@@ -121,7 +121,7 @@ The `ask` command in `src/cli/index.ts` is the **ONLY** end-to-end path that wor
 
 ## What Works End-to-End Today
 
-- `zora ask "prompt"` -> `setupContext()` -> `ExecutionLoop` -> Claude SDK `query()` -> response (single-shot, Claude-only)
+- `zora-agent ask "prompt"` -> `setupContext()` -> `ExecutionLoop` -> Claude SDK `query()` -> response (single-shot, Claude-only)
 - Individual security modules can be used standalone (real crypto, real file I/O)
 - Individual memory modules can be used standalone (real storage and retrieval)
 - Team mailbox system works in isolation (real filesystem IPC)
@@ -157,9 +157,9 @@ The `ask` command in `src/cli/index.ts` is the **ONLY** end-to-end path that wor
 
 ### P1 -- Complete CLI and Dashboard
 
-- Implement real `zora start` (daemonize the orchestrator)
-- Implement real `zora stop` (signal the daemon)
-- Implement real `zora status` (query running state)
+- Implement real `zora-agent start` (daemonize the orchestrator)
+- Implement real `zora-agent stop` (signal the daemon)
+- Implement real `zora-agent status` (query running state)
 - Wire dashboard `GET /api/jobs` to `SessionManager`
 - Build or stub the frontend `dist`
 
@@ -184,7 +184,7 @@ The `ask` command in `src/cli/index.ts` is the **ONLY** end-to-end path that wor
 | Use Case | Status | Notes |
 |---|---|---|
 | Local development and experimentation | **SAFE** | Encouraged |
-| Personal automation (single-shot tasks via `zora ask`) | **ACCEPTABLE** | Only Claude provider works; no failover |
+| Personal automation (single-shot tasks via `zora-agent ask`) | **ACCEPTABLE** | Only Claude provider works; no failover |
 | Team/org deployment | **NOT READY** | Requires P0 + P1 completion |
 | Mission-critical production | **NOT READY** | Requires P0 + P1 + P2 completion and v1.0 release |
 

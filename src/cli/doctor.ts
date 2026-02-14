@@ -1,7 +1,7 @@
 /**
  * Doctor Checks — detect available providers and tools.
  *
- * Reusable by `zora init` and a future `zora doctor` command.
+ * Reusable by `zora-agent init` and a future `zora-agent doctor` command.
  */
 
 import { execFile } from 'node:child_process';

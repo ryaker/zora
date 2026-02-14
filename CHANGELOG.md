@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 - Docker containerization for integration testing
 - Dashboard live data — real system metrics wired to frontend
 - Dashboard task submission with SSE live feed
-- Dashboard auto-open browser on `zora start`
+- Dashboard auto-open browser on `zora-agent start`
 - Dashboard welcome screen and onboarding for new users
 - UX overhaul — zero-to-productive onboarding flow
 - Remediation roadmap implementation (wiring components together)
