@@ -291,20 +291,49 @@ test.describe('Steering Message Flow', () => {
 // ─── 5. SSE Connection ──────────────────────────────────────────────
 
 test.describe('SSE Connection', () => {
-  test('EventSource endpoint sends connected event', async ({ request }) => {
-    const res = await request.get(`${baseUrl}/api/events`);
-    expect(res.status()).toBe(200);
-    expect(res.headers()['content-type']).toContain('text/event-stream');
-    const body = await res.text();
-    expect(body).toContain('{"type":"connected"}');
+  test('EventSource endpoint sends connected event', async ({ page }) => {
+    await page.goto(baseUrl);
+    const result = await page.evaluate(async (url) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(`${url}/api/events`, { signal: controller.signal });
+        const reader = res.body!.getReader();
+        const { value } = await reader.read();
+        reader.cancel();
+        return {
+          status: res.status,
+          contentType: res.headers.get('content-type'),
+          body: new TextDecoder().decode(value),
+        };
+      } catch {
+        return { status: 0, contentType: '', body: '' };
+      }
+    }, baseUrl);
+    expect(result.status).toBe(200);
+    expect(result.contentType).toContain('text/event-stream');
+    expect(result.body).toContain('{"type":"connected"}');
   });
 
-  test('SSE headers include correct cache and connection directives', async ({ request }) => {
-    const res = await request.get(`${baseUrl}/api/events`);
-    const headers = res.headers();
-    expect(headers['cache-control']).toBe('no-cache');
-    expect(headers['connection']).toBe('keep-alive');
-    expect(headers['x-accel-buffering']).toBe('no');
+  test('SSE headers include correct cache and connection directives', async ({ page }) => {
+    await page.goto(baseUrl);
+    const headers = await page.evaluate(async (url) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(`${url}/api/events`, { signal: controller.signal });
+        res.body?.cancel();
+        return {
+          cacheControl: res.headers.get('cache-control'),
+          xAccelBuffering: res.headers.get('x-accel-buffering'),
+        };
+      } catch {
+        return { cacheControl: '', xAccelBuffering: '' };
+      }
+    }, baseUrl);
+    expect(headers.cacheControl).toBe('no-cache');
+    // Note: 'connection' header is hop-by-hop and not exposed via fetch API
+    expect(headers.xAccelBuffering).toBe('no');
   });
 
   test('broadcast sends events to connected clients', async ({ page }) => {
