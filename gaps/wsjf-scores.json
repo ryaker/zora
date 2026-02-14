@@ -1,0 +1,1092 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "generated": "2026-02-14",
+    "total_gaps": 46,
+    "wsjf_factors": {
+      "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
+      "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
+      "security_risk": "Does this close a security vulnerability? 10=RCE/data breach, 7-9=info disclosure/auth bypass, 4-6=hardening, 1-3=no direct impact",
+      "time_criticality": "Does this block other work or get worse over time? 10=blocks 5+ gaps, 7-9=blocks 2-4, 4-6=blocks 1 or degrades, 1-3=independent"
+    },
+    "wsjf_formula": "(usability_value + wiring_impact + security_risk + time_criticality) / job_size",
+    "scoring_philosophy": "Prioritize: someone actually being able to use Zora (run it, chat, CLI, telegram). If wiring isn't connected, nothing works. Security matters but we're already ahead. Work outward from the core of getting things done.",
+    "release_gate": {
+      "description": "Minimum gaps that must close before Zora is usable. People need to: install it, start it, chat with it, have it not crash silently.",
+      "criteria": "All release_gate gaps must be status=completed",
+      "total": 12,
+      "gap_ids": [
+        "ERR-01",
+        "ERR-02",
+        "ERR-05",
+        "OPS-01",
+        "ORCH-01",
+        "ORCH-02",
+        "ORCH-03",
+        "ORCH-04",
+        "ORCH-06",
+        "ORCH-07",
+        "ORCH-09",
+        "ORCH-10"
+      ]
+    },
+    "post_release": {
+      "description": "Gaps that improve quality but don't prevent someone from using Zora. Ship, then keep landing the plane.",
+      "categories": {
+        "type_safety": "TYPE-01 through TYPE-08 \u2014 users never see type safety",
+        "logging": "LOG-01 through LOG-04 \u2014 console.log works, just ugly for ops",
+        "documentation": "DOC-01 through DOC-05 \u2014 README + QUICKSTART already exist",
+        "testing": "TEST-01 through TEST-07 \u2014 users don't run tests",
+        "enhancements": "ORCH-05, ORCH-08, ORCH-11 \u2014 better routing/steering, not blockers",
+        "dashboard_polish": "OPS-02, OPS-03, OPS-05 \u2014 nice-to-have, CLI is primary interface"
+      }
+    }
+  },
+  "gaps": [
+    {
+      "id": "ORCH-10",
+      "category": "orchestration",
+      "title": "No Main Orchestrator Bootstrapping",
+      "severity": "S1",
+      "files_affected": 3,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [
+        "ORCH-01",
+        "ORCH-02",
+        "ORCH-03",
+        "ORCH-04",
+        "ORCH-07",
+        "ORCH-09"
+      ],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 10,
+        "wiring_impact": 10,
+        "security_risk": 2,
+        "time_criticality": 10,
+        "job_size": 4,
+        "score": 8.0
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-01",
+      "category": "orchestration",
+      "title": "FailoverController Never Invoked",
+      "severity": "S1",
+      "files_affected": 2,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [
+        "ORCH-02"
+      ],
+      "blocked_by": [
+        "ORCH-10"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 8,
+        "wiring_impact": 9,
+        "security_risk": 2,
+        "time_criticality": 5,
+        "job_size": 3,
+        "score": 8.0
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-02",
+      "category": "orchestration",
+      "title": "RetryQueue Consumer Missing",
+      "severity": "S1",
+      "files_affected": 2,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "ORCH-10",
+        "ORCH-01"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 7,
+        "wiring_impact": 8,
+        "security_risk": 1,
+        "time_criticality": 4,
+        "job_size": 3,
+        "score": 6.67
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-06",
+      "category": "orchestration",
+      "title": "SessionManager Events Never Persisted",
+      "severity": "S1",
+      "files_affected": 1,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 7,
+        "wiring_impact": 7,
+        "security_risk": 3,
+        "time_criticality": 4,
+        "job_size": 3,
+        "score": 7.0
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ERR-01",
+      "category": "error_handling",
+      "title": "AuditLogger Silent Write Failures",
+      "severity": "S1",
+      "files_affected": 1,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 4,
+        "security_risk": 7,
+        "time_criticality": 3,
+        "job_size": 2,
+        "score": 9.5
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ERR-02",
+      "category": "error_handling",
+      "title": "GeminiProvider Silent JSON Parse Failures",
+      "severity": "S1",
+      "files_affected": 1,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 8,
+        "wiring_impact": 5,
+        "security_risk": 2,
+        "time_criticality": 4,
+        "job_size": 2,
+        "score": 9.5
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-03",
+      "category": "orchestration",
+      "title": "Router Not Integrated",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 5,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "ORCH-10"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 7,
+        "wiring_impact": 9,
+        "security_risk": 1,
+        "time_criticality": 4,
+        "job_size": 3,
+        "score": 7.0
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-04",
+      "category": "orchestration",
+      "title": "AuthMonitor Never Scheduled",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "ORCH-10"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 7,
+        "security_risk": 6,
+        "time_criticality": 3,
+        "job_size": 2,
+        "score": 10.5
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-07",
+      "category": "orchestration",
+      "title": "MemoryManager Context Not Injected",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "ORCH-10"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 6,
+        "wiring_impact": 8,
+        "security_risk": 1,
+        "time_criticality": 3,
+        "job_size": 3,
+        "score": 6.0
+      },
+      "release_gate": true
+    },
+    {
+      "id": "ORCH-08",
+      "category": "orchestration",
+      "title": "SteeringManager Never Polled",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 6,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 3,
+        "score": 4.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ORCH-09",
+      "category": "orchestration",
+      "title": "HeartbeatSystem & RoutineManager Never Started",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "ORCH-10"
+      ],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 7,
+        "security_risk": 1,
+        "time_criticality": 3,
+        "job_size": 3,
+        "score": 5.33
+      },
+      "release_gate": true
+    },
+    {
+      "id": "TYPE-05",
+      "category": "type_safety",
+      "title": "Silent JSON.parse() Errors",
+      "severity": "S2",
+      "files_affected": 3,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 3,
+        "security_risk": 3,
+        "time_criticality": 2,
+        "job_size": 3,
+        "score": 4.33
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ERR-03",
+      "category": "error_handling",
+      "title": "FlagManager Silently Skips Corrupted Files",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 2,
+        "security_risk": 3,
+        "time_criticality": 2,
+        "job_size": 2,
+        "score": 5.5
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ERR-04",
+      "category": "error_handling",
+      "title": "Fragile Error Classification via String Matching",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 2,
+        "security_risk": 2,
+        "time_criticality": 2,
+        "job_size": 3,
+        "score": 3.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ERR-05",
+      "category": "error_handling",
+      "title": "No Timeout on Event Streams",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 7,
+        "wiring_impact": 5,
+        "security_risk": 2,
+        "time_criticality": 3,
+        "job_size": 2,
+        "score": 8.5
+      },
+      "release_gate": true
+    },
+    {
+      "id": "OPS-01",
+      "category": "operational",
+      "title": "CLI Daemon Commands Are Stubs",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [
+        "OPS-02",
+        "TEST-01"
+      ],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/OPERATIONAL.md",
+      "wsjf": {
+        "usability_value": 9,
+        "wiring_impact": 8,
+        "security_risk": 1,
+        "time_criticality": 8,
+        "job_size": 4,
+        "score": 6.5
+      },
+      "release_gate": true
+    },
+    {
+      "id": "OPS-02",
+      "category": "operational",
+      "title": "Dashboard GET /api/jobs Returns Empty Placeholder",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [
+        "OPS-01"
+      ],
+      "status": "open",
+      "detail_file": "gaps/OPERATIONAL.md",
+      "wsjf": {
+        "usability_value": 6,
+        "wiring_impact": 5,
+        "security_risk": 1,
+        "time_criticality": 3,
+        "job_size": 3,
+        "score": 5.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "OPS-03",
+      "category": "operational",
+      "title": "No Frontend Build Output",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/OPERATIONAL.md",
+      "wsjf": {
+        "usability_value": 8,
+        "wiring_impact": 3,
+        "security_risk": 1,
+        "time_criticality": 3,
+        "job_size": 3,
+        "score": 5.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "OPS-04",
+      "category": "operational",
+      "title": "GeminiProvider Unbounded Buffer",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/OPERATIONAL.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 3,
+        "job_size": 2,
+        "score": 5.5
+      },
+      "release_gate": false
+    },
+    {
+      "id": "OPS-05",
+      "category": "operational",
+      "title": "No Structured Logging",
+      "severity": "S2",
+      "files_affected": 15,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/OPERATIONAL.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 3,
+        "security_risk": 2,
+        "time_criticality": 2,
+        "job_size": 7,
+        "score": 1.29
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-01",
+      "category": "testing",
+      "title": "No Integration Tests for Orchestration",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 4,
+      "blocking": true,
+      "blocks": [
+        "TEST-02"
+      ],
+      "blocked_by": [
+        "OPS-01"
+      ],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 5,
+        "security_risk": 2,
+        "time_criticality": 5,
+        "job_size": 5,
+        "score": 3.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-02",
+      "category": "testing",
+      "title": "No Failover/Retry Scenario Tests",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [
+        "TEST-01"
+      ],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 4,
+        "security_risk": 2,
+        "time_criticality": 2,
+        "job_size": 5,
+        "score": 2.2
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-03",
+      "category": "testing",
+      "title": "CLI Commands Lack Functional Tests",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 1.75
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-04",
+      "category": "testing",
+      "title": "Dashboard Endpoints Untested",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 1.75
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-05",
+      "category": "testing",
+      "title": "Provider Tool Parsing Never Validated",
+      "severity": "S2",
+      "files_affected": 3,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 3,
+        "security_risk": 3,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 3.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-06",
+      "category": "testing",
+      "title": "GeminiProvider checkAuth() Tests Missing",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 2,
+        "security_risk": 4,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 3.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TEST-07",
+      "category": "testing",
+      "title": "TelegramGateway User Allowlist Logic Untested",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TESTING.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 2,
+        "security_risk": 6,
+        "time_criticality": 2,
+        "job_size": 3,
+        "score": 4.33
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ORCH-05",
+      "category": "orchestration",
+      "title": "Router Uses Naive Classification",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 3,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 4,
+        "score": 2.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ORCH-11",
+      "category": "orchestration",
+      "title": "Round-Robin Mode Actually Random",
+      "severity": "S4",
+      "files_affected": 1,
+      "impact": 1,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ORCHESTRATION.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 1,
+        "score": 5.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-01",
+      "category": "type_safety",
+      "title": "36 as any Assertions in Providers",
+      "severity": "S3",
+      "files_affected": 3,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 1,
+        "security_risk": 2,
+        "time_criticality": 1,
+        "job_size": 5,
+        "score": 1.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-02",
+      "category": "type_safety",
+      "title": "err unknown Not Properly Narrowed",
+      "severity": "S3",
+      "files_affected": 8,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 1,
+        "security_risk": 2,
+        "time_criticality": 1,
+        "job_size": 5,
+        "score": 1.2
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-03",
+      "category": "type_safety",
+      "title": "TaskContext History Type Is any[]",
+      "severity": "S3",
+      "files_affected": 2,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 1.67
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-04",
+      "category": "type_safety",
+      "title": "ProviderConfig Missing Type Hierarchy",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 3,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 1.75
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-06",
+      "category": "type_safety",
+      "title": "No Type Definitions for Event Payloads",
+      "severity": "S3",
+      "files_affected": 5,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 3,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 1.75
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-07",
+      "category": "type_safety",
+      "title": "LLMProvider Union Types Underutilized",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 2,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 1.67
+      },
+      "release_gate": false
+    },
+    {
+      "id": "TYPE-08",
+      "category": "type_safety",
+      "title": "Missing Return Type Annotations",
+      "severity": "S4",
+      "files_affected": 20,
+      "impact": 1,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/TYPE_SAFETY.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 6,
+        "score": 0.67
+      },
+      "release_gate": false
+    },
+    {
+      "id": "ERR-06",
+      "category": "error_handling",
+      "title": "Command Parsing Regex Incomplete",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/ERROR_HANDLING.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 2,
+        "security_risk": 2,
+        "time_criticality": 1,
+        "job_size": 2,
+        "score": 5.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "LOG-01",
+      "category": "logging",
+      "title": "Console.log Used Throughout",
+      "severity": "S3",
+      "files_affected": 15,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/LOGGING.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 1,
+        "security_risk": 2,
+        "time_criticality": 1,
+        "job_size": 7,
+        "score": 0.71
+      },
+      "release_gate": false
+    },
+    {
+      "id": "LOG-02",
+      "category": "logging",
+      "title": "Silent Errors in Async Operations",
+      "severity": "S2",
+      "files_affected": 10,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/LOGGING.md",
+      "wsjf": {
+        "usability_value": 6,
+        "wiring_impact": 3,
+        "security_risk": 3,
+        "time_criticality": 3,
+        "job_size": 5,
+        "score": 3.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "LOG-03",
+      "category": "logging",
+      "title": "No Health Check Instrumentation",
+      "severity": "S2",
+      "files_affected": 1,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/LOGGING.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 4,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 3,
+        "score": 3.67
+      },
+      "release_gate": false
+    },
+    {
+      "id": "LOG-04",
+      "category": "logging",
+      "title": "Event Stream Lacks Source Attribution",
+      "severity": "S3",
+      "files_affected": 5,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/LOGGING.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 3,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 4,
+        "score": 1.75
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-01",
+      "category": "documentation",
+      "title": "Sparse Inline Explanations in Complex Modules",
+      "severity": "S3",
+      "files_affected": 5,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/DOCUMENTATION.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 5,
+        "score": 1.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-02",
+      "category": "documentation",
+      "title": "No Architecture Decision Records",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/DOCUMENTATION.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 2,
+        "job_size": 4,
+        "score": 1.25
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-03",
+      "category": "documentation",
+      "title": "Provider Implementation Guide Missing",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/DOCUMENTATION.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 2.0
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-04",
+      "category": "documentation",
+      "title": "Configuration Reference Incomplete",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/DOCUMENTATION.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 2.33
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-05",
+      "category": "documentation",
+      "title": "No Troubleshooting Guide",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 2,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/DOCUMENTATION.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 1,
+        "job_size": 3,
+        "score": 2.33
+      },
+      "release_gate": false
+    }
+  ]
+}
