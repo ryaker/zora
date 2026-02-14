@@ -95,7 +95,7 @@ See **[SECURITY.md](SECURITY.md)** for the full security guide and OWASP complia
 
 ## Project Status
 
-Zora is in active development (v0.6.0). This table reflects what actually works today.
+Zora is in active development (v0.7.0). This table reflects what actually works today.
 
 | Component | Status |
 |-----------|--------|

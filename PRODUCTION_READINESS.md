@@ -11,7 +11,7 @@ Zora's individual components are genuinely well-implemented -- real cryptography
 | Dimension | Status |
 |---|---|
 | **Overall Verdict** | **NOT PRODUCTION-READY** (pre-release developer preview) |
-| Version | v0.6.0 |
+| Version | v0.7.0 |
 | Tier 1 -- Foundation | Complete |
 | Tier 2 -- Intelligence | Substantially complete (components built, not wired) |
 | Tier 3 -- Interfaces | In progress |
@@ -194,4 +194,4 @@ The `ask` command in `src/cli/index.ts` is the **ONLY** end-to-end path that wor
 
 **Methodology:** Based on line-by-line source code review of all 34 source files in `src/`, not documentation claims.
 
-**Version assessed:** v0.6.0
+**Version assessed:** v0.7.0

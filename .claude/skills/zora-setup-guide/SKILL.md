@@ -60,7 +60,7 @@ npm install -g zora
 zora --version
 ```
 
-Expected: `0.6.0`
+Expected: `0.7.0`
 
 **If permission error on npm global install:**
 - Suggest: `sudo npm install -g zora` (explain briefly)
