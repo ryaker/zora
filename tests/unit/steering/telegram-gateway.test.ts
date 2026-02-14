@@ -43,8 +43,8 @@ describe('TelegramGateway', () => {
     } catch {}
     steeringManager = new SteeringManager(testDir);
     await steeringManager.init();
-    
-    gateway = new TelegramGateway(config.telegram as any, steeringManager);
+
+    gateway = await TelegramGateway.create(config.telegram as any, steeringManager);
   });
 
   afterEach(async () => {
@@ -56,12 +56,12 @@ describe('TelegramGateway', () => {
     expect((gateway as any)._allowedUsers.has('999999')).toBe(false);
   });
 
-  it('throws if no token provided', () => {
+  it('rejects if no token provided', async () => {
     const originalToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
     try {
-      expect(() => new TelegramGateway({ allowed_users: [] } as any, steeringManager))
-        .toThrow('TELEGRAM_BOT_TOKEN is required');
+      await expect(TelegramGateway.create({ allowed_users: [] } as any, steeringManager))
+        .rejects.toThrow('TELEGRAM_BOT_TOKEN is required');
     } finally {
       process.env.TELEGRAM_BOT_TOKEN = originalToken;
     }

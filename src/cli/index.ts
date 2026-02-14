@@ -37,7 +37,7 @@ const program = new Command();
 program
   .name('zora-agent')
   .description('Long-running autonomous personal AI agent')
-  .version('0.9.0');
+  .version('0.9.2');
 
 /**
  * Creates LLMProvider instances from config.
@@ -191,135 +191,163 @@ program
     });
   });
 
+/**
+ * Shared daemon start logic — used by both `zora-agent start` and `zora-agent daemon start`.
+ */
+async function startDaemon(opts: { open?: boolean }): Promise<void> {
+  const pidFile = getPidFilePath();
+
+  // Check if already running
+  if (fs.existsSync(pidFile)) {
+    try {
+      const existingPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+      process.kill(existingPid, 0);
+      console.log(`Zora daemon is already running (PID: ${existingPid}).`);
+      return;
+    } catch {
+      // Stale pidfile, clean up
+      fs.unlinkSync(pidFile);
+    }
+  }
+
+  // Ensure state directory exists
+  const stateDir = path.dirname(pidFile);
+  if (!fs.existsSync(stateDir)) {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  }
+
+  // Fork a detached child process
+  const { fork, exec } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
+
+  const child = fork(daemonScript, [], {
+    detached: true,
+    stdio: 'ignore',
+  });
+
+  if (child.pid) {
+    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
+    child.unref();
+    console.log(`Zora daemon started (PID: ${child.pid}).`);
+
+    // Read dashboard port from config, falling back to 7070
+    let dashboardPort = 7070;
+    try {
+      const configPath = path.join(os.homedir(), '.zora', 'config.toml');
+      if (fs.existsSync(configPath)) {
+        const { parse: parseTOML } = await import('smol-toml');
+        const raw = parseTOML(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+        const steering = raw['steering'] as Record<string, unknown> | undefined;
+        if (steering?.['dashboard_port']) {
+          dashboardPort = steering['dashboard_port'] as number;
+        }
+      }
+    } catch {
+      // Use default port if config can't be read
+    }
+    const dashboardUrl = `http://localhost:${dashboardPort}`;
+    console.log(`Dashboard: ${dashboardUrl}`);
+
+    if (opts.open !== false) {
+      const openCmd = process.platform === 'darwin' ? `open ${dashboardUrl}` :
+                      process.platform === 'win32' ? `start "" ${dashboardUrl}` :
+                      `xdg-open ${dashboardUrl}`;
+      exec(openCmd, () => {});
+    }
+  } else {
+    console.error('Failed to start daemon.');
+  }
+}
+
+/**
+ * Shared daemon stop logic — used by both `zora-agent stop` and `zora-agent daemon stop`.
+ */
+async function stopDaemon(): Promise<void> {
+  const pidFile = getPidFilePath();
+
+  if (!fs.existsSync(pidFile)) {
+    console.log('Zora daemon is not running.');
+    return;
+  }
+
+  try {
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+
+    process.kill(pid, 'SIGTERM');
+    console.log(`Sent SIGTERM to Zora daemon (PID: ${pid}). Waiting for graceful shutdown...`);
+
+    const maxWaitMs = 5000;
+    const pollIntervalMs = 200;
+    let waited = 0;
+    let stopped = false;
+
+    while (waited < maxWaitMs) {
+      await new Promise(r => setTimeout(r, pollIntervalMs));
+      waited += pollIntervalMs;
+      try {
+        process.kill(pid, 0);
+      } catch {
+        stopped = true;
+        break;
+      }
+    }
+
+    if (!stopped) {
+      process.kill(pid, 'SIGKILL');
+      console.log('Daemon did not stop gracefully, sent SIGKILL.');
+    }
+
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {
+      // Pidfile already removed by daemon
+    }
+    console.log('Daemon stopped.');
+  } catch (err: unknown) {
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {
+      // Already removed
+    }
+    console.log('Daemon was not running (cleaned up stale pidfile).');
+  }
+}
+
 // R11: Real start command
 program
   .command('start')
   .description('Start the agent daemon')
   .option('--no-open', 'Do not auto-open the dashboard in browser')
-  .action(async (opts) => {
-    const pidFile = getPidFilePath();
-
-    // Check if already running
-    if (fs.existsSync(pidFile)) {
-      try {
-        const existingPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-        process.kill(existingPid, 0);
-        console.log(`Zora daemon is already running (PID: ${existingPid}).`);
-        return;
-      } catch {
-        // Stale pidfile, clean up
-        fs.unlinkSync(pidFile);
-      }
-    }
-
-    // Ensure state directory exists
-    const stateDir = path.dirname(pidFile);
-    if (!fs.existsSync(stateDir)) {
-      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    }
-
-    // Fork a detached child process
-    const { fork, exec } = await import('node:child_process');
-    const { fileURLToPath } = await import('node:url');
-    const daemonScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
-
-    // Check if daemon script exists; if not, run inline
-    const child = fork(daemonScript, [], {
-      detached: true,
-      stdio: 'ignore',
-    });
-
-    if (child.pid) {
-      fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-      child.unref();
-      console.log(`Zora daemon started (PID: ${child.pid}).`);
-
-      // Read dashboard port from config, falling back to 7070
-      let dashboardPort = 7070;
-      try {
-        const configPath = path.join(os.homedir(), '.zora', 'config.toml');
-        if (fs.existsSync(configPath)) {
-          const { parse: parseTOML } = await import('smol-toml');
-          const raw = parseTOML(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
-          const steering = raw['steering'] as Record<string, unknown> | undefined;
-          if (steering?.['dashboard_port']) {
-            dashboardPort = steering['dashboard_port'] as number;
-          }
-        }
-      } catch {
-        // Use default port if config can't be read
-      }
-      const dashboardUrl = `http://localhost:${dashboardPort}`;
-      console.log(`Dashboard: ${dashboardUrl}`);
-
-      if (opts.open !== false) {
-        // Auto-open browser (non-blocking, ignore errors)
-        const openCmd = process.platform === 'darwin' ? `open ${dashboardUrl}` :
-                        process.platform === 'win32' ? `start "" ${dashboardUrl}` :
-                        `xdg-open ${dashboardUrl}`;
-        exec(openCmd, () => {});
-      }
-    } else {
-      console.error('Failed to start daemon.');
-    }
-  });
+  .action(async (opts) => startDaemon(opts));
 
 // R12: Real stop command
 program
   .command('stop')
   .description('Stop the agent daemon')
+  .action(async () => stopDaemon());
+
+// Daemon command group — `daemon start`, `daemon stop`, `daemon status`
+const daemonCmd = program
+  .command('daemon')
+  .description('Manage the agent daemon');
+
+daemonCmd
+  .command('start')
+  .description('Start the agent daemon')
+  .option('--no-open', 'Do not auto-open the dashboard in browser')
+  .action(async (opts) => startDaemon(opts));
+
+daemonCmd
+  .command('stop')
+  .description('Stop the agent daemon')
+  .action(async () => stopDaemon());
+
+daemonCmd
+  .command('status')
+  .description('Check daemon status')
   .action(async () => {
-    const pidFile = getPidFilePath();
-
-    if (!fs.existsSync(pidFile)) {
-      console.log('Zora daemon is not running.');
-      return;
-    }
-
-    try {
-      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-
-      // Send SIGTERM for graceful shutdown
-      process.kill(pid, 'SIGTERM');
-      console.log(`Sent SIGTERM to Zora daemon (PID: ${pid}). Waiting for graceful shutdown...`);
-
-      // Poll for process exit (up to 5 seconds), then escalate to SIGKILL
-      const maxWaitMs = 5000;
-      const pollIntervalMs = 200;
-      let waited = 0;
-      let stopped = false;
-
-      while (waited < maxWaitMs) {
-        await new Promise(r => setTimeout(r, pollIntervalMs));
-        waited += pollIntervalMs;
-        try {
-          process.kill(pid, 0); // Check if still alive
-        } catch {
-          stopped = true;
-          break;
-        }
-      }
-
-      if (!stopped) {
-        process.kill(pid, 'SIGKILL');
-        console.log('Daemon did not stop gracefully, sent SIGKILL.');
-      }
-
-      try {
-        fs.unlinkSync(pidFile);
-      } catch {
-        // Pidfile already removed by daemon
-      }
-      console.log('Daemon stopped.');
-    } catch (err: unknown) {
-      // Process doesn't exist, clean up stale pidfile
-      try {
-        fs.unlinkSync(pidFile);
-      } catch {
-        // Already removed
-      }
-      console.log('Daemon was not running (cleaned up stale pidfile).');
-    }
+    await program.commands.find(c => c.name() === 'status')!.parseAsync([], { from: 'user' });
   });
 
 // Doctor command - check system dependencies

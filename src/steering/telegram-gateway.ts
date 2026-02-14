@@ -7,9 +7,11 @@
  *   - Injects steer messages into SteeringManager.
  */
 
-import TelegramBot from 'node-telegram-bot-api';
 import type { SteeringManager } from './steering-manager.js';
 import type { SteeringConfig } from '../types.js';
+
+// Lazy-loaded: node-telegram-bot-api is an optional peer dependency
+type TelegramBotType = import('node-telegram-bot-api');
 
 export interface TelegramConfig extends SteeringConfig {
   bot_token?: string;
@@ -18,21 +20,41 @@ export interface TelegramConfig extends SteeringConfig {
 }
 
 export class TelegramGateway {
-  private readonly _bot: TelegramBot;
+  private readonly _bot: TelegramBotType;
   private readonly _steeringManager: SteeringManager;
   private readonly _allowedUsers: Set<string>;
 
-  constructor(config: TelegramConfig, steeringManager: SteeringManager) {
+  private constructor(bot: TelegramBotType, steeringManager: SteeringManager, allowedUsers: string[]) {
+    this._bot = bot;
+    this._steeringManager = steeringManager;
+    this._allowedUsers = new Set(allowedUsers);
+
+    this._setupHandlers();
+  }
+
+  /**
+   * Factory method — loads node-telegram-bot-api dynamically.
+   * Throws a clear error if the optional dep isn't installed.
+   */
+  static async create(config: TelegramConfig, steeringManager: SteeringManager): Promise<TelegramGateway> {
     const token = config.bot_token || process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       throw new Error('TELEGRAM_BOT_TOKEN is required for TelegramGateway');
     }
 
-    this._bot = new TelegramBot(token, { polling: true });
-    this._steeringManager = steeringManager;
-    this._allowedUsers = new Set(config.allowed_users);
+    let TelegramBot: typeof import('node-telegram-bot-api');
+    try {
+      const mod = await import('node-telegram-bot-api');
+      TelegramBot = mod.default;
+    } catch {
+      throw new Error(
+        'Telegram support requires node-telegram-bot-api.\n' +
+        'Install it: npm install node-telegram-bot-api'
+      );
+    }
 
-    this._setupHandlers();
+    const bot = new TelegramBot(token, { polling: true });
+    return new TelegramGateway(bot, steeringManager, config.allowed_users);
   }
 
   private _setupHandlers(): void {

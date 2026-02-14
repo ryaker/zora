@@ -248,6 +248,17 @@ function detectDevPath(): string {
 /**
  * Run the interactive wizard.
  */
+/**
+ * Resolve preset aliases (e.g., 'minimal' → 'safe').
+ */
+const PRESET_ALIASES: Record<string, PresetName> = {
+  minimal: 'safe',
+  locked: 'locked',
+  safe: 'safe',
+  balanced: 'balanced',
+  power: 'power',
+};
+
 async function runWizard(opts: {
   preset?: string;
   devPath?: string;
@@ -256,6 +267,9 @@ async function runWizard(opts: {
 }): Promise<void> {
   const configPath = path.join(ZORA_DIR, 'config.toml');
   const policyPath = path.join(ZORA_DIR, 'policy.toml');
+
+  // --preset implies --yes (non-interactive)
+  const nonInteractive = opts.yes || !!opts.preset;
 
   // Guard: refuse to overwrite unless --force
   if (!opts.force && (fs.existsSync(configPath) || fs.existsSync(policyPath))) {
@@ -268,10 +282,16 @@ async function runWizard(opts: {
     process.exit(1);
   }
 
+  // Validate preset name early
+  if (opts.preset && !PRESET_ALIASES[opts.preset]) {
+    console.error(`Unknown preset "${opts.preset}". Valid presets: ${Object.keys(PRESET_ALIASES).join(', ')}`);
+    process.exit(1);
+  }
+
   // ── Step 1: Welcome + Trust explanation ──────────────────────────
   clack.intro('Welcome to Zora');
 
-  if (!opts.yes) {
+  if (!nonInteractive) {
     clack.note(
       [
         'Zora starts LOCKED — zero access to your files or commands.',
@@ -303,7 +323,7 @@ async function runWizard(opts: {
 
   // ── Step 3: Permanent deny-list ──────────────────────────────────
   let deniedPaths: string[];
-  if (opts.yes) {
+  if (nonInteractive) {
     deniedPaths = ['~/.ssh', '~/.gnupg', '~/.aws'];
   } else {
     const deniedChoices = await clack.multiselect({
@@ -331,7 +351,7 @@ async function runWizard(opts: {
   const defaultDevPath = detectDevPath();
   if (opts.devPath) {
     devPath = opts.devPath.replace(os.homedir(), '~');
-  } else if (opts.yes) {
+  } else if (nonInteractive) {
     devPath = defaultDevPath;
   } else {
     const devPathInput = await clack.text({
@@ -350,11 +370,11 @@ async function runWizard(opts: {
   let preset: PresetName;
   let toolStacks: string[];
 
-  if (opts.preset && (opts.preset === 'locked' || opts.preset === 'safe' || opts.preset === 'balanced' || opts.preset === 'power')) {
-    preset = opts.preset;
-    toolStacks = opts.yes ? ['general'] : [];
-    if (opts.yes && (doctor.claude.found || doctor.gemini.found)) toolStacks.push('node');
-  } else if (opts.yes) {
+  if (opts.preset && PRESET_ALIASES[opts.preset]) {
+    preset = PRESET_ALIASES[opts.preset]!;
+    toolStacks = ['general'];
+    if (doctor.claude.found || doctor.gemini.found) toolStacks.push('node');
+  } else if (nonInteractive) {
     preset = 'balanced';
     toolStacks = ['general'];
     if (doctor.claude.found || doctor.gemini.found) toolStacks.push('node');
@@ -399,7 +419,7 @@ async function runWizard(opts: {
   }
 
   // ── Step 6: Summary + confirm ────────────────────────────────────
-  if (!opts.yes) {
+  if (!nonInteractive) {
     const providerList = [doctor.claude.found ? 'Claude' : null, doctor.gemini.found ? 'Gemini' : null].filter(Boolean).join(', ') || 'none detected';
     const summary = [
       `Preset:      ${preset}`,
