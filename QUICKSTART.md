@@ -53,7 +53,7 @@ zora --version
 
 **What you should see:**
 ```
-0.7.0
+0.9.0
 ```
 
 ---

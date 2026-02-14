@@ -17,7 +17,7 @@ interface JobStatus {
   status: string;
 }
 
-const ZORA_VERSION = 'v0.7.0';
+const ZORA_VERSION = 'v0.9.0';
 
 const SETUP_PROMPT = `I want to set up Zora, an autonomous AI agent for my computer. Please walk me through the setup step by step:
 

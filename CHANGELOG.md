@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.7.0] — 2026-02-14
+## [0.9.0] — 2026-02-14
 
 ### Added
 - Granular model selection — define multiple entries per provider type (claude-opus, claude-sonnet, claude-haiku) with distinct cost tiers and capabilities
