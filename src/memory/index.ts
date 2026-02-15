@@ -4,3 +4,4 @@ export * from './structured-memory.js';
 export * from './salience-scorer.js';
 export * from './extraction-pipeline.js';
 export * from './category-organizer.js';
+export * from './validation-pipeline.js';

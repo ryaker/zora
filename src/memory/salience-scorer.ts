@@ -1,33 +1,44 @@
 /**
  * SalienceScorer — Ranks memory items by contextual relevance.
  *
- * Spec SS5.4 "Salience-Aware Retrieval":
- *   salience = (access_count * 0.3)
- *            + recency_decay(last_accessed)
- *            + relevance_score(query, item)
- *            + source_trust_bonus(source_type)
+ * Spec SS5.4 "Salience-Aware Retrieval" (updated):
+ *   salience = bm25Score * recencyDecay * frequencyBoost * trustScore
+ *
+ * Multiplicative composition ensures all factors contribute.
+ * Half-life defaults to 14 days (configurable).
  */
 
 import type { MemoryItem, SalienceScore, SourceType } from './memory-types.js';
 
-const HALF_LIFE_DAYS = 7;
+const DEFAULT_HALF_LIFE_DAYS = 14;
 const LN2 = Math.LN2;
 
 export class SalienceScorer {
-  scoreItem(item: MemoryItem, query: string): SalienceScore {
-    const accessWeight = item.access_count * 0.3;
+  private readonly _halfLifeDays: number;
+
+  constructor(halfLifeDays: number = DEFAULT_HALF_LIFE_DAYS) {
+    this._halfLifeDays = halfLifeDays;
+  }
+
+  /**
+   * Score an item using multiplicative composition.
+   * When a BM25 score is available (from MiniSearch), pass it as bm25Score.
+   * Falls back to keyword relevance score when bm25Score is not provided.
+   */
+  scoreItem(item: MemoryItem, query: string, bm25Score?: number): SalienceScore {
     const recencyDecay = this.recencyDecay(item.last_accessed);
-    const relevanceScore = this.relevanceScore(query, item);
-    const sourceTrustBonus = this.sourceTrustBonus(item.source_type);
+    const frequencyBoost = this.frequencyBoost(item.access_count);
+    const trustScore = this.trustScore(item.source_type);
+    const relevanceScore = bm25Score ?? this.relevanceScore(query, item);
 
     return {
       itemId: item.id,
-      score: accessWeight + recencyDecay + relevanceScore + sourceTrustBonus,
+      score: relevanceScore * recencyDecay * frequencyBoost * trustScore,
       components: {
-        accessWeight,
+        accessWeight: frequencyBoost,
         recencyDecay,
         relevanceScore,
-        sourceTrustBonus,
+        sourceTrustBonus: trustScore,
       },
     };
   }
@@ -43,7 +54,23 @@ export class SalienceScorer {
     const accessed = new Date(lastAccessed).getTime();
     const daysSince = Math.max(0, (now - accessed) / (1000 * 60 * 60 * 24));
     // Exponential decay: e^(-ln(2) * days / halfLife)
-    return Math.exp((-LN2 * daysSince) / HALF_LIFE_DAYS);
+    return Math.exp((-LN2 * daysSince) / this._halfLifeDays);
+  }
+
+  frequencyBoost(accessCount: number): number {
+    // Logarithmic: diminishing returns after ~10 accesses
+    return 1.0 + Math.log2(1 + accessCount) * 0.15;
+  }
+
+  trustScore(sourceType: SourceType): number {
+    switch (sourceType) {
+      case 'user_instruction':
+        return 1.0;
+      case 'agent_analysis':
+        return 0.7;
+      case 'tool_output':
+        return 0.3;
+    }
   }
 
   relevanceScore(query: string, item: MemoryItem): number {
@@ -62,15 +89,9 @@ export class SalienceScorer {
     return matchCount / queryWords.length; // normalize 0-1
   }
 
+  /** @deprecated Use trustScore() instead */
   sourceTrustBonus(sourceType: SourceType): number {
-    switch (sourceType) {
-      case 'user_instruction':
-        return 0.2;
-      case 'agent_analysis':
-        return 0.1;
-      case 'tool_output':
-        return 0.0;
-    }
+    return this.trustScore(sourceType);
   }
 
   private _tokenize(text: string): string[] {
