@@ -304,7 +304,7 @@ Launch the web dashboard to monitor tasks, see provider status, and send message
 zora-agent start
 ```
 
-Your browser will open automatically to `http://localhost:7070`. (Use `--no-open` to suppress this.)
+Your browser will open automatically to `http://localhost:8070`. (Use `--no-open` to suppress this.)
 
 The dashboard shows:
 - **Provider status** — Which AI providers are connected

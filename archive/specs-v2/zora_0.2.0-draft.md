@@ -793,7 +793,7 @@ zora reject job_abc123 action_7 "Don't delete that file, we still need it"
 
 **2. Dashboard (Visual)**
 
-`zora dashboard` opens a terminal UI (or local web UI at `localhost:7070`) showing:
+`zora dashboard` opens a terminal UI (or local web UI at `localhost:8070`) showing:
 
 - Active jobs with real-time progress
 - Agent communication log (mailbox messages scrolling)
@@ -845,7 +845,7 @@ When the agent encounters something it's uncertain about (e.g., "should I delete
 [steering]
 enabled = true
 poll_interval = "5s"               # How often agents check for steer messages
-dashboard_port = 7070              # Local web dashboard
+dashboard_port = 8070              # Local web dashboard
 notify_on_flag = true              # macOS notification on flagged decisions
 flag_timeout = "10m"               # After this, default action is finalized (no undo)
 auto_approve_low_risk = true       # Don't flag reversible, low-impact decisions
@@ -909,7 +909,7 @@ zora approve job_abc123 flag_7
 zora reject job_abc123 flag_7 "Don't delete that, archive it instead"
 
 # Dashboard (visual monitoring + steering)
-zora dashboard                   # Opens TUI or web UI at localhost:7070
+zora dashboard                   # Opens TUI or web UI at localhost:8070
 
 # Interactive REPL
 zora repl
@@ -1107,7 +1107,7 @@ sound = true
 
 - [ ] Steer message injection (CLI + direct inbox edit)
 - [ ] Flag-without-blocking mechanism
-- [ ] Dashboard (TUI and/or web UI at localhost:7070)
+- [ ] Dashboard (TUI and/or web UI at localhost:8070)
 - [ ] Heartbeat system (HEARTBEAT.md polling)
 - [ ] Cron routines (node-cron)
 - [ ] Retry queue for quota-exhausted tasks
@@ -1154,7 +1154,7 @@ sound = true
 
 7. **Steering conflict resolution** — If Rich steers mid-task and the agent has already taken an irreversible action (e.g., pushed a git commit), what's the undo/reconciliation strategy? Need to define "reversible" vs. "irreversible" action categories.
 
-8. **Dashboard technology** — TUI (blessed/ink) vs. local web UI (localhost:7070) vs. both? Web UI is more flexible but adds a dependency. TUI is immediate but limited.
+8. **Dashboard technology** — TUI (blessed/ink) vs. local web UI (localhost:8070) vs. both? Web UI is more flexible but adds a dependency. TUI is immediate but limited.
 
 ---
 

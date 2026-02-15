@@ -268,8 +268,8 @@ async function startDaemon(opts: { open?: boolean }): Promise<void> {
     child.unref();
     console.log(`Zora daemon started (PID: ${child.pid}).`);
 
-    // Read dashboard port from config, falling back to 7070
-    let dashboardPort = 7070;
+    // Read dashboard port from config, falling back to 8070
+    let dashboardPort = 8070;
     try {
       const configPath = path.join(os.homedir(), '.zora', 'config.toml');
       if (fs.existsSync(configPath)) {

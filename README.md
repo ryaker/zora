@@ -126,7 +126,7 @@ Zora is in active development (v0.9.0). This table reflects what actually works 
 
 ## Dashboard
 
-After starting the agent, the dashboard auto-opens at `http://localhost:7070`. Submit tasks, monitor live progress via SSE, view provider quota/usage, and send course-corrections to running jobs. First-time users see a guided onboarding screen with quick-start examples.
+After starting the agent, the dashboard auto-opens at `http://localhost:8070`. Submit tasks, monitor live progress via SSE, view provider quota/usage, and send course-corrections to running jobs. First-time users see a guided onboarding screen with quick-start examples.
 
 New to Zora? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — paste the prompt into any AI chatbot (ChatGPT, Claude, Gemini) for a guided walkthrough of installation and configuration.
 

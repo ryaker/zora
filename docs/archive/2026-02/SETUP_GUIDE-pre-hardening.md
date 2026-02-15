@@ -303,7 +303,7 @@ sanitize_untrusted_content = true
 [steering]
 enabled = true
 poll_interval = "5s"
-dashboard_port = 7070
+dashboard_port = 8070
 notify_on_flag = true
 flag_timeout = "10m"
 auto_approve_low_risk = true
@@ -474,7 +474,7 @@ node dist/cli/index.js stop
 
 ### Start the dashboard backend
 
-The dashboard runs on `http://localhost:7070` when the agent is started. To set up and run the dashboard frontend separately during development:
+The dashboard runs on `http://localhost:8070` when the agent is started. To set up and run the dashboard frontend separately during development:
 
 ```bash
 # In a new Terminal tab/window:
@@ -601,9 +601,9 @@ whoami  # Shows your username
 cat ~/.zora/policy.toml  # Check the paths
 ```
 
-### ⚠️ Port 7070 already in use
+### ⚠️ Port 8070 already in use
 
-Something else is using port 7070. Either stop that process or change `dashboard_port` in your `config.toml`:
+Something else is using port 8070. Either stop that process or change `dashboard_port` in your `config.toml`:
 ```toml
 [steering]
 dashboard_port = 7071  # or any free port

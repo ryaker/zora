@@ -1214,7 +1214,7 @@ zora reject job_abc123 action_7 "Don't delete that file, we still need it"
 
 **2. Dashboard (Visual)**
 
-`zora dashboard` opens a terminal UI (or local web UI at `localhost:7070`) showing:
+`zora dashboard` opens a terminal UI (or local web UI at `localhost:8070`) showing:
 
 - Active jobs with real-time progress
 - Agent communication log (mailbox messages scrolling)
@@ -1260,7 +1260,7 @@ When the agent encounters something it's uncertain about (e.g., "should I delete
 
 #### Dashboard Authentication
 
-The dashboard at `localhost:7070` requires a bearer token for API access:
+The dashboard at `localhost:8070` requires a bearer token for API access:
 - Token stored in macOS Keychain
 - CLI passes it automatically
 - Web UI requires it on first access (one-time entry, stored in browser session)
@@ -1274,7 +1274,7 @@ The dashboard at `localhost:7070` requires a bearer token for API access:
 [steering]
 enabled = true
 poll_interval = "5s"               # How often agents check for steer messages
-dashboard_port = 7070              # Local web dashboard
+dashboard_port = 8070              # Local web dashboard
 notify_on_flag = true              # macOS notification on flagged decisions
 flag_timeout = "10m"               # After this, default action is finalized (no undo)
 auto_approve_low_risk = true       # Don't flag reversible, low-impact decisions
@@ -1346,7 +1346,7 @@ zora approve job_abc123 flag_7
 zora reject job_abc123 flag_7 "Don't delete that, archive it instead"
 
 # Dashboard (visual monitoring + steering)
-zora dashboard                   # Opens TUI or web UI at localhost:7070
+zora dashboard                   # Opens TUI or web UI at localhost:8070
 
 # Interactive REPL
 zora repl
@@ -1550,7 +1550,7 @@ dashboard_auth = true
 [steering]
 enabled = true
 poll_interval = "5s"                  # How often agents check for steer messages
-dashboard_port = 7070                 # Local web dashboard
+dashboard_port = 8070                 # Local web dashboard
 notify_on_flag = true                 # macOS notification on flagged decisions
 flag_timeout = "10m"                  # After this, default action is finalized
 auto_approve_low_risk = true          # Don't flag reversible, low-impact decisions
@@ -1672,7 +1672,7 @@ See `IMPLEMENTATION_PLAN.md` for the WSJF-prioritized build plan with 46 work it
 
 7. **Steering conflict resolution** — If Rich steers mid-task and the agent has already taken an irreversible action (e.g., pushed a git commit), what's the reconciliation strategy? Defined as "always flag irreversible actions" in policy but edge cases remain.
 
-8. **Dashboard technology** — TUI (`blessed`/`ink`) vs. local web UI (`localhost:7070`) vs. both? Web UI is more flexible but adds a dependency. TUI is immediate but limited. Current plan: both, with web UI as primary.
+8. **Dashboard technology** — TUI (`blessed`/`ink`) vs. local web UI (`localhost:8070`) vs. both? Web UI is more flexible but adds a dependency. TUI is immediate but limited. Current plan: both, with web UI as primary.
 
 9. **WASM sandbox maturity** — When is the Wasmtime Node.js binding stable enough for production tool sandboxing? Need to track `@aspect-build/wasmtime` or `@aspect-build/rules_js` for v2 planning.
 

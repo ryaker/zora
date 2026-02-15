@@ -257,8 +257,18 @@ const App: React.FC = () => {
             console.warn('[Dashboard] Failed to refresh jobs list:', err?.message ?? err);
           });
         }
-      } catch {
-        // Malformed SSE data — ignore
+      } catch (err) {
+        // Malformed SSE data — show a fallback log entry instead of silently
+        // dropping the event so the user knows something happened.
+        const raw = typeof event.data === 'string' ? event.data.slice(0, 120) : '';
+        const fallback = raw
+          ? `[parse error] ${raw}${event.data.length > 120 ? '...' : ''}`
+          : '[parse error] Received unparseable event';
+        console.warn('[SSE] Failed to parse event data:', err, event.data);
+        setLogs(prev => [
+          { id: ++logIdCounter, message: fallback },
+          ...prev,
+        ].slice(0, MAX_LOGS));
       }
     };
 
