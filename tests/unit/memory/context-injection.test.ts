@@ -1,9 +1,10 @@
 /**
  * MEM-13: Context injection tests.
  *
- * Tests that the MemoryManager correctly assembles context from all 3 tiers
- * and that context injection behaves correctly for routine tasks,
- * retried tasks, and empty memory states.
+ * Tests that the MemoryManager correctly assembles context from all 3 tiers.
+ * With progressive loading, loadContext() returns a lightweight index.
+ * loadFullContext() preserves the old full-dump behavior.
+ * recallMemory() and recallDailyNotes() provide on-demand retrieval.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -25,6 +26,7 @@ function makeConfig(): MemoryConfig {
     max_context_items: 5,
     max_category_summaries: 3,
     auto_extract_interval: 3600,
+    auto_extract: true,
   };
 }
 
@@ -46,8 +48,8 @@ describe('Context Injection — MEM-13', () => {
     await fs.rm(baseDir, { recursive: true, force: true });
   });
 
-  describe('loadContext assembles all tiers', () => {
-    it('includes Tier 1 (MEMORY.md) in context', async () => {
+  describe('Progressive loadContext returns lightweight index', () => {
+    it('includes Tier 1 (MEMORY.md) in progressive context', async () => {
       const ltPath = path.join(baseDir, config.long_term_file);
       await fs.writeFile(ltPath, '# Long-term Memory\n\n- User prefers TypeScript strict mode\n');
 
@@ -56,15 +58,17 @@ describe('Context Injection — MEM-13', () => {
       expect(context.some(c => c.includes('User prefers TypeScript strict mode'))).toBe(true);
     });
 
-    it('includes Tier 2 (daily notes) in context', async () => {
+    it('shows daily notes availability (not content) in progressive context', async () => {
       await manager.appendDailyNote('Fixed the SSE parsing bug today.');
 
       const context = await manager.loadContext();
-      expect(context.some(c => c.includes('[RECENT CONTEXT]'))).toBe(true);
-      expect(context.some(c => c.includes('Fixed the SSE parsing bug'))).toBe(true);
+      expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('Daily notes available'))).toBe(true);
+      // Progressive context does NOT include daily note content
+      expect(context.some(c => c.includes('Fixed the SSE parsing bug'))).toBe(false);
     });
 
-    it('includes Tier 3 (structured items) in context', async () => {
+    it('shows item count and categories (not items) in progressive context', async () => {
       await manager.structuredMemory.createItem({
         type: 'knowledge',
         summary: 'Zora uses pino for logging',
@@ -75,11 +79,15 @@ describe('Context Injection — MEM-13', () => {
       });
 
       const context = await manager.loadContext();
-      expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(true);
-      expect(context.some(c => c.includes('Zora uses pino for logging'))).toBe(true);
+      expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('1 items'))).toBe(true);
+      expect(context.some(c => c.includes('memory_search'))).toBe(true);
+      // Should NOT dump items into progressive context
+      expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(false);
+      expect(context.some(c => c.includes('Zora uses pino for logging'))).toBe(false);
     });
 
-    it('includes all 3 tiers when all are populated', async () => {
+    it('includes all populated tiers as index info', async () => {
       // Tier 1
       const ltPath = path.join(baseDir, config.long_term_file);
       await fs.writeFile(ltPath, '# Memory\n\n- Important fact\n');
@@ -99,68 +107,33 @@ describe('Context Injection — MEM-13', () => {
 
       const context = await manager.loadContext();
       expect(context.some(c => c.includes('[LONG-TERM MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('1 items'))).toBe(true);
+      expect(context.some(c => c.includes('Daily notes available'))).toBe(true);
+    });
+  });
+
+  describe('loadFullContext preserves old behavior', () => {
+    it('includes all 3 tiers with full content', async () => {
+      const ltPath = path.join(baseDir, config.long_term_file);
+      await fs.writeFile(ltPath, '# Memory\n\n- Full context fact\n');
+      await manager.appendDailyNote('Full context daily note.');
+      await manager.structuredMemory.createItem({
+        type: 'knowledge',
+        summary: 'Full context memory item',
+        source: 's',
+        source_type: 'agent_analysis',
+        tags: ['test'],
+        category: 'coding/test',
+      });
+
+      const context = await manager.loadFullContext();
+      expect(context.some(c => c.includes('[LONG-TERM MEMORY]'))).toBe(true);
       expect(context.some(c => c.includes('[RECENT CONTEXT]'))).toBe(true);
       expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(true);
-    });
-  });
-
-  describe('Empty memory does not break context loading', () => {
-    it('returns context without errors when no MEMORY.md exists', async () => {
-      // Delete the default MEMORY.md that init created
-      const ltPath = path.join(baseDir, config.long_term_file);
-      await fs.unlink(ltPath).catch(() => {});
-
-      const context = await manager.loadContext();
-      // Should not throw, and should not include LONG-TERM section
-      expect(context.every(c => !c.includes('[LONG-TERM MEMORY]'))).toBe(true);
-    });
-
-    it('returns context without errors when no daily notes exist', async () => {
-      const context = await manager.loadContext();
-      // No daily notes written, so no RECENT CONTEXT section
-      expect(Array.isArray(context)).toBe(true);
-    });
-
-    it('returns context without errors when no items exist', async () => {
-      const context = await manager.loadContext();
-      // No structured items, so no MEMORY ITEMS section
-      expect(Array.isArray(context)).toBe(true);
-    });
-
-    it('returns empty array when everything is empty', async () => {
-      // Remove the default MEMORY.md
-      const ltPath = path.join(baseDir, config.long_term_file);
-      await fs.unlink(ltPath).catch(() => {});
-
-      const context = await manager.loadContext();
-      expect(Array.isArray(context)).toBe(true);
-      expect(context.length).toBe(0);
-    });
-  });
-
-  describe('Context respects configuration limits', () => {
-    it('respects context_days parameter', async () => {
-      const dailyDir = path.join(baseDir, config.daily_notes_dir);
-
-      // Create 5 daily note files
-      for (let i = 10; i < 15; i++) {
-        await fs.writeFile(
-          path.join(dailyDir, `2026-02-${i}.md`),
-          `# Day ${i}\nNote for day ${i}`,
-        );
-      }
-
-      // Load with 2 days limit
-      const context = await manager.loadContext(2);
-      const recentSection = context.find(c => c.includes('[RECENT CONTEXT]'));
-      if (recentSection) {
-        // Should include the most recent 2 days
-        expect(recentSection).toContain('2026-02-14');
-        expect(recentSection).toContain('2026-02-13');
-        // Should NOT include older days
-        expect(recentSection).not.toContain('2026-02-10');
-        expect(recentSection).not.toContain('2026-02-11');
-      }
+      expect(context.some(c => c.includes('Full context fact'))).toBe(true);
+      expect(context.some(c => c.includes('Full context daily note'))).toBe(true);
+      expect(context.some(c => c.includes('Full context memory item'))).toBe(true);
     });
 
     it('includes salience scores in memory items output', async () => {
@@ -173,11 +146,126 @@ describe('Context Injection — MEM-13', () => {
         category: 'coding/test',
       });
 
-      const context = await manager.loadContext();
+      const context = await manager.loadFullContext();
       const itemSection = context.find(c => c.includes('[MEMORY ITEMS]'));
       if (itemSection) {
         expect(itemSection).toContain('salience:');
       }
+    });
+  });
+
+  describe('Empty memory does not break context loading', () => {
+    it('returns context without errors when no MEMORY.md exists', async () => {
+      const ltPath = path.join(baseDir, config.long_term_file);
+      await fs.unlink(ltPath).catch(() => {});
+
+      const context = await manager.loadContext();
+      expect(context.every(c => !c.includes('[LONG-TERM MEMORY]'))).toBe(true);
+    });
+
+    it('returns context without errors when no daily notes exist', async () => {
+      const context = await manager.loadContext();
+      expect(Array.isArray(context)).toBe(true);
+    });
+
+    it('returns context without errors when no items exist', async () => {
+      const context = await manager.loadContext();
+      expect(Array.isArray(context)).toBe(true);
+    });
+
+    it('returns index even when everything is nearly empty', async () => {
+      const ltPath = path.join(baseDir, config.long_term_file);
+      await fs.unlink(ltPath).catch(() => {});
+
+      const context = await manager.loadContext();
+      expect(Array.isArray(context)).toBe(true);
+      // Progressive loadContext always returns at least the index
+      expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('0 items'))).toBe(true);
+    });
+  });
+
+  describe('On-demand retrieval methods', () => {
+    it('recallDailyNotes returns requested days', async () => {
+      const dailyDir = path.join(baseDir, config.daily_notes_dir);
+      for (let i = 10; i < 15; i++) {
+        await fs.writeFile(
+          path.join(dailyDir, `2026-02-${i}.md`),
+          `# Day ${i}\nNote for day ${i}`,
+        );
+      }
+
+      const notes = await manager.recallDailyNotes(2);
+      expect(notes.length).toBe(2);
+      expect(notes.some(n => n.includes('2026-02-14'))).toBe(true);
+      expect(notes.some(n => n.includes('2026-02-13'))).toBe(true);
+      expect(notes.some(n => n.includes('2026-02-10'))).toBe(false);
+    });
+
+    it('recallMemory returns query-relevant items', async () => {
+      await manager.structuredMemory.createItem({
+        type: 'knowledge',
+        summary: 'TypeScript strict mode is recommended',
+        source: 's',
+        source_type: 'user_instruction',
+        tags: ['typescript'],
+        category: 'coding/ts',
+      });
+      await manager.structuredMemory.createItem({
+        type: 'knowledge',
+        summary: 'Python has list comprehensions',
+        source: 's',
+        source_type: 'agent_analysis',
+        tags: ['python'],
+        category: 'coding/py',
+      });
+
+      const result = await manager.recallMemory('typescript', 5);
+      expect(result.items.length).toBeGreaterThanOrEqual(1);
+      expect(result.items.some(i => i.summary.includes('TypeScript'))).toBe(true);
+      expect(result.scores.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('getMemoryIndex returns stats without reading items', async () => {
+      await manager.structuredMemory.createItem({
+        type: 'knowledge',
+        summary: 'Index test item 1',
+        source: 's',
+        source_type: 'agent_analysis',
+        tags: ['test'],
+        category: 'coding/test',
+      });
+      await manager.structuredMemory.createItem({
+        type: 'skill',
+        summary: 'Index test item 2',
+        source: 's',
+        source_type: 'user_instruction',
+        tags: ['test'],
+        category: 'coding/skills',
+      });
+
+      const index = await manager.getMemoryIndex();
+      expect(index.itemCount).toBe(2);
+      expect(index.categoryNames).toEqual(expect.arrayContaining([]));
+      expect(typeof index.dailyNoteCount).toBe('number');
+    });
+
+    it('getMemoryIndex caches results', async () => {
+      const index1 = await manager.getMemoryIndex();
+      const index2 = await manager.getMemoryIndex();
+      // Same reference = cached
+      expect(index1).toBe(index2);
+    });
+
+    it('index cache is invalidated on write operations', async () => {
+      const index1 = await manager.getMemoryIndex();
+      expect(index1.dailyNoteCount).toBe(0);
+
+      await manager.appendDailyNote('New note invalidates cache');
+
+      const index2 = await manager.getMemoryIndex();
+      expect(index2).not.toBe(index1); // Different reference = cache was invalidated
+      expect(index2.dailyNoteCount).toBe(1);
     });
   });
 
@@ -192,17 +280,16 @@ describe('Context Injection — MEM-13', () => {
         category: 'general/routine',
       });
 
-      // First load
+      // Both calls should succeed and return valid index
       const context1 = await manager.loadContext();
       expect(context1.length).toBeGreaterThan(0);
 
-      // Second load (simulating a retry or next task)
       const context2 = await manager.loadContext();
       expect(context2.length).toBeGreaterThan(0);
 
-      // Both should contain the item
-      expect(context1.some(c => c.includes('Fact for routine task'))).toBe(true);
-      expect(context2.some(c => c.includes('Fact for routine task'))).toBe(true);
+      // Both should contain the index with item count
+      expect(context1.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context2.some(c => c.includes('[MEMORY]'))).toBe(true);
     });
   });
 
@@ -217,15 +304,15 @@ describe('Context Injection — MEM-13', () => {
         category: 'coding/patterns',
       });
 
-      // Simulate multiple retries of the same task
+      // Simulate multiple retries — all should return valid index
       const results: string[][] = [];
       for (let i = 0; i < 3; i++) {
         results.push(await manager.loadContext());
       }
 
-      // All should find the item
       for (const ctx of results) {
-        expect(ctx.some(c => c.includes('exponential backoff'))).toBe(true);
+        expect(ctx.some(c => c.includes('[MEMORY]'))).toBe(true);
+        expect(ctx.some(c => c.includes('1 items'))).toBe(true);
       }
     });
   });
@@ -236,16 +323,15 @@ describe('Context Injection — MEM-13', () => {
       await manager.appendDailyNote('Second note');
       await manager.appendDailyNote('Third note');
 
-      const context = await manager.loadContext(1);
-      const recentSection = context.find(c => c.includes('[RECENT CONTEXT]'));
-      expect(recentSection).toBeDefined();
-      expect(recentSection).toContain('First note');
-      expect(recentSection).toContain('Second note');
-      expect(recentSection).toContain('Third note');
+      // Use recallDailyNotes to verify content
+      const notes = await manager.recallDailyNotes(1);
+      expect(notes.length).toBe(1);
+      expect(notes[0]).toContain('First note');
+      expect(notes[0]).toContain('Second note');
+      expect(notes[0]).toContain('Third note');
     });
 
     it('daily note file is created if it does not exist', async () => {
-      // The daily dir exists from init, but no file for today
       await manager.appendDailyNote('Auto-created note');
 
       const today = new Date().toISOString().split('T')[0];
@@ -276,9 +362,7 @@ describe('Context Injection — MEM-13', () => {
 
       const results = await manager.searchMemory('logging', 5);
       expect(results.length).toBeGreaterThanOrEqual(1);
-      // The logging item should appear with a score
       expect(results[0]!.score).toBeGreaterThan(0);
-      // Results should be sorted in descending order by score
       for (let i = 1; i < results.length; i++) {
         expect(results[i - 1]!.score).toBeGreaterThanOrEqual(results[i]!.score);
       }

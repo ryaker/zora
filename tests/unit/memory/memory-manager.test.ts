@@ -48,10 +48,15 @@ describe('MemoryManager', () => {
   it('appends and reads daily notes', async () => {
     await manager.init();
     await manager.appendDailyNote('User learned about WSJF.');
-    
+
+    // Progressive loadContext returns lightweight index, not full content
     const context = await manager.loadContext(1);
-    expect(context.some(c => c.includes('User learned about WSJF'))).toBe(true);
-    expect(context.some(c => c.includes('[RECENT CONTEXT]'))).toBe(true);
+    expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+    expect(context.some(c => c.includes('Daily notes available'))).toBe(true);
+
+    // Use recallDailyNotes for actual content retrieval
+    const notes = await manager.recallDailyNotes(1);
+    expect(notes.some(n => n.includes('User learned about WSJF'))).toBe(true);
   });
 
   it('reads long-term memory', async () => {
@@ -65,7 +70,7 @@ describe('MemoryManager', () => {
     expect(context.some(c => c.includes('[LONG-TERM MEMORY]'))).toBe(true);
   });
 
-  it('respects rolling context window (days)', async () => {
+  it('respects rolling context window (days) via recallDailyNotes', async () => {
     await manager.init();
     const dnDir = path.join(testDir, config.daily_notes_dir);
 
@@ -74,11 +79,15 @@ describe('MemoryManager', () => {
     await fs.writeFile(path.join(dnDir, '2026-02-11.md'), 'Day 11');
     await fs.writeFile(path.join(dnDir, '2026-02-12.md'), 'Day 12');
 
-    // Limit to last 2 days
-    const context = await manager.loadContext(2);
-    expect(context.some(c => c.includes('2026-02-12'))).toBe(true);
-    expect(context.some(c => c.includes('2026-02-11'))).toBe(true);
-    expect(context.some(c => c.includes('2026-02-10'))).toBe(false);
+    // recallDailyNotes limits to requested days
+    const notes = await manager.recallDailyNotes(2);
+    expect(notes.some(n => n.includes('2026-02-12'))).toBe(true);
+    expect(notes.some(n => n.includes('2026-02-11'))).toBe(true);
+    expect(notes.some(n => n.includes('2026-02-10'))).toBe(false);
+
+    // loadFullContext still provides the old behavior
+    const fullContext = await manager.loadFullContext(2);
+    expect(fullContext.some(c => c.includes('[RECENT CONTEXT]'))).toBe(true);
   });
 
   // ── Tier 3 integration tests ──────────────────────────────────
@@ -138,7 +147,7 @@ describe('MemoryManager', () => {
     expect(empty).toHaveLength(0);
   });
 
-  it('loadContext includes Tier 3 memory items', async () => {
+  it('loadContext returns lightweight index (not full items)', async () => {
     await manager.init();
     const sm = manager.structuredMemory;
 
@@ -147,9 +156,18 @@ describe('MemoryManager', () => {
       source: 's', source_type: 'user_instruction', tags: ['architecture'], category: 'coding/zora',
     });
 
-    const context = await manager.loadContext(1);
-    // Should include memory items section
-    expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(true);
-    expect(context.some(c => c.includes('Important fact about Zora architecture'))).toBe(true);
+    const context = await manager.loadContext();
+    // Progressive context shows index, not individual items
+    expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+    expect(context.some(c => c.includes('1 items'))).toBe(true);
+    expect(context.some(c => c.includes('memory_search'))).toBe(true);
+    // Should NOT dump items into context
+    expect(context.some(c => c.includes('[MEMORY ITEMS]'))).toBe(false);
+    expect(context.some(c => c.includes('Important fact about Zora architecture'))).toBe(false);
+
+    // loadFullContext preserves old behavior
+    const fullContext = await manager.loadFullContext(1);
+    expect(fullContext.some(c => c.includes('[MEMORY ITEMS]'))).toBe(true);
+    expect(fullContext.some(c => c.includes('Important fact about Zora architecture'))).toBe(true);
   });
 });

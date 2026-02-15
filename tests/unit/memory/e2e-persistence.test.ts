@@ -28,6 +28,7 @@ function makeConfig(): MemoryConfig {
     max_context_items: 10,
     max_category_summaries: 5,
     auto_extract_interval: 3600,
+    auto_extract: true,
   };
 }
 
@@ -132,8 +133,14 @@ describe('E2E Persistence — MEM-14', () => {
       const manager2 = new MemoryManager(config, baseDir);
       await manager2.init();
 
+      // Progressive loadContext returns index (not items), so check index
       const context = await manager2.loadContext();
-      expect(context.some(c => c.includes('git worktrees'))).toBe(true);
+      expect(context.some(c => c.includes('[MEMORY]'))).toBe(true);
+      expect(context.some(c => c.includes('1 items'))).toBe(true);
+
+      // Full context should still include the item
+      const fullContext = await manager2.loadFullContext();
+      expect(fullContext.some(c => c.includes('git worktrees'))).toBe(true);
     });
   });
 
@@ -145,15 +152,14 @@ describe('E2E Persistence — MEM-14', () => {
       await manager1.appendDailyNote('Fixed SSE parsing bug');
       await manager1.appendDailyNote('Merged PRs #105-#108');
 
-      // Session 2: Read daily notes
+      // Session 2: Read daily notes via recallDailyNotes
       const manager2 = new MemoryManager(config, baseDir);
       await manager2.init();
 
-      const context = await manager2.loadContext(1);
-      const recentSection = context.find(c => c.includes('[RECENT CONTEXT]'));
-      expect(recentSection).toBeDefined();
-      expect(recentSection).toContain('Fixed SSE parsing bug');
-      expect(recentSection).toContain('Merged PRs #105-#108');
+      const notes = await manager2.recallDailyNotes(1);
+      expect(notes.length).toBe(1);
+      expect(notes[0]).toContain('Fixed SSE parsing bug');
+      expect(notes[0]).toContain('Merged PRs #105-#108');
     });
 
     it('appending to existing daily notes works across sessions', async () => {
@@ -167,15 +173,14 @@ describe('E2E Persistence — MEM-14', () => {
       await manager2.init();
       await manager2.appendDailyNote('Session 2 note');
 
-      // Session 3: Verify both notes exist
+      // Session 3: Verify both notes exist via recallDailyNotes
       const manager3 = new MemoryManager(config, baseDir);
       await manager3.init();
 
-      const context = await manager3.loadContext(1);
-      const recentSection = context.find(c => c.includes('[RECENT CONTEXT]'));
-      expect(recentSection).toBeDefined();
-      expect(recentSection).toContain('Session 1 note');
-      expect(recentSection).toContain('Session 2 note');
+      const notes = await manager3.recallDailyNotes(1);
+      expect(notes.length).toBe(1);
+      expect(notes[0]).toContain('Session 1 note');
+      expect(notes[0]).toContain('Session 2 note');
     });
 
     it('multiple days of notes are sorted correctly', async () => {
@@ -190,13 +195,11 @@ describe('E2E Persistence — MEM-14', () => {
       const manager = new MemoryManager(config, baseDir);
       await manager.init();
 
-      // Load 2 most recent days
-      const context = await manager.loadContext(2);
-      const recentSection = context.find(c => c.includes('[RECENT CONTEXT]'));
-      expect(recentSection).toBeDefined();
-      expect(recentSection).toContain('Feb 14');
-      expect(recentSection).toContain('Feb 13');
-      expect(recentSection).not.toContain('Feb 12');
+      // Use recallDailyNotes to get 2 most recent days
+      const notes = await manager.recallDailyNotes(2);
+      expect(notes.some(n => n.includes('Feb 14'))).toBe(true);
+      expect(notes.some(n => n.includes('Feb 13'))).toBe(true);
+      expect(notes.some(n => n.includes('Feb 12'))).toBe(false);
     });
   });
 

@@ -65,6 +65,8 @@ export class StructuredMemory {
     };
     await this._writeItem(item);
     this._addToIndex(item);
+    // Persist index so cold starts don't need full rebuild
+    await this._saveIndex();
     return item;
   }
 
@@ -106,6 +108,7 @@ export class StructuredMemory {
     try {
       await fs.unlink(this._itemPath(id));
       this._removeFromIndex(id);
+      await this._saveIndex();
       return true;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -299,6 +302,14 @@ export class StructuredMemory {
       for (const item of items) {
         this._itemCache.set(item.id, item);
       }
+
+      // Validate: if items on disk don't match index size, the serialized
+      // index is stale (e.g. items were created after last index save).
+      // Force a rebuild to bring the index in sync.
+      if (items.length !== this._searchIndex.documentCount) {
+        return false; // triggers rebuildIndex() in init()
+      }
+
       return true;
     } catch {
       return false;

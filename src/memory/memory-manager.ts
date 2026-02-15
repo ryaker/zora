@@ -26,6 +26,14 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('memory-manager');
 
+/** Lightweight stats about the memory system — no item reads. */
+export interface MemoryIndex {
+  itemCount: number;
+  categoryNames: string[];
+  mostRecentDailyNote: string | null;
+  dailyNoteCount: number;
+}
+
 /** Shape of the .memory-integrity.json file. */
 interface MemoryIntegrityData {
   hash: string;
@@ -89,10 +97,94 @@ export class MemoryManager {
     await this._categoryOrganizer.init();
   }
 
+  /** Cached memory index — invalidated on writes. */
+  private _indexCache: MemoryIndex | null = null;
+
   /**
-   * Loads context for a new task based on tiers.
+   * Returns a lightweight index of memory contents — no item reads.
+   * Tells the LLM what's available without dumping everything into context.
+   * Cached after first build; invalidated by write operations.
    */
-  async loadContext(days: number = this._config.context_days): Promise<string[]> {
+  async getMemoryIndex(): Promise<MemoryIndex> {
+    if (this._indexCache) return this._indexCache;
+
+    // Count items via directory listing (no file reads)
+    let itemCount = 0;
+    try {
+      const files = await fs.readdir(this._getItemsPath());
+      itemCount = files.filter(f => f.endsWith('.json')).length;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+
+    // List category names from category files
+    const categories = await this._categoryOrganizer.listCategories();
+    const categoryNames = categories.map(c => c.category);
+
+    // Find most recent daily note
+    let mostRecentDailyNote: string | null = null;
+    let dailyNoteCount = 0;
+    try {
+      const files = await fs.readdir(this._getDailyNotesPath());
+      const dateFiles = files
+        .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+        .sort()
+        .reverse();
+      dailyNoteCount = dateFiles.length;
+      if (dateFiles.length > 0) {
+        mostRecentDailyNote = dateFiles[0]!.replace('.md', '');
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+
+    this._indexCache = { itemCount, categoryNames, mostRecentDailyNote, dailyNoteCount };
+    return this._indexCache;
+  }
+
+  /**
+   * Loads a lightweight context string for the system prompt.
+   * Instead of dumping all memory, provides a summary index that tells the LLM
+   * to use tools for on-demand retrieval.
+   */
+  async loadContext(_days?: number): Promise<string[]> {
+    const index = await this.getMemoryIndex();
+
+    const parts: string[] = [];
+
+    // Compact summary instead of full dump
+    const catList = index.categoryNames.length > 0
+      ? index.categoryNames.join(', ')
+      : 'none yet';
+
+    let summary = `[MEMORY] You have access to persistent memory:\n`;
+    summary += `- ${index.itemCount} items across ${index.categoryNames.length} categories (${catList})\n`;
+
+    if (index.mostRecentDailyNote) {
+      summary += `- Daily notes available (most recent: ${index.mostRecentDailyNote}, total: ${index.dailyNoteCount})\n`;
+    }
+
+    summary += `- Use memory_search to find relevant context\n`;
+    summary += `- Use recall_context to read recent daily notes\n`;
+    summary += `- Use memory_save to store new facts\n`;
+    summary += `Only retrieve what you need for this task.`;
+
+    parts.push(summary);
+
+    // Still include long-term memory (MEMORY.md) — it's typically small and curated
+    const longTerm = await this._readLongTerm();
+    if (longTerm) {
+      parts.push(`[LONG-TERM MEMORY]:\n${longTerm}`);
+    }
+
+    return parts;
+  }
+
+  /**
+   * Full context load (backward compat). Reads ALL items, daily notes, categories.
+   * Use only when progressive loading is not suitable (e.g., export, migration).
+   */
+  async loadFullContext(days: number = this._config.context_days): Promise<string[]> {
     const context: string[] = [];
 
     // Tier 1: Long-term salience
@@ -138,13 +230,112 @@ export class MemoryManager {
   }
 
   /**
+   * Targeted memory recall — searches items by query using BM25 + salience.
+   * This is what the LLM calls via the memory_search tool, but exposed as
+   * a method for direct use by the Orchestrator.
+   */
+  async recallMemory(query: string, limit: number = 5): Promise<{ items: MemoryItem[]; scores: SalienceScore[] }> {
+    const scores = await this.searchMemory(query, limit);
+    const items: MemoryItem[] = [];
+
+    for (const s of scores) {
+      const item = await this._structuredMemory.getItem(s.itemId);
+      if (item) items.push(item);
+    }
+
+    return { items, scores };
+  }
+
+  /**
+   * Reads only the requested number of recent daily notes.
+   * Exposed for the recall_context tool.
+   */
+  async recallDailyNotes(days: number = 3): Promise<string[]> {
+    return this._readDailyNotes(days);
+  }
+
+  /**
+   * Consolidates daily notes older than threshold into structured memory items.
+   * Archives the consolidated files to memory/daily/archive/.
+   *
+   * @param thresholdDays Notes older than this are consolidated (default: 7)
+   * @returns Number of notes consolidated
+   */
+  async consolidateDailyNotes(thresholdDays: number = 7): Promise<number> {
+    const dir = this._getDailyNotesPath();
+    let files: string[];
+    try {
+      files = await fs.readdir(dir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw err;
+    }
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - thresholdDays);
+    const cutoffStr = cutoff.toISOString().split('T')[0]!;
+
+    const oldFiles = files
+      .filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+      .filter(f => f.replace('.md', '') < cutoffStr)
+      .sort();
+
+    if (oldFiles.length === 0) return 0;
+
+    // Read old notes
+    const noteContents: string[] = [];
+    for (const file of oldFiles) {
+      try {
+        const content = await fs.readFile(path.join(dir, file), 'utf8');
+        noteContents.push(`[${file.replace('.md', '')}]\n${content}`);
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    // Archive old files
+    const archiveDir = path.join(dir, 'archive');
+    await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
+    for (const file of oldFiles) {
+      try {
+        await fs.rename(path.join(dir, file), path.join(archiveDir, file));
+      } catch {
+        // Best-effort archive
+      }
+    }
+
+    // Append a consolidation note to MEMORY.md
+    if (noteContents.length > 0) {
+      const consolidationSummary = `\n## Consolidated ${oldFiles.length} daily notes (${oldFiles[0]!.replace('.md', '')} to ${oldFiles[oldFiles.length - 1]!.replace('.md', '')})\n`;
+      const ltPath = this._getLongTermPath();
+      try {
+        await fs.appendFile(ltPath, consolidationSummary, { mode: 0o600 });
+        await this._saveIntegrityHash();
+      } catch {
+        // Best-effort
+      }
+    }
+
+    // Invalidate index cache
+    this._indexCache = null;
+
+    log.info({ consolidated: oldFiles.length, thresholdDays }, 'Daily notes consolidated');
+    return oldFiles.length;
+  }
+
+  /** Invalidate the cached memory index (call after writes). */
+  invalidateIndex(): void {
+    this._indexCache = null;
+  }
+
+  /**
    * Appends an entry to today's daily note.
    */
   async appendDailyNote(text: string): Promise<void> {
     const today = new Date().toISOString().split('T')[0];
     const filePath = path.join(this._getDailyNotesPath(), `${today}.md`);
     const entry = `\n### ${new Date().toLocaleTimeString()}\n${text}\n`;
-    
+
     try {
       await fs.appendFile(filePath, entry, { mode: 0o600 });
     } catch (err: unknown) {
@@ -155,6 +346,8 @@ export class MemoryManager {
         throw err;
       }
     }
+
+    this._indexCache = null; // Invalidate index on daily note write
   }
 
   /**
@@ -197,6 +390,7 @@ export class MemoryManager {
       }
     }
 
+    this._indexCache = null; // Invalidate index on delete
     return this._structuredMemory.deleteItem(id);
   }
 

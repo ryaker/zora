@@ -282,6 +282,15 @@ export class ClaudeProvider implements LLMProvider {
       sdkOptions['canUseTool'] = task.canUseTool;
     }
 
+    // Forward custom tools from TaskContext (memory tools, permissions, etc.)
+    if (task.customTools && task.customTools.length > 0) {
+      sdkOptions['customTools'] = task.customTools.map(t => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema,
+      }));
+    }
+
     // Build the prompt from task context
     const prompt = this._buildPrompt(task);
 

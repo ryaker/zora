@@ -209,6 +209,13 @@ export interface TaskContext {
   maxCostTier?: CostTier;   // cost ceiling for routing (e.g. 'included' skips 'premium')
   maxTurns?: number;
   timeout?: number;
+  /** Custom tools injected into the execution (memory tools, permissions, etc.) */
+  customTools?: Array<{
+    name: string;
+    description: string;
+    input_schema: Record<string, unknown>;
+    handler: (input: Record<string, unknown>) => Promise<unknown>;
+  }>;
   /** SDK canUseTool callback — enforces policy on every tool call */
   canUseTool?: (
     toolName: string,

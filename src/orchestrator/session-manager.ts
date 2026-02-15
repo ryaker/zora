@@ -11,6 +11,72 @@ import path from 'node:path';
 import os from 'node:os';
 import type { AgentEvent } from '../types.js';
 
+/**
+ * BufferedSessionWriter — Batches event writes to reduce disk I/O during streaming.
+ *
+ * Instead of one file append per event, collects events in memory and flushes
+ * to disk periodically (default: every 500ms) or on explicit flush().
+ */
+export class BufferedSessionWriter {
+  private readonly _sessionManager: SessionManager;
+  private readonly _jobId: string;
+  private readonly _flushIntervalMs: number;
+  private _buffer: AgentEvent[] = [];
+  private _flushTimer: ReturnType<typeof setInterval> | null = null;
+  private _flushing = false;
+
+  constructor(sessionManager: SessionManager, jobId: string, flushIntervalMs = 500) {
+    this._sessionManager = sessionManager;
+    this._jobId = jobId;
+    this._flushIntervalMs = flushIntervalMs;
+
+    // Start periodic flush
+    this._flushTimer = setInterval(() => {
+      this.flush().catch(() => {
+        // Best-effort flush — errors logged by SessionManager
+      });
+    }, this._flushIntervalMs);
+  }
+
+  /** Buffer an event for batched writing. */
+  append(event: AgentEvent): void {
+    this._buffer.push(event);
+  }
+
+  /** Flush all buffered events to disk as a single write. */
+  async flush(): Promise<void> {
+    if (this._buffer.length === 0 || this._flushing) return;
+
+    this._flushing = true;
+    const events = this._buffer;
+    this._buffer = [];
+
+    try {
+      // Write all events in a single appendFile call
+      const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n';
+      await fs.promises.appendFile(
+        this._sessionManager.getSessionPath(this._jobId),
+        lines,
+        'utf8',
+      );
+    } catch {
+      // On write failure, put events back at front of buffer for retry
+      this._buffer = [...events, ...this._buffer];
+    } finally {
+      this._flushing = false;
+    }
+  }
+
+  /** Flush remaining events and stop the timer. */
+  async close(): Promise<void> {
+    if (this._flushTimer) {
+      clearInterval(this._flushTimer);
+      this._flushTimer = null;
+    }
+    await this.flush();
+  }
+}
+
 export class SessionManager {
   private readonly _sessionsDir: string;
 
@@ -23,7 +89,7 @@ export class SessionManager {
    * Appends an event to a session's history file.
    */
   async appendEvent(jobId: string, event: AgentEvent): Promise<void> {
-    const sessionPath = this._getSessionPath(jobId);
+    const sessionPath = this.getSessionPath(jobId);
     const line = JSON.stringify(event) + '\n';
     
     // Spec §4.3: "Atomic writes for session history to prevent corruption"
@@ -36,7 +102,7 @@ export class SessionManager {
    * Resilient to file corruption by skipping malformed lines.
    */
   async getHistory(jobId: string): Promise<AgentEvent[]> {
-    const sessionPath = this._getSessionPath(jobId);
+    const sessionPath = this.getSessionPath(jobId);
     if (!fs.existsSync(sessionPath)) return [];
 
     const content = await fs.promises.readFile(sessionPath, 'utf8');
@@ -58,7 +124,7 @@ export class SessionManager {
    * Deletes a session history file.
    */
   async deleteSession(jobId: string): Promise<void> {
-    const sessionPath = this._getSessionPath(jobId);
+    const sessionPath = this.getSessionPath(jobId);
     if (fs.existsSync(sessionPath)) {
       await fs.promises.unlink(sessionPath);
     }
@@ -113,7 +179,8 @@ export class SessionManager {
     return sessions;
   }
 
-  private _getSessionPath(jobId: string): string {
+  /** Returns the path for a session's JSONL file. Public for BufferedSessionWriter. */
+  getSessionPath(jobId: string): string {
     // Sanitize jobId to prevent path traversal
     const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, '_');
     return path.join(this._sessionsDir, `${safeJobId}.jsonl`);
