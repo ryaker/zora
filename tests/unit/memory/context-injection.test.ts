@@ -134,6 +134,7 @@ describe('Context Injection — MEM-13', () => {
 
       const context = await manager.loadContext();
       expect(Array.isArray(context)).toBe(true);
+      expect(context.length).toBe(0);
     });
   });
 
@@ -277,6 +278,10 @@ describe('Context Injection — MEM-13', () => {
       expect(results.length).toBeGreaterThanOrEqual(1);
       // The logging item should appear with a score
       expect(results[0]!.score).toBeGreaterThan(0);
+      // Results should be sorted in descending order by score
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1]!.score).toBeGreaterThanOrEqual(results[i]!.score);
+      }
     });
 
     it('respects limit parameter in searchMemory', async () => {
