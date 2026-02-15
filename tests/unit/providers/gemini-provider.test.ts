@@ -128,7 +128,7 @@ describe('GeminiProvider', () => {
 
       const error = events.find(e => e.type === 'error');
       expect(error).toBeDefined();
-      expect((error!.content as any).isQuota).toBe(true);
+      expect((error!.content as any).isQuotaError).toBe(true);
       expect((await provider.getQuotaStatus()).isExhausted).toBe(true);
     });
   });

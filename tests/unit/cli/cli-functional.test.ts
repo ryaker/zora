@@ -45,21 +45,21 @@ describe('CLI Functional Tests', () => {
     it('memory has search subcommand', () => {
       registerMemoryCommands(program);
       const memCmd = program.commands.find(c => c.name() === 'memory');
-      const searchCmd = memCmd?.commands.find((c: any) => c.name() === 'search');
+      const searchCmd = memCmd?.commands.find(c => c.name() === 'search');
       expect(searchCmd).toBeDefined();
     });
 
     it('memory has forget subcommand', () => {
       registerMemoryCommands(program);
       const memCmd = program.commands.find(c => c.name() === 'memory');
-      const forgetCmd = memCmd?.commands.find((c: any) => c.name() === 'forget');
+      const forgetCmd = memCmd?.commands.find(c => c.name() === 'forget');
       expect(forgetCmd).toBeDefined();
     });
 
     it('memory has categories subcommand', () => {
       registerMemoryCommands(program);
       const memCmd = program.commands.find(c => c.name() === 'memory');
-      const catCmd = memCmd?.commands.find((c: any) => c.name() === 'categories');
+      const catCmd = memCmd?.commands.find(c => c.name() === 'categories');
       expect(catCmd).toBeDefined();
     });
   });

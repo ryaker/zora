@@ -105,7 +105,6 @@ export interface ToolResultEventContent {
 export interface ErrorEventContent {
   message: string;
   code?: number | string;
-  isQuota?: boolean;
   isAuthError?: boolean;
   isQuotaError?: boolean;
   subtype?: string;

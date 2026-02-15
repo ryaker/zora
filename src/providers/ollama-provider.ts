@@ -23,6 +23,7 @@ import type {
   CostTier,
   ProviderConfig,
 } from '../types.js';
+import { isTextEvent, isSteeringEvent } from '../types.js';
 
 export interface OllamaProviderOptions {
   config: ProviderConfig;
@@ -169,7 +170,11 @@ export class OllamaProvider implements LLMProvider {
 
         let chunk: Record<string, unknown>;
         try {
-          chunk = JSON.parse(line) as Record<string, unknown>;
+          const parsed = JSON.parse(line);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Invalid JSON chunk: expected object');
+          }
+          chunk = parsed as Record<string, unknown>;
         } catch (parseErr: unknown) {
           // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
           const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
@@ -278,11 +283,10 @@ export class OllamaProvider implements LLMProvider {
 
     // History as conversation turns
     for (const event of task.history) {
-      const eventContent = event.content as Record<string, unknown>;
-      if (event.type === 'text') {
-        messages.push({ role: 'assistant', content: String(eventContent.text ?? '') });
-      } else if (event.type === 'steering') {
-        messages.push({ role: 'user', content: String(eventContent.text ?? '') });
+      if (isTextEvent(event)) {
+        messages.push({ role: 'assistant', content: event.content.text });
+      } else if (isSteeringEvent(event)) {
+        messages.push({ role: 'user', content: event.content.text });
       }
     }
 
@@ -304,8 +308,10 @@ export class OllamaProvider implements LLMProvider {
     let match;
     while ((match = jsonRegex.exec(text)) !== null) {
       try {
-        const data = JSON.parse(match[1]!) as Record<string, unknown>;
-        if (typeof data.tool === 'string' && data.arguments && typeof data.arguments === 'object') {
+        const data = JSON.parse(match[1]!);
+        if (data && typeof data === 'object' && !Array.isArray(data) &&
+            typeof data.tool === 'string' &&
+            data.arguments && typeof data.arguments === 'object' && !Array.isArray(data.arguments)) {
           toolCalls.push({
             toolCallId: `call_${Math.random().toString(36).slice(2, 9)}`,
             tool: data.tool,

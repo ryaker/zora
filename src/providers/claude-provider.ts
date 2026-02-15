@@ -26,6 +26,7 @@ import type {
   CostTier,
   ProviderConfig,
 } from '../types.js';
+import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -471,22 +472,21 @@ export class ClaudeProvider implements LLMProvider {
     if (task.history.length > 0) {
       parts.push('<execution_history>');
       for (const event of task.history) {
-        const c = event.content as Record<string, unknown>;
-        if (event.type === 'text') {
+        if (isTextEvent(event)) {
           parts.push('  <assistant_response>');
-          parts.push(String(c.text ?? ''));
+          parts.push(event.content.text);
           parts.push('  </assistant_response>');
-        } else if (event.type === 'tool_call') {
-          parts.push(`  <tool_call name="${String(c.tool ?? '')}" id="${String(c.toolCallId ?? '')}">`);
-          parts.push(JSON.stringify(c.arguments, null, 2));
+        } else if (isToolCallEvent(event)) {
+          parts.push(`  <tool_call name="${event.content.tool}" id="${event.content.toolCallId}">`);
+          parts.push(JSON.stringify(event.content.arguments, null, 2));
           parts.push('  </tool_call>');
-        } else if (event.type === 'tool_result') {
-          parts.push(`  <tool_result id="${String(c.toolCallId ?? '')}">`);
-          parts.push(JSON.stringify(c.result, null, 2));
+        } else if (isToolResultEvent(event)) {
+          parts.push(`  <tool_result id="${event.content.toolCallId}">`);
+          parts.push(JSON.stringify(event.content.result, null, 2));
           parts.push('  </tool_result>');
-        } else if (event.type === 'steering') {
-          parts.push(`  <human_steering source="${String(c.source ?? '')}" author="${String(c.author ?? '')}">`);
-          parts.push(String(c.text ?? ''));
+        } else if (isSteeringEvent(event)) {
+          parts.push(`  <human_steering source="${event.content.source}" author="${event.content.author}">`);
+          parts.push(event.content.text);
           parts.push('  </human_steering>');
         }
       }

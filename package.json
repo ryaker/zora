@@ -65,7 +65,6 @@
     "@types/node": "^22.19.11",
     "@types/node-cron": "^3.0.11",
     "@types/node-telegram-bot-api": "^0.64.13",
-    "@types/supertest": "^6.0.3",
     "playwright": "^1.58.2",
     "supertest": "^7.2.2",
     "tsx": "^4.19.0",
