@@ -21,6 +21,9 @@ import type { BudgetStatus, DryRunResult } from './security-types.js';
 import type { IntentCapsuleManager } from './intent-capsule.js';
 import type { AuditLogger } from './audit-logger.js';
 import { isENOENT } from '../utils/errors.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('policy-engine');
 
 export interface ValidationResult {
   allowed: boolean;
@@ -881,7 +884,7 @@ export class PolicyEngine {
 
       fs.writeFileSync(this._policyFilePath, lines.join('\n'), 'utf-8');
     } catch (err) {
-      console.error('[PolicyEngine] Failed to persist policy expansion:', err instanceof Error ? err.message : String(err));
+      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Failed to persist policy expansion');
     }
   }
 

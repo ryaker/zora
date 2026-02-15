@@ -8,7 +8,9 @@ import type { Command } from 'commander';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createLogger } from '../utils/logger.js';
 
+const log = createLogger('edit-commands');
 const EDITABLE_FILES: Record<string, string> = {
   config: 'config.toml',
   policy: 'policy.toml',
@@ -29,7 +31,7 @@ export function registerEditCommands(
         const filePath = path.join(configDir, filename);
 
         if (!fs.existsSync(filePath)) {
-          console.error(`File not found: ${filePath}`);
+          log.error({ filePath }, 'File not found');
           process.exitCode = 1;
           return;
         }

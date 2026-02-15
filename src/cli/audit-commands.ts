@@ -7,6 +7,9 @@
 import type { Command } from 'commander';
 import { AuditLogger } from '../security/audit-logger.js';
 import type { AuditFilter } from '../security/audit-logger.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('audit-commands');
 
 function parseDuration(duration: string): number {
   const match = /^(\d+)(h|d|m)$/.exec(duration);
@@ -45,7 +48,7 @@ export function registerAuditCommands(
         if (result.valid) {
           console.log(`Audit chain verified: ${result.entries} entries, all valid.`);
         } else {
-          console.error(`Audit chain BROKEN at entry ${result.brokenAt}: ${result.reason}`);
+          log.error({ brokenAt: result.brokenAt, reason: result.reason }, 'Audit chain BROKEN');
           process.exitCode = 1;
         }
         return;

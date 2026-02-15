@@ -7,6 +7,9 @@
 import type { Command } from 'commander';
 import { TeamManager } from '../teams/team-manager.js';
 import type { AgentMember } from '../teams/team-types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('team-commands');
 
 function parseAgentSpec(spec: string): Omit<AgentMember, 'isActive'> {
   const parts = spec.split(':');
@@ -102,7 +105,7 @@ export function registerTeamCommands(
           console.log(`  - ${m.name} (${m.provider}/${m.model}) [${status}] ${unread} unread`);
         }
       } catch (err) {
-        console.error(`Error: ${(err as Error).message}`);
+        log.error({ err: (err as Error).message }, 'Team status error');
         process.exitCode = 1;
       }
     });

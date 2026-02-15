@@ -9,6 +9,9 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Mailbox } from './mailbox.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('gemini-bridge');
 
 export interface GeminiBridgeOptions {
   pollIntervalMs: number;
@@ -98,7 +101,7 @@ export class GeminiBridge {
         await this._onPollComplete();
       }
     } catch (err) {
-      console.error('[GeminiBridge] Poll error:', err);
+      log.error({ err }, 'Poll error');
     } finally {
       this._polling = false;
     }
@@ -138,14 +141,14 @@ export class GeminiBridge {
           })
           .then(() => resolve())
           .catch((err) => {
-            console.error('[GeminiBridge] Failed to send result:', err);
+            log.error({ err }, 'Failed to send result');
             resolve();
           });
       });
 
       child.on('error', (err) => {
         this._activeProcess = null;
-        console.error('[GeminiBridge] Process error:', err);
+        log.error({ err }, 'Process error');
 
         // Send error result back to requesting agent
         this._mailbox
@@ -155,7 +158,7 @@ export class GeminiBridge {
           })
           .then(() => resolve())
           .catch((sendErr) => {
-            console.error('[GeminiBridge] Failed to send error result:', sendErr);
+            log.error({ err: sendErr }, 'Failed to send error result');
             resolve();
           });
       });

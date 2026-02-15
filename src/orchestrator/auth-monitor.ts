@@ -10,6 +10,9 @@
 
 import type { LLMProvider, AuthStatus } from '../types.js';
 import { NotificationTools } from '../tools/notifications.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('auth-monitor');
 
 export interface AuthMonitorOptions {
   providers: LLMProvider[];
@@ -59,7 +62,7 @@ export class AuthMonitor {
           }
         } catch (err) {
           // Unexpected error during auth check
-          console.error(`Error checking auth for ${provider.name}:`, err);
+          log.error({ provider: provider.name, err }, 'Error checking auth');
         }
       })
     );

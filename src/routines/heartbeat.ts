@@ -12,6 +12,9 @@ import path from 'node:path';
 import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
 import { ExecutionLoop } from '../orchestrator/execution-loop.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('heartbeat');
 
 export interface HeartbeatOptions {
   loop: ExecutionLoop;
@@ -67,7 +70,7 @@ export class HeartbeatSystem {
             updatedLines[i] = line.replace(/^-\s*\[\s*\]/, '- [x]');
             tasksRun++;
           } catch (err) {
-            console.error(`Heartbeat task failed: ${taskText}`, err);
+            log.error({ task: taskText, err }, 'Heartbeat task failed');
           }
         }
       }
@@ -76,7 +79,7 @@ export class HeartbeatSystem {
         await fs.writeFile(this._heartbeatFile, updatedLines.join('\n'), 'utf8');
       }
     } catch (err) {
-      console.error(`Failed to perform heartbeat pulse:`, err);
+      log.error({ err }, 'Failed to perform heartbeat pulse');
     }
   }
 
@@ -100,7 +103,7 @@ export class HeartbeatSystem {
         await fs.writeFile(this._heartbeatFile, defaultContent, 'utf8');
       }
     } catch (err) {
-      console.error(`Failed to ensure heartbeat file at ${this._heartbeatFile}:`, err);
+      log.error({ heartbeatFile: this._heartbeatFile, err }, 'Failed to ensure heartbeat file');
     }
   }
 }

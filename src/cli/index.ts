@@ -31,7 +31,9 @@ import { registerSteerCommands } from './steer-commands.js';
 import { registerSkillCommands } from './skill-commands.js';
 import { registerInitCommand } from './init-command.js';
 import { runDoctorChecks } from './doctor.js';
+import { createLogger } from '../utils/logger.js';
 
+const log = createLogger('cli');
 const program = new Command();
 
 program
@@ -67,7 +69,7 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
         // Exhaustiveness check: if KnownProviderType gains a new member
         // and we don't add a case, TypeScript reports an error here.
         const _exhaustive: never = providerType;
-        console.warn(`Unknown provider type: ${pConfig.type}, skipping ${pConfig.name}`);
+        log.warn({ type: pConfig.type, name: pConfig.name }, 'Unknown provider type, skipping');
         void _exhaustive;
       }
     }
@@ -93,7 +95,7 @@ async function setupContext() {
 
   // Ensure config exists
   if (!fs.existsSync(configPath)) {
-    console.error("Zora isn't configured yet. Run 'zora-agent init' to set up in 2 minutes.");
+    log.error("Zora isn't configured yet. Run 'zora-agent init' to set up in 2 minutes.");
     process.exit(1);
   }
 
@@ -105,7 +107,7 @@ async function setupContext() {
   try {
     policy = await loadPolicy(policyPath);
   } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
+    log.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -133,7 +135,7 @@ program
 
     const providers = createProviders(config);
     if (providers.length === 0) {
-      console.error('No enabled providers found in config.');
+      log.error('No enabled providers found in config.');
       process.exit(1);
     }
 
@@ -169,7 +171,7 @@ program
               break;
             }
             case 'error':
-              console.error(`\x1b[31m✗ ${(event.content as { message: string }).message}\x1b[0m`);
+              log.error({ message: (event.content as { message: string }).message }, 'Task error');
               break;
           }
         },
@@ -293,7 +295,7 @@ async function startDaemon(opts: { open?: boolean }): Promise<void> {
       exec(openCmd, () => {});
     }
   } else {
-    console.error('Failed to start daemon.');
+    log.error('Failed to start daemon');
   }
 }
 

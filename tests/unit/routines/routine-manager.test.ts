@@ -5,6 +5,29 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
+const { mockWarn } = vi.hoisted(() => {
+  const mockWarn = vi.fn();
+  return { mockWarn };
+});
+
+vi.mock('../../../src/utils/logger.js', () => {
+  const mockLogger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  };
+  return {
+    createLogger: vi.fn(() => mockLogger),
+    getLogger: vi.fn(() => mockLogger),
+    initLogger: vi.fn(() => mockLogger),
+    resetLogger: vi.fn(),
+    logger: mockLogger,
+  };
+});
+
 describe('RoutineManager', () => {
   const testDir = path.join(os.tmpdir(), 'zora-routines-test');
   let manager: RoutineManager;
@@ -123,7 +146,7 @@ prompt = "budget task"
   });
 
   it('warns on invalid max_cost_tier but still loads', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockWarn.mockClear();
 
     const routinePath = path.join(testDir, 'routines', 'bad-tier.toml');
     await fs.mkdir(path.dirname(routinePath), { recursive: true });
@@ -139,9 +162,11 @@ prompt = "test"
 
     await manager.init();
     expect(manager.scheduledCount).toBe(1);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid max_cost_tier'));
-
-    warnSpy.mockRestore();
+    // After LOG-01 migration, warnings go through pino structured logger
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ costTier: 'ultra-cheap' }),
+      expect.stringContaining('Invalid max_cost_tier')
+    );
   });
 
   it('skips disabled routines', async () => {

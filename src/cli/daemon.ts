@@ -16,8 +16,11 @@ import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
+import { createLogger } from '../utils/logger.js';
 import { TelegramGateway } from '../steering/telegram-gateway.js';
 import type { TelegramConfig } from '../steering/telegram-gateway.js';
+
+const log = createLogger('daemon');
 
 function createProviders(config: ZoraConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
@@ -44,7 +47,7 @@ async function main() {
   const policyPath = path.join(configDir, 'policy.toml');
 
   if (!fs.existsSync(configPath)) {
-    console.error('Config not found. Run `zora-agent init` first.');
+    log.error('Config not found. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -56,7 +59,7 @@ async function main() {
   try {
     policy = await loadPolicy(policyPath);
   } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
+    log.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -76,7 +79,7 @@ async function main() {
       orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
         dashboard.broadcastEvent({ type: event.type, data: event.content });
       } }).catch(err => {
-        console.error(`[Daemon] Task ${jobId} failed:`, err);
+        log.error({ jobId, err }, 'Task failed');
         dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
       });
       return jobId;
@@ -92,14 +95,13 @@ async function main() {
   if (telegramConfig?.enabled) {
     const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
-      console.warn('[Daemon] Telegram enabled but no bot_token configured and TELEGRAM_BOT_TOKEN not set. Skipping.');
+      log.warn('Telegram enabled but no bot_token configured and TELEGRAM_BOT_TOKEN not set. Skipping.');
     } else {
-      console.warn(
-        '[Daemon] Telegram: Ensure you are using a dedicated bot token for this Zora instance. ' +
+      log.warn(
+        'Telegram: Ensure you are using a dedicated bot token for this Zora instance. ' +
         'Sharing a bot token across multiple processes causes polling conflicts and lost messages.'
       );
       try {
-        // Construct TelegramConfig by merging telegram-specific config with parent SteeringConfig defaults
         const fullTelegramConfig: TelegramConfig = {
           ...config.steering,
           ...telegramConfig,
@@ -109,18 +111,18 @@ async function main() {
           fullTelegramConfig,
           orchestrator.steeringManager,
         );
-        console.log(`[Daemon] Telegram gateway started (mode: ${telegramConfig.mode ?? 'polling'}).`);
+        log.info({ mode: telegramConfig.mode ?? 'polling' }, 'Telegram gateway started');
       } catch (err) {
-        console.error('[Daemon] Failed to start Telegram gateway:', err instanceof Error ? err.message : String(err));
+        log.error({ err }, 'Failed to start Telegram gateway');
       }
     }
   }
 
-  console.log('[Daemon] Zora daemon is running.');
+  log.info('Zora daemon is running');
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
-    console.log(`[Daemon] Received ${signal}, shutting down...`);
+    log.info({ signal }, 'Received signal, shutting down');
     try {
       if (telegramGateway) {
         await telegramGateway.stop();
@@ -128,7 +130,7 @@ async function main() {
       await dashboard.stop();
       await orchestrator.shutdown();
     } catch (err) {
-      console.error(`[Daemon] Error during shutdown:`, err instanceof Error ? err.message : String(err));
+      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Error during shutdown');
     }
 
     // Remove pidfile
@@ -142,11 +144,11 @@ async function main() {
     process.exit(0);
   };
 
-  process.on('SIGTERM', () => { shutdown('SIGTERM').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
-  process.on('SIGINT', () => { shutdown('SIGINT').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
+  process.on('SIGTERM', () => { shutdown('SIGTERM').catch(err => { log.error({ err }, 'Shutdown error'); process.exit(1); }); });
+  process.on('SIGINT', () => { shutdown('SIGINT').catch(err => { log.error({ err }, 'Shutdown error'); process.exit(1); }); });
 }
 
 main().catch((err) => {
-  console.error('[Daemon] Fatal error:', err);
+  log.fatal({ err }, 'Fatal error');
   process.exit(1);
 });

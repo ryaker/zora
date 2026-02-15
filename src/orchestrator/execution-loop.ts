@@ -15,6 +15,9 @@ import {
   type AgentDefinition,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('execution-loop');
 
 // ─── SDK-compatible option types ─────────────────────────────────────
 // Re-export SDK types with Sdk prefix for consistency
@@ -113,11 +116,7 @@ export class ExecutionLoop {
 
         timeoutHandle = setTimeout(() => {
           const elapsed = Date.now() - lastEventTime;
-          console.error('[ExecutionLoop] Stream timeout exceeded:', {
-            timeout: streamTimeout,
-            elapsed,
-            sessionId,
-          });
+          log.error({ timeout: streamTimeout, elapsed, sessionId }, 'Stream timeout exceeded');
           throw new Error(`Stream timeout: No events received for ${streamTimeout}ms`);
         }, streamTimeout);
 

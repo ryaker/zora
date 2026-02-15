@@ -16,7 +16,9 @@ import type { SessionManager } from '../orchestrator/session-manager.js';
 import type { SteeringManager } from '../steering/steering-manager.js';
 import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
+import { createLogger } from '../utils/logger.js';
 
+const log = createLogger('dashboard');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -364,7 +366,7 @@ export class DashboardServer {
     const host = this._options.host ?? '127.0.0.1';
     return new Promise((resolve) => {
       this._server = this._app.listen(port, host, () => {
-        console.log(`[Dashboard] Zora Tactical Interface active at http://${host}:${port}`);
+        log.info({ host, port }, 'Zora Tactical Interface active');
         resolve();
       });
     });
