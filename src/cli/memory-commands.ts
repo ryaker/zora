@@ -91,8 +91,9 @@ export function registerMemoryCommands(
 
       const editor = process.env.EDITOR || 'vi';
       try {
-        const parts = editor.split(/\s+/);
-        execFileSync(parts[0], [...parts.slice(1), longTermPath], { stdio: 'inherit' });
+        const parts = editor.split(/\s+/).filter(Boolean);
+        const cmd = parts[0] ?? 'vi';
+        execFileSync(cmd, [...parts.slice(1), longTermPath], { stdio: 'inherit' });
       } catch (err) {
         console.error(`Failed to open editor: ${(err as Error).message}`);
         process.exitCode = 1;
