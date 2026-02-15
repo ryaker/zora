@@ -19,6 +19,12 @@ import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Health score threshold for marking a provider as degraded.
+ * Providers with healthScore below this value are considered DEGRADED.
+ */
+const DEGRADED_HEALTH_SCORE_THRESHOLD = 0.5;
+
 export interface SubmitTaskFn {
   (prompt: string): Promise<string>; // returns jobId
 }
@@ -123,12 +129,20 @@ export class DashboardServer {
             // Determine per-provider status
             let status: 'OK' | 'DEGRADED' | 'DOWN' = 'OK';
             if (!auth.valid) status = 'DOWN';
-            else if (quota.isExhausted || quota.healthScore < 0.5) status = 'DEGRADED';
+            else if (quota.isExhausted || quota.healthScore < DEGRADED_HEALTH_SCORE_THRESHOLD) status = 'DEGRADED';
 
             return {
               name: p.name,
               status,
-              auth: { valid: auth.valid, expiresAt: auth.expiresAt?.toISOString() ?? null },
+              // Back-compat: expose auth fields at top level for existing consumers
+              valid: auth.valid,
+              expiresAt: auth.expiresAt?.toISOString() ?? null,
+              canAutoRefresh: auth.canAutoRefresh,
+              auth: {
+                valid: auth.valid,
+                expiresAt: auth.expiresAt?.toISOString() ?? null,
+                canAutoRefresh: auth.canAutoRefresh,
+              },
               quota: {
                 isExhausted: quota.isExhausted,
                 remainingRequests: quota.remainingRequests,
