@@ -236,7 +236,32 @@ describe('ClaudeProvider', () => {
 
       expect(events[0]!.type).toBe('error');
       expect((events[0]!.content as any).isQuotaError).toBe(true);
+
+      // PROV-02: Single failure does not trip circuit breaker (threshold = 3)
+      expect((await provider.getQuotaStatus()).isExhausted).toBe(false);
+      expect((await provider.getQuotaStatus()).healthScore).toBe(1.0);
+    });
+
+    it('trips circuit breaker after repeated failures (PROV-02)', async () => {
+      const queryFn = vi.fn(() => {
+        throw new Error('Rate limit exceeded (429)');
+      });
+      const provider = new ClaudeProvider({ config, queryFn });
+
+      // 3 failures trip the circuit breaker (default threshold)
+      await collectEvents(provider.execute(makeTask({ jobId: 'fail-1' })));
+      await collectEvents(provider.execute(makeTask({ jobId: 'fail-2' })));
+      await collectEvents(provider.execute(makeTask({ jobId: 'fail-3' })));
+
       expect((await provider.getQuotaStatus()).isExhausted).toBe(true);
+      expect((await provider.getQuotaStatus()).healthScore).toBe(0.0);
+      expect(await provider.isAvailable()).toBe(false);
+
+      // 4th call should be rejected immediately by circuit breaker
+      const events = await collectEvents(provider.execute(makeTask({ jobId: 'fail-4' })));
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe('error');
+      expect((events[0]!.content as any).isCircuitOpen).toBe(true);
     });
   });
 

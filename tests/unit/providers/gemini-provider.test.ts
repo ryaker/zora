@@ -129,7 +129,34 @@ describe('GeminiProvider', () => {
       const error = events.find(e => e.type === 'error');
       expect(error).toBeDefined();
       expect((error!.content as any).isQuotaError).toBe(true);
+
+      // PROV-02: Single failure does not trip circuit breaker (threshold = 3)
+      expect((await provider.getQuotaStatus()).isExhausted).toBe(false);
+      expect((await provider.getQuotaStatus()).healthScore).toBe(1.0);
+    });
+
+    it('trips circuit breaker after repeated failures (PROV-02)', async () => {
+      // 3 consecutive failures trip the circuit breaker
+      for (let i = 0; i < 3; i++) {
+        mockSpawn('', `Error: 429 Rate Limit Exceeded`, 1);
+        const events = [];
+        for await (const event of provider.execute({ ...task, jobId: `fail-${i}` })) {
+          events.push(event);
+        }
+        expect(events.find(e => e.type === 'error')).toBeDefined();
+      }
+
       expect((await provider.getQuotaStatus()).isExhausted).toBe(true);
+      expect((await provider.getQuotaStatus()).healthScore).toBe(0.0);
+
+      // 4th call should be rejected immediately by circuit breaker
+      const events = [];
+      for await (const event of provider.execute({ ...task, jobId: 'fail-4' })) {
+        events.push(event);
+      }
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe('error');
+      expect((events[0]!.content as any).isCircuitOpen).toBe(true);
     });
   });
 });

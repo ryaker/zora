@@ -27,6 +27,7 @@ import type {
   ProviderConfig,
 } from '../types.js';
 import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
+import { CircuitBreaker } from './circuit-breaker.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -146,11 +147,11 @@ export class ClaudeProvider implements LLMProvider {
   /** Active queries indexed by jobId for abort support */
   private readonly _activeQueries: Map<string, { abort: AbortController; query: SDKQuery }> = new Map();
 
+  /** Circuit breaker for failure tracking (PROV-02) */
+  private readonly _circuitBreaker: CircuitBreaker;
+
   /** Cached auth status from last check */
   private _lastAuthStatus: AuthStatus | null = null;
-
-  /** Cached quota status from last check */
-  private _lastQuotaStatus: QuotaStatus | null = null;
 
   /** Track cumulative cost */
   private _totalCostUsd = 0;
@@ -173,6 +174,7 @@ export class ClaudeProvider implements LLMProvider {
     this._systemPrompt = options.systemPrompt ?? '';
     this._allowedTools = options.allowedTools ?? [];
     this._permissionMode = options.permissionMode ?? 'bypassPermissions';
+    this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK
     if (options.queryFn) {
@@ -204,9 +206,10 @@ export class ClaudeProvider implements LLMProvider {
     // Claude is available if:
     // 1. Provider is enabled in config
     // 2. Auth is valid (or we haven't checked yet — optimistic)
+    // 3. Circuit breaker is not OPEN (PROV-02)
     if (!this._config.enabled) return false;
     if (this._lastAuthStatus && !this._lastAuthStatus.valid) return false;
-    if (this._lastQuotaStatus?.isExhausted) return false;
+    if (this._circuitBreaker.isOpen()) return false;
     return true;
   }
 
@@ -231,22 +234,31 @@ export class ClaudeProvider implements LLMProvider {
   }
 
   async getQuotaStatus(): Promise<QuotaStatus> {
-    if (this._lastQuotaStatus) {
-      return this._lastQuotaStatus;
-    }
-
-    // Default to healthy
-    const status: QuotaStatus = {
-      isExhausted: false,
+    // PROV-01: Derive health score from circuit breaker state
+    const cbState = this._circuitBreaker.getState();
+    return {
+      isExhausted: cbState === 'OPEN',
       remainingRequests: null,
       cooldownUntil: null,
-      healthScore: 1.0,
+      healthScore: this._circuitBreaker.healthScore,
     };
-    this._lastQuotaStatus = status;
-    return status;
   }
 
   async *execute(task: TaskContext): AsyncGenerator<AgentEvent> {
+    // PROV-02: Reject immediately if circuit breaker is OPEN
+    if (this._circuitBreaker.isOpen()) {
+      yield {
+        type: 'error' as AgentEventType,
+        timestamp: new Date(),
+        source: this.name,
+        content: {
+          message: `Circuit breaker is OPEN for provider ${this.name} — too many recent failures`,
+          isCircuitOpen: true,
+        },
+      };
+      return;
+    }
+
     const queryFn = await this._resolveQueryFn();
     const abortController = new AbortController();
 
@@ -297,6 +309,9 @@ export class ClaudeProvider implements LLMProvider {
         }
       }
 
+      // PROV-02: Record success on the circuit breaker
+      this._circuitBreaker.recordSuccess();
+
       // Only yield fallback if the SDK never emitted a result message
       if (!emittedResult) {
         yield {
@@ -309,6 +324,9 @@ export class ClaudeProvider implements LLMProvider {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
 
+      // PROV-02: Record failure on the circuit breaker
+      this._circuitBreaker.recordFailure();
+
       // Check for specific error types that indicate auth/quota issues
       if (this._isAuthError(errorMessage)) {
         this._lastAuthStatus = {
@@ -316,13 +334,6 @@ export class ClaudeProvider implements LLMProvider {
           expiresAt: null,
           canAutoRefresh: false,
           requiresInteraction: true,
-        };
-      } else if (this._isQuotaError(errorMessage)) {
-        this._lastQuotaStatus = {
-          isExhausted: true,
-          remainingRequests: 0,
-          cooldownUntil: new Date(Date.now() + 60_000), // 1 min default cooldown
-          healthScore: 0,
         };
       }
 
@@ -599,8 +610,9 @@ export class ClaudeProvider implements LLMProvider {
     return this._lastAuthStatus;
   }
 
-  get lastQuotaStatus(): QuotaStatus | null {
-    return this._lastQuotaStatus;
+  /** Expose circuit breaker for external inspection / testing */
+  get circuitBreaker(): CircuitBreaker {
+    return this._circuitBreaker;
   }
 
   getUsage(): ProviderUsage {
@@ -621,17 +633,10 @@ export class ClaudeProvider implements LLMProvider {
   }
 
   /**
-   * Force-set quota status (used by orchestrator on external quota events).
-   */
-  setQuotaStatus(status: QuotaStatus): void {
-    this._lastQuotaStatus = status;
-  }
-
-  /**
    * Reset cached status (used after auth recovery).
    */
   resetStatus(): void {
     this._lastAuthStatus = null;
-    this._lastQuotaStatus = null;
+    this._circuitBreaker.reset();
   }
 }

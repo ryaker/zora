@@ -21,6 +21,7 @@ import type {
 } from '../types.js';
 import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { CircuitBreaker } from './circuit-breaker.js';
 
 const log = createLogger('gemini-provider');
 
@@ -38,9 +39,11 @@ export class GeminiProvider implements LLMProvider {
   private readonly _config: ProviderConfig;
   private readonly _cliPath: string;
   private _lastAuthStatus: AuthStatus | null = null;
-  private _lastQuotaStatus: QuotaStatus | null = null;
   private _requestCount = 0;
   private _lastRequestAt: Date | null = null;
+
+  /** Circuit breaker for failure tracking (PROV-02) */
+  private readonly _circuitBreaker: CircuitBreaker;
 
   /** Active child processes indexed by jobId for abort support */
   private readonly _activeProcesses: Map<string, import('node:child_process').ChildProcess> = new Map();
@@ -54,10 +57,13 @@ export class GeminiProvider implements LLMProvider {
 
     this._config = config;
     this._cliPath = options.cliPath ?? config.cli_path ?? 'gemini';
+    this._circuitBreaker = new CircuitBreaker();
   }
 
   async isAvailable(): Promise<boolean> {
     if (!this._config.enabled) return false;
+    // PROV-02: Check circuit breaker before auth
+    if (this._circuitBreaker.isOpen()) return false;
     const auth = await this.checkAuth();
     return auth.valid;
   }
@@ -121,10 +127,14 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async getQuotaStatus(): Promise<QuotaStatus> {
-    if (this._lastQuotaStatus) return this._lastQuotaStatus;
-    const status = { isExhausted: false, remainingRequests: null, cooldownUntil: null, healthScore: 1.0 };
-    this._lastQuotaStatus = status;
-    return status;
+    // PROV-01: Derive health score from circuit breaker state
+    const cbState = this._circuitBreaker.getState();
+    return {
+      isExhausted: cbState === 'OPEN',
+      remainingRequests: null,
+      cooldownUntil: null,
+      healthScore: this._circuitBreaker.healthScore,
+    };
   }
 
   getUsage(): ProviderUsage {
@@ -138,18 +148,32 @@ export class GeminiProvider implements LLMProvider {
   }
 
   async *execute(task: TaskContext): AsyncGenerator<AgentEvent> {
+    // PROV-02: Reject immediately if circuit breaker is OPEN
+    if (this._circuitBreaker.isOpen()) {
+      yield {
+        type: 'error',
+        timestamp: new Date(),
+        source: this.name,
+        content: {
+          message: `Circuit breaker is OPEN for provider ${this.name} — too many recent failures`,
+          isCircuitOpen: true,
+        },
+      };
+      return;
+    }
+
     this._requestCount++;
     this._lastRequestAt = new Date();
     const prompt = this._buildPrompt(task);
     const args = ['chat', '--prompt', prompt];
-    
+
     if (this._config.model) {
       args.push('--model', this._config.model);
     }
 
     const child = spawn(this._cliPath, args);
     this._activeProcesses.set(task.jobId, child);
-    
+
     let buffer = '';
     let bufferTruncated = false;
 
@@ -166,6 +190,7 @@ export class GeminiProvider implements LLMProvider {
 
     // Safe stream access (Spec §4.2: subprocess wrapper resilience)
     if (!child.stdout || !child.stderr) {
+      this._circuitBreaker.recordFailure();
       yield {
         type: 'error',
         timestamp: new Date(),
@@ -201,21 +226,15 @@ export class GeminiProvider implements LLMProvider {
 
       const { code } = await exitPromise;
       if (spawnError) throw spawnError;
-      
+
       const stderr = await stderrContent;
 
       if (code !== 0) {
         const errorMessage = stderr || `Gemini CLI exited with code ${code}`;
         const isQuotaError = errorMessage.toLowerCase().includes('quota') || errorMessage.includes('429');
 
-        if (isQuotaError) {
-          this._lastQuotaStatus = {
-            isExhausted: true,
-            remainingRequests: 0,
-            cooldownUntil: new Date(Date.now() + 60000),
-            healthScore: 0
-          };
-        }
+        // PROV-02: Record failure on the circuit breaker
+        this._circuitBreaker.recordFailure();
 
         yield {
           type: 'error',
@@ -225,6 +244,9 @@ export class GeminiProvider implements LLMProvider {
         };
         return;
       }
+
+      // PROV-02: Record success on the circuit breaker
+      this._circuitBreaker.recordSuccess();
 
       // Final parsing for tool calls
       const toolCalls = this._parseToolCalls(buffer);
@@ -245,6 +267,9 @@ export class GeminiProvider implements LLMProvider {
       };
 
     } catch (err: unknown) {
+      // PROV-02: Record failure on the circuit breaker
+      this._circuitBreaker.recordFailure();
+
       const msg = err instanceof Error ? err.message : String(err);
       yield {
         type: 'error',
@@ -268,7 +293,7 @@ export class GeminiProvider implements LLMProvider {
   private _buildPrompt(task: TaskContext): string {
     const parts: string[] = [];
     if (task.systemPrompt) parts.push(`System: ${task.systemPrompt}`);
-    
+
     if (task.memoryContext.length > 0) {
       parts.push('<context>');
       parts.push(...task.memoryContext);
@@ -388,5 +413,18 @@ export class GeminiProvider implements LLMProvider {
       buffer += chunk.toString();
     }
     return buffer.trim();
+  }
+
+  /** Expose circuit breaker for external inspection / testing */
+  get circuitBreaker(): CircuitBreaker {
+    return this._circuitBreaker;
+  }
+
+  /**
+   * Reset cached status (used after recovery).
+   */
+  resetStatus(): void {
+    this._lastAuthStatus = null;
+    this._circuitBreaker.reset();
   }
 }

@@ -6,6 +6,12 @@
  */
 
 export {
+  CircuitBreaker,
+  type CircuitBreakerOptions,
+  type CircuitState,
+} from './circuit-breaker.js';
+
+export {
   ClaudeProvider,
   type ClaudeProviderOptions,
   type QueryFn,

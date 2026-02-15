@@ -25,6 +25,7 @@ import type {
 } from '../types.js';
 import { isTextEvent, isSteeringEvent } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { CircuitBreaker } from './circuit-breaker.js';
 
 const log = createLogger('ollama-provider');
 
@@ -47,7 +48,12 @@ export class OllamaProvider implements LLMProvider {
   /** Track active requests by jobId for abort support */
   private readonly _activeRequests: Map<string, AbortController> = new Map();
 
+  /** Circuit breaker for failure tracking (PROV-02) */
+  private readonly _circuitBreaker: CircuitBreaker;
+
   private _lastAuthStatus: AuthStatus | null = null;
+  private _requestCount = 0;
+  private _lastRequestAt: Date | null = null;
 
   constructor(options: OllamaProviderOptions) {
     const { config } = options;
@@ -59,10 +65,13 @@ export class OllamaProvider implements LLMProvider {
     this._config = config;
     this._endpoint = (options.endpoint ?? config.endpoint ?? 'http://localhost:11434').replace(/\/$/, '');
     this._model = config.model ?? 'llama3.2';
+    this._circuitBreaker = new CircuitBreaker();
   }
 
   async isAvailable(): Promise<boolean> {
     if (!this._config.enabled) return false;
+    // PROV-02: Check circuit breaker before auth
+    if (this._circuitBreaker.isOpen()) return false;
     const auth = await this.checkAuth();
     return auth.valid;
   }
@@ -105,18 +114,36 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async getQuotaStatus(): Promise<QuotaStatus> {
-    // Local models have no quota limits
+    // PROV-01: Derive health score from circuit breaker state
+    // Local models have no quota limits, but circuit breaker reflects reliability
+    const cbState = this._circuitBreaker.getState();
     return {
-      isExhausted: false,
+      isExhausted: cbState === 'OPEN',
       remainingRequests: null,
       cooldownUntil: null,
-      healthScore: 1.0,
+      healthScore: this._circuitBreaker.healthScore,
     };
   }
 
   async *execute(task: TaskContext): AsyncGenerator<AgentEvent> {
+    // PROV-02: Reject immediately if circuit breaker is OPEN
+    if (this._circuitBreaker.isOpen()) {
+      yield {
+        type: 'error' as AgentEventType,
+        timestamp: new Date(),
+        source: this.name,
+        content: {
+          message: `Circuit breaker is OPEN for provider ${this.name} — too many recent failures`,
+          isCircuitOpen: true,
+        },
+      };
+      return;
+    }
+
     const abortController = new AbortController();
     this._activeRequests.set(task.jobId, abortController);
+    this._requestCount++;
+    this._lastRequestAt = new Date();
 
     const messages = this._buildMessages(task);
 
@@ -135,6 +162,8 @@ export class OllamaProvider implements LLMProvider {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this._lastAuthStatus = { valid: false, expiresAt: null, canAutoRefresh: true, requiresInteraction: false };
+      // PROV-02: Record failure on the circuit breaker
+      this._circuitBreaker.recordFailure();
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
@@ -150,6 +179,8 @@ export class OllamaProvider implements LLMProvider {
         log.error({ err: readErr }, 'Failed to read error response body');
         return '';
       });
+      // PROV-02: Record failure on the circuit breaker
+      this._circuitBreaker.recordFailure();
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
@@ -161,6 +192,8 @@ export class OllamaProvider implements LLMProvider {
     }
 
     if (!response.body) {
+      // PROV-02: Record failure on the circuit breaker
+      this._circuitBreaker.recordFailure();
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
@@ -221,6 +254,9 @@ export class OllamaProvider implements LLMProvider {
             };
           }
 
+          // PROV-02: Record success on the circuit breaker
+          this._circuitBreaker.recordSuccess();
+
           yield {
             type: 'done' as AgentEventType,
             timestamp: new Date(),
@@ -244,6 +280,8 @@ export class OllamaProvider implements LLMProvider {
           content: { text: fullText, aborted: true },
         };
       } else {
+        // PROV-02: Record failure on the circuit breaker
+        this._circuitBreaker.recordFailure();
         const msg = err instanceof Error ? err.message : String(err);
         yield {
           type: 'error' as AgentEventType,
@@ -262,8 +300,8 @@ export class OllamaProvider implements LLMProvider {
       totalCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
-      requestCount: 0,
-      lastRequestAt: null,
+      requestCount: this._requestCount,
+      lastRequestAt: this._lastRequestAt,
     };
   }
 
@@ -383,11 +421,17 @@ export class OllamaProvider implements LLMProvider {
     }
   }
 
+  /** Expose circuit breaker for external inspection / testing */
+  get circuitBreaker(): CircuitBreaker {
+    return this._circuitBreaker;
+  }
+
   /**
    * Reset cached status (used after recovery).
    */
   resetStatus(): void {
     this._lastAuthStatus = null;
+    this._circuitBreaker.reset();
   }
 
   get activeJobCount(): number {
