@@ -134,6 +134,7 @@ export class OllamaProvider implements LLMProvider {
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
+        source: this.name,
         content: { message: `Ollama connection failed: ${msg}. Is Ollama running? (ollama serve)` },
       };
       this._activeRequests.delete(task.jobId);
@@ -141,10 +142,14 @@ export class OllamaProvider implements LLMProvider {
     }
 
     if (!response.ok) {
-      const body = await response.text().catch(() => '');
+      const body = await response.text().catch((readErr) => {
+        console.error('[OllamaProvider] Failed to read error response body:', readErr);
+        return '';
+      });
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
+        source: this.name,
         content: { message: `Ollama API error ${response.status}: ${body}` },
       };
       this._activeRequests.delete(task.jobId);
@@ -155,6 +160,7 @@ export class OllamaProvider implements LLMProvider {
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
+        source: this.name,
         content: { message: 'Ollama returned no response body' },
       };
       this._activeRequests.delete(task.jobId);
@@ -180,6 +186,7 @@ export class OllamaProvider implements LLMProvider {
           yield {
             type: 'text' as AgentEventType,
             timestamp: new Date(),
+            source: this.name,
             content: { text },
           };
         }
@@ -192,6 +199,7 @@ export class OllamaProvider implements LLMProvider {
             yield {
               type: 'tool_call' as AgentEventType,
               timestamp: new Date(),
+              source: this.name,
               content: toolCall,
             };
           }
@@ -199,6 +207,7 @@ export class OllamaProvider implements LLMProvider {
           yield {
             type: 'done' as AgentEventType,
             timestamp: new Date(),
+            source: this.name,
             content: {
               text: fullText,
               model: chunk.model,
@@ -214,6 +223,7 @@ export class OllamaProvider implements LLMProvider {
         yield {
           type: 'done' as AgentEventType,
           timestamp: new Date(),
+          source: this.name,
           content: { text: fullText, aborted: true },
         };
       } else {
@@ -221,6 +231,7 @@ export class OllamaProvider implements LLMProvider {
         yield {
           type: 'error' as AgentEventType,
           timestamp: new Date(),
+          source: this.name,
           content: { message: `Ollama streaming error: ${msg}` },
         };
       }

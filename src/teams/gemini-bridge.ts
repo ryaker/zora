@@ -154,7 +154,10 @@ export class GeminiBridge {
             text: `Error (spawn failure): ${err.message}`,
           })
           .then(() => resolve())
-          .catch(() => resolve());
+          .catch((sendErr) => {
+            console.error('[GeminiBridge] Failed to send error result:', sendErr);
+            resolve();
+          });
       });
     });
   }

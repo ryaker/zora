@@ -468,7 +468,7 @@
       "blocking": true,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/OPERATIONAL.md",
       "wsjf": {
         "usability_value": 8,
@@ -478,7 +478,8 @@
         "job_size": 3,
         "score": 5.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "ops"
     },
     {
       "id": "OPS-04",
@@ -490,7 +491,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/OPERATIONAL.md",
       "wsjf": {
         "usability_value": 5,
@@ -500,7 +501,8 @@
         "job_size": 2,
         "score": 5.5
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "ops"
     },
     {
       "id": "OPS-05",
@@ -936,7 +938,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/LOGGING.md",
       "wsjf": {
         "usability_value": 6,
@@ -946,7 +948,8 @@
         "job_size": 5,
         "score": 3.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "ops"
     },
     {
       "id": "LOG-03",
@@ -958,7 +961,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/LOGGING.md",
       "wsjf": {
         "usability_value": 4,
@@ -968,7 +971,8 @@
         "job_size": 3,
         "score": 3.67
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "ops"
     },
     {
       "id": "LOG-04",
@@ -980,7 +984,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/LOGGING.md",
       "wsjf": {
         "usability_value": 2,
@@ -990,7 +994,8 @@
         "job_size": 4,
         "score": 1.75
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "ops"
     },
     {
       "id": "DOC-01",

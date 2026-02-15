@@ -103,20 +103,69 @@ export class DashboardServer {
 
     // --- System APIs ---
 
-    /** GET /api/health — Provider and auth status */
+    /** GET /api/health — LOG-03: Comprehensive health check with provider status, system metrics */
     this._app.get('/api/health', async (_req, res) => {
       try {
+        const providers = this._options.providers ?? [];
         const authStatus = await authMonitor.checkAll();
+
+        // Build per-provider health info
+        const providerHealth = await Promise.all(
+          providers.map(async (p) => {
+            const auth = authStatus.get(p.name) ?? { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true };
+            let quota;
+            try {
+              quota = await p.getQuotaStatus();
+            } catch {
+              quota = { isExhausted: false, remainingRequests: null, cooldownUntil: null, healthScore: 0 };
+            }
+
+            // Determine per-provider status
+            let status: 'OK' | 'DEGRADED' | 'DOWN' = 'OK';
+            if (!auth.valid) status = 'DOWN';
+            else if (quota.isExhausted || quota.healthScore < 0.5) status = 'DEGRADED';
+
+            return {
+              name: p.name,
+              status,
+              auth: { valid: auth.valid, expiresAt: auth.expiresAt?.toISOString() ?? null },
+              quota: {
+                isExhausted: quota.isExhausted,
+                remainingRequests: quota.remainingRequests,
+                healthScore: quota.healthScore,
+              },
+              costTier: p.costTier,
+            };
+          })
+        );
+
+        // Overall system status: CRITICAL if all down, DEGRADED if any down, OK otherwise
+        const downCount = providerHealth.filter(p => p.status === 'DOWN').length;
+        const degradedCount = providerHealth.filter(p => p.status === 'DEGRADED').length;
+        let overallStatus: 'OK' | 'DEGRADED' | 'CRITICAL' = 'OK';
+        if (providers.length > 0 && downCount === providers.length) overallStatus = 'CRITICAL';
+        else if (downCount > 0 || degradedCount > 0) overallStatus = 'DEGRADED';
+
+        const mem = process.memoryUsage();
+
         res.json({
-          ok: true,
-          providers: Array.from(authStatus.entries()).map(([name, status]) => ({
-            name,
-            ...status
-          }))
+          ok: overallStatus !== 'CRITICAL',
+          status: overallStatus,
+          timestamp: new Date().toISOString(),
+          providers: providerHealth,
+          system: {
+            uptime: Math.floor(process.uptime()),
+            memoryUsage: {
+              heapUsedMB: Math.round(mem.heapUsed / (1024 * 1024)),
+              heapTotalMB: Math.round(mem.heapTotal / (1024 * 1024)),
+              rssMB: Math.round(mem.rss / (1024 * 1024)),
+            },
+          },
+          sseClients: this._sseClients.size,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        res.status(500).json({ ok: false, error: message });
+        res.status(500).json({ ok: false, status: 'CRITICAL', error: message });
       }
     });
 
