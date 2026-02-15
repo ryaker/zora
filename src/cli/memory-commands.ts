@@ -4,11 +4,14 @@
  * Spec §5.9 "CLI Interface" — memory subcommands.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import type { Command } from 'commander';
 import type { MemoryManager } from '../memory/memory-manager.js';
 import type { MemoryItem } from '../memory/memory-types.js';
+
+const MS_PER_DAY = 86_400_000;
+const DEDUP_THRESHOLD = 0.8;
 
 export function registerMemoryCommands(
   program: Command,
@@ -88,7 +91,8 @@ export function registerMemoryCommands(
 
       const editor = process.env.EDITOR || 'vi';
       try {
-        execSync(`${editor} ${longTermPath}`, { stdio: 'inherit' });
+        const parts = editor.split(/\s+/);
+        execFileSync(parts[0], [...parts.slice(1), longTermPath], { stdio: 'inherit' });
       } catch (err) {
         console.error(`Failed to open editor: ${(err as Error).message}`);
         process.exitCode = 1;
@@ -134,9 +138,14 @@ export function registerMemoryCommands(
         return;
       }
 
+      // Deduplicate against existing items
+      const existingItems = await memoryManager.structuredMemory.listItems();
+      const dedupedItems = _deduplicateItems(items, existingItems);
+
       let imported = 0;
+      let skipped = items.length - dedupedItems.length;
       let failed = 0;
-      for (const item of items) {
+      for (const item of dedupedItems) {
         try {
           await memoryManager.structuredMemory.createItem({
             type: item.type,
@@ -154,6 +163,9 @@ export function registerMemoryCommands(
       }
 
       console.log(`Imported ${imported} item(s).`);
+      if (skipped > 0) {
+        console.log(`Skipped ${skipped} duplicate item(s).`);
+      }
       if (failed > 0) {
         console.log(`Failed to import ${failed} item(s).`);
       }
@@ -202,13 +214,12 @@ export function registerMemoryCommands(
 
       // By age
       const now = Date.now();
-      const DAY = 86400000;
       let today = 0, week = 0, month = 0, older = 0;
       for (const item of items) {
         const age = now - new Date(item.created_at).getTime();
-        if (age < DAY) today++;
-        else if (age < 7 * DAY) week++;
-        else if (age < 30 * DAY) month++;
+        if (age < MS_PER_DAY) today++;
+        else if (age < 7 * MS_PER_DAY) week++;
+        else if (age < 30 * MS_PER_DAY) month++;
         else older++;
       }
       console.log('By age:');
@@ -241,8 +252,47 @@ export function registerMemoryCommands(
         const date = item.created_at.split('T')[0];
         console.log(`  [${item.id}] (${item.type}) ${date}`);
         console.log(`    ${item.summary}`);
-        console.log(`    category=${item.category} tags=${item.tags.join(', ') || 'none'}`);
+        const tagList = item.tags && item.tags.length > 0 ? item.tags.join(', ') : 'none';
+        console.log(`    category=${item.category} tags=${tagList}`);
         console.log();
       }
     });
+}
+
+// ── Helper functions ──────────────────────────────────────────────
+
+/**
+ * Deduplicate items using Jaccard similarity on word sets.
+ * Filters out items whose summary is too similar to existing items.
+ */
+function _deduplicateItems(newItems: MemoryItem[], existingItems: MemoryItem[]): MemoryItem[] {
+  return newItems.filter(newItem => {
+    const newWords = _wordSet(newItem.summary);
+    return !existingItems.some(existing => {
+      const existingWords = _wordSet(existing.summary);
+      return _jaccardSimilarity(newWords, existingWords) > DEDUP_THRESHOLD;
+    });
+  });
+}
+
+/**
+ * Convert text to a normalized word set (lowercase, non-word boundaries).
+ */
+function _wordSet(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().split(/\W+/).filter(w => w.length > 0),
+  );
+}
+
+/**
+ * Compute Jaccard similarity between two word sets.
+ */
+function _jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const word of a) {
+    if (b.has(word)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }

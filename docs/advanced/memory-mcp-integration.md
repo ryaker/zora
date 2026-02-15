@@ -106,8 +106,10 @@ Add to your `config.toml`:
 type = "stdio"
 command = "npx"
 args = ["-y", "@mem0/mcp-server"]
-env = { MEM0_API_KEY = "your-api-key" }
+env = { MEM0_API_KEY = "${env:MEM0_API_KEY}" }
 ```
+
+**Note:** Do not hardcode API keys in `config.toml`. Use environment variable references like `${env:MEM0_API_KEY}` and set `export MEM0_API_KEY=your-api-key` in your shell profile or `.env` file.
 
 Or with a self-hosted Mem0 instance:
 
