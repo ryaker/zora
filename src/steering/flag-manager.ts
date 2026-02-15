@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeAtomic } from '../utils/fs.js';
+import { getLogger } from '../utils/logger.js';
 
 export interface FlagEntry {
   flagId: string;
@@ -22,6 +23,21 @@ export interface FlagEntry {
   resolvedAt?: string;
 }
 
+export interface FlagFileDiagnostic {
+  file: string;
+  status: 'loaded' | 'failed';
+  errorType?: 'not_found' | 'permission' | 'parse_error' | 'read_error';
+  reason?: string;
+  timestamp: number;
+}
+
+export interface FlagConfigStatus {
+  filesLoaded: number;
+  filesFailed: number;
+  failedFiles: FlagFileDiagnostic[];
+  timestamp: number;
+}
+
 export interface FlagManagerOptions {
   timeoutMs: number;
   notifyFn?: (msg: string) => void;
@@ -32,11 +48,26 @@ export class FlagManager {
   private readonly _timeoutMs: number;
   private readonly _notifyFn?: (msg: string) => void;
   private readonly _timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private readonly _diagnostics: FlagFileDiagnostic[] = [];
+  private _filesLoaded = 0;
+  private _filesFailed = 0;
 
   constructor(flagsDir: string, options: FlagManagerOptions) {
     this._flagsDir = flagsDir;
     this._timeoutMs = options.timeoutMs;
     this._notifyFn = options.notifyFn;
+  }
+
+  /**
+   * Returns diagnostic status of flag file loading operations.
+   */
+  getConfigStatus(): FlagConfigStatus {
+    return {
+      filesLoaded: this._filesLoaded,
+      filesFailed: this._filesFailed,
+      failedFiles: this._diagnostics.filter(d => d.status === 'failed'),
+      timestamp: Date.now(),
+    };
   }
 
   /**
@@ -81,29 +112,64 @@ export class FlagManager {
    * Lists all flags, optionally filtered by job ID.
    */
   async getFlags(jobId?: string): Promise<FlagEntry[]> {
+    const logger = getLogger();
     try {
       const files = await fs.readdir(this._flagsDir);
       const flags: FlagEntry[] = [];
 
       for (const file of files) {
         if (!file.endsWith('.json')) continue;
+        const filePath = path.join(this._flagsDir, file);
         try {
-          const content = await fs.readFile(path.join(this._flagsDir, file), 'utf8');
+          const content = await fs.readFile(filePath, 'utf8');
           const entry = JSON.parse(content) as FlagEntry;
           if (!jobId || entry.jobId === jobId) {
             flags.push(entry);
           }
+          this._filesLoaded++;
+          this._diagnostics.push({ file, status: 'loaded', timestamp: Date.now() });
         } catch (err) {
-          // R30: Log malformed flag files instead of silently skipping
-          console.warn(`[FlagManager] Failed to read flag file ${file}:`, err instanceof Error ? err.message : String(err));
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const errorType = err instanceof SyntaxError ? 'parse_error' as const : 'read_error' as const;
+
+          logger.warn(`FlagManager: Failed to load flag file`, {
+            path: filePath,
+            errorType,
+            error: errMsg,
+          });
+
+          this._filesFailed++;
+          this._diagnostics.push({
+            file,
+            status: 'failed',
+            errorType,
+            reason: errMsg,
+            timestamp: Date.now(),
+          });
         }
       }
 
       return flags;
     } catch (err) {
-      // R30: Log directory read errors instead of silently returning empty
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(`[FlagManager] Failed to read flags directory:`, err instanceof Error ? err.message : String(err));
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errorType = code === 'EACCES' ? 'permission' as const : 'read_error' as const;
+
+        logger.warn(`FlagManager: Failed to read flags directory`, {
+          path: this._flagsDir,
+          errorType,
+          error: errMsg,
+        });
+
+        this._filesFailed++;
+        this._diagnostics.push({
+          file: this._flagsDir,
+          status: 'failed',
+          errorType,
+          reason: errMsg,
+          timestamp: Date.now(),
+        });
       }
       return [];
     }
@@ -127,6 +193,7 @@ export class FlagManager {
    * Returns the current decision status for a flag.
    */
   async getFlagDecision(flagId: string): Promise<'pending' | 'approved' | 'rejected'> {
+    const logger = getLogger();
     const flagPath = path.join(this._flagsDir, `${flagId}.json`);
     try {
       const content = await fs.readFile(flagPath, 'utf8');
@@ -135,8 +202,29 @@ export class FlagManager {
       if (entry.status === 'approved' || entry.status === 'timed_out') return 'approved';
       return 'rejected';
     } catch (err) {
-      // R30: Log flag read errors instead of silently defaulting
-      console.warn(`[FlagManager] Failed to read flag ${flagId}:`, err instanceof Error ? err.message : String(err));
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const code = (err as NodeJS.ErrnoException).code;
+      const errorType = err instanceof SyntaxError
+        ? 'parse_error' as const
+        : code === 'ENOENT'
+          ? 'not_found' as const
+          : 'read_error' as const;
+
+      logger.warn(`FlagManager: Failed to read flag decision`, {
+        flagId,
+        path: flagPath,
+        errorType,
+        error: errMsg,
+      });
+
+      this._diagnostics.push({
+        file: `${flagId}.json`,
+        status: 'failed',
+        errorType,
+        reason: errMsg,
+        timestamp: Date.now(),
+      });
+
       return 'pending';
     }
   }
@@ -153,6 +241,7 @@ export class FlagManager {
       this._timers.delete(flagId);
     }
 
+    const logger = getLogger();
     const flagPath = path.join(this._flagsDir, `${flagId}.json`);
     let content: string;
     try {
@@ -160,7 +249,19 @@ export class FlagManager {
     } catch {
       throw new Error(`Flag not found: ${flagId}`);
     }
-    const entry = JSON.parse(content) as FlagEntry;
+    let entry: FlagEntry;
+    try {
+      entry = JSON.parse(content) as FlagEntry;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn(`FlagManager: Corrupted flag file during resolve`, {
+        flagId,
+        path: flagPath,
+        errorType: 'parse_error',
+        error: errMsg,
+      });
+      throw new Error(`Corrupted flag file: ${flagId}`);
+    }
 
     // Only resolve if still pending to avoid TOCTOU race
     if (entry.status !== 'pending_review') {
@@ -177,6 +278,7 @@ export class FlagManager {
   }
 
   private async _autoResolve(flagId: string, defaultAction: string): Promise<void> {
+    const logger = getLogger();
     this._timers.delete(flagId);
 
     const flagPath = path.join(this._flagsDir, `${flagId}.json`);
@@ -193,8 +295,23 @@ export class FlagManager {
 
       await writeAtomic(flagPath, JSON.stringify(entry, null, 2));
     } catch (err) {
-      // R30: Log auto-resolve errors instead of silently swallowing
-      console.warn(`[FlagManager] Failed to auto-resolve flag ${flagId}:`, err instanceof Error ? err.message : String(err));
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errorType = err instanceof SyntaxError ? 'parse_error' as const : 'read_error' as const;
+
+      logger.warn(`FlagManager: Failed to auto-resolve flag`, {
+        flagId,
+        path: flagPath,
+        errorType,
+        error: errMsg,
+      });
+
+      this._diagnostics.push({
+        file: `${flagId}.json`,
+        status: 'failed',
+        errorType,
+        reason: errMsg,
+        timestamp: Date.now(),
+      });
     }
   }
 }

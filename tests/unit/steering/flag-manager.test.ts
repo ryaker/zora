@@ -93,4 +93,47 @@ describe('FlagManager', () => {
     const decision = await manager.getFlagDecision('nonexistent');
     expect(decision).toBe('pending');
   });
+
+  it('logs and tracks diagnostics for corrupted flag files', async () => {
+    const manager = new FlagManager(testDir, { timeoutMs: 30000 });
+    // Create a valid flag first so the directory exists
+    await manager.flag('job-1', 'Q?', 'default');
+
+    // Write a corrupted JSON file
+    await fs.writeFile(path.join(testDir, 'corrupted.json'), '{ bad json !!!', 'utf8');
+
+    const flags = await manager.getFlags();
+    // Should get 1 valid flag, corrupted one skipped
+    expect(flags).toHaveLength(1);
+
+    const status = manager.getConfigStatus();
+    expect(status.filesLoaded).toBeGreaterThanOrEqual(1);
+    expect(status.filesFailed).toBeGreaterThanOrEqual(1);
+    expect(status.failedFiles.length).toBeGreaterThanOrEqual(1);
+    expect(status.failedFiles[0]!.errorType).toBe('parse_error');
+  });
+
+  it('getConfigStatus returns zero counts initially', () => {
+    const manager = new FlagManager(testDir, { timeoutMs: 30000 });
+    const status = manager.getConfigStatus();
+    expect(status.filesLoaded).toBe(0);
+    expect(status.filesFailed).toBe(0);
+    expect(status.failedFiles).toEqual([]);
+  });
+
+  it('tracks diagnostics for getFlagDecision on missing flag', async () => {
+    const manager = new FlagManager(testDir, { timeoutMs: 30000 });
+    await manager.getFlagDecision('nonexistent-flag');
+    const status = manager.getConfigStatus();
+    expect(status.failedFiles.length).toBe(1);
+    expect(status.failedFiles[0]!.errorType).toBe('not_found');
+  });
+
+  it('throws on corrupted flag file during resolve', async () => {
+    const manager = new FlagManager(testDir, { timeoutMs: 30000 });
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(path.join(testDir, 'bad_flag.json'), '!!!not json!!!', 'utf8');
+
+    await expect(manager.approve('bad_flag')).rejects.toThrow('Corrupted flag file');
+  });
 });
