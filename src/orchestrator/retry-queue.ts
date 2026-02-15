@@ -17,6 +17,9 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('retry-queue');
 
+/** Maximum backoff cap: 24 hours */
+const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
+
 export interface RetryEntry {
   task: TaskContext;
   retryCount: number;
@@ -43,12 +46,16 @@ export class RetryQueue {
       
       const content = await fs.readFile(this._stateFile, 'utf8');
       const raw = JSON.parse(content) as Array<Record<string, unknown>>;
-      this._queue = raw.map(entry => ({
-        task: entry['task'] as TaskContext,
-        retryCount: entry['retryCount'] as number,
-        lastError: entry['lastError'] as string,
-        nextRunAt: new Date(entry['nextRunAt'] as string),
-      }));
+      this._queue = raw.map(entry => {
+        const date = new Date(entry['nextRunAt'] as string);
+        return {
+          task: entry['task'] as TaskContext,
+          retryCount: entry['retryCount'] as number,
+          lastError: entry['lastError'] as string,
+          // Guard against Invalid Date: treat as immediately ready
+          nextRunAt: isNaN(date.getTime()) ? new Date(0) : date,
+        };
+      });
     } catch (err: unknown) {
       if (isENOENT(err)) {
         // File doesn't exist, which is fine on first run.
@@ -77,8 +84,8 @@ export class RetryQueue {
       }
     }
 
-    // Quadratic backoff: 1m, 4m, 9m... (retryCount^2 minutes)
-    const delayMs = Math.pow(retryCount, 2) * 60 * 1000;
+    // Quadratic backoff: 1m, 4m, 9m... (retryCount^2 minutes), capped at 24h
+    const delayMs = Math.min(Math.pow(retryCount, 2) * 60 * 1000, MAX_BACKOFF_MS);
     const nextRunAt = new Date(Date.now() + delayMs);
 
     const entry: RetryEntry = {
@@ -102,7 +109,11 @@ export class RetryQueue {
    */
   getReadyTasks(): TaskContext[] {
     const now = Date.now();
-    const ready = this._queue.filter(e => e.nextRunAt.getTime() <= now);
+    const ready = this._queue.filter(e => {
+      const time = e.nextRunAt.getTime();
+      // NaN guard: if nextRunAt is invalid, treat as immediately ready
+      return isNaN(time) || time <= now;
+    });
     return ready.map(e => e.task);
   }
 

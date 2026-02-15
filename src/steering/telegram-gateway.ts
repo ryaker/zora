@@ -8,6 +8,7 @@
  */
 
 import type { SteeringManager } from './steering-manager.js';
+import type { SessionManager } from '../orchestrator/session-manager.js';
 import type { SteeringConfig } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -26,11 +27,13 @@ export interface TelegramConfig extends SteeringConfig {
 export class TelegramGateway {
   private readonly _bot: TelegramBotType;
   private readonly _steeringManager: SteeringManager;
+  private readonly _sessionManager?: SessionManager;
   private readonly _allowedUsers: Set<string>;
 
-  private constructor(bot: TelegramBotType, steeringManager: SteeringManager, allowedUsers: string[]) {
+  private constructor(bot: TelegramBotType, steeringManager: SteeringManager, allowedUsers: string[], sessionManager?: SessionManager) {
     this._bot = bot;
     this._steeringManager = steeringManager;
+    this._sessionManager = sessionManager;
     this._allowedUsers = new Set(allowedUsers);
 
     this._setupHandlers();
@@ -40,7 +43,7 @@ export class TelegramGateway {
    * Factory method — loads node-telegram-bot-api dynamically.
    * Throws a clear error if the optional dep isn't installed.
    */
-  static async create(config: TelegramConfig, steeringManager: SteeringManager): Promise<TelegramGateway> {
+  static async create(config: TelegramConfig, steeringManager: SteeringManager, sessionManager?: SessionManager): Promise<TelegramGateway> {
     const token = config.bot_token || process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       throw new Error('TELEGRAM_BOT_TOKEN is required for TelegramGateway');
@@ -69,7 +72,7 @@ export class TelegramGateway {
       console.warn('[Telegram] Webhook mode selected. Ensure your webhook URL is configured externally.');
     }
     const bot = new TelegramBot(token, { polling: mode === 'polling' });
-    return new TelegramGateway(bot, steeringManager, config.allowed_users);
+    return new TelegramGateway(bot, steeringManager, config.allowed_users, sessionManager);
   }
 
   private _setupHandlers(): void {
@@ -119,8 +122,34 @@ export class TelegramGateway {
       if (!userId || !this._allowedUsers.has(userId)) return;
 
       const jobId = match![1]!;
-      // Future: Query session manager for real status
-      this._bot.sendMessage(msg.chat.id, `ℹ️ STATUS [${jobId}]: Monitoring active (simulated)`);
+
+      try {
+        const lines: string[] = [`STATUS [${jobId}]`];
+
+        // Query pending steering messages
+        const pending = await this._steeringManager.getPendingMessages(jobId);
+        lines.push(`Pending steer messages: ${pending.length}`);
+
+        // Query session state if session manager is available
+        if (this._sessionManager) {
+          const sessions = await this._sessionManager.listSessions();
+          const session = sessions.find(s => s.jobId === jobId);
+          if (session) {
+            lines.push(`Session status: ${session.status}`);
+            lines.push(`Event count: ${session.eventCount}`);
+            lines.push(`Last activity: ${session.lastActivity ? session.lastActivity.toISOString() : 'N/A'}`);
+          } else {
+            lines.push('Session: not found');
+          }
+        } else {
+          lines.push('Session manager: not available');
+        }
+
+        this._bot.sendMessage(msg.chat.id, lines.join('\n'));
+      } catch (err) {
+        log.error({ jobId, error: String(err) }, 'Failed to retrieve status');
+        this._bot.sendMessage(msg.chat.id, `Failed to retrieve status for ${jobId}: ${String(err)}`);
+      }
     });
 
     /**

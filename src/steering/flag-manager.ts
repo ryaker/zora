@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeAtomic } from '../utils/fs.js';
 import { getLogger } from '../utils/logger.js';
+import { validateJobId } from '../utils/validate-job-id.js';
 
 export interface FlagEntry {
   flagId: string;
@@ -78,6 +79,7 @@ export class FlagManager {
     question: string,
     defaultAction: string,
   ): Promise<string> {
+    validateJobId(jobId);
     await fs.mkdir(this._flagsDir, { recursive: true });
 
     const flagId = `flag_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;

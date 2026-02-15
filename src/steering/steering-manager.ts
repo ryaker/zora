@@ -11,8 +11,9 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import { writeAtomic } from '../utils/fs.js';
-import type { 
-  SteeringMessage 
+import { validateJobId } from '../utils/validate-job-id.js';
+import type {
+  SteeringMessage
 } from './types.js';
 
 export class SteeringManager {
@@ -35,6 +36,7 @@ export class SteeringManager {
    * Injects a steering message for a specific job.
    */
   async injectMessage(message: SteeringMessage): Promise<string> {
+    validateJobId(message.jobId);
     const messageId = `steer_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     const jobDir = path.join(this._steeringDir, message.jobId);
     
@@ -52,6 +54,7 @@ export class SteeringManager {
    * Retrieves all unread/pending steering messages for a job.
    */
   async getPendingMessages(jobId: string): Promise<(SteeringMessage & { id: string })[]> {
+    validateJobId(jobId);
     const jobDir = path.join(this._steeringDir, jobId);
     if (!(await this._exists(jobDir))) return [];
 
@@ -74,6 +77,7 @@ export class SteeringManager {
    * Acknowledges or archives a steering message.
    */
   async archiveMessage(jobId: string, messageId: string): Promise<void> {
+    validateJobId(jobId);
     const messagePath = path.join(this._steeringDir, jobId, `${messageId}.json`);
     const archiveDir = path.join(this._steeringDir, jobId, 'archive');
     

@@ -9,6 +9,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { loadConfig } from '../config/loader.js';
 import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { DashboardServer } from '../dashboard/server.js';
@@ -75,7 +76,7 @@ async function main() {
     authMonitor: orchestrator.authMonitor,
     submitTask: async (prompt: string) => {
       // Generate jobId immediately and kick off task in background (don't await)
-      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const jobId = `job_${crypto.randomUUID()}`;
       orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
         dashboard.broadcastEvent({ type: event.type, data: event.content });
       } }).catch(err => {
@@ -120,27 +121,46 @@ async function main() {
 
   log.info('Zora daemon is running');
 
-  // Graceful shutdown handler
-  const shutdown = async (signal: string) => {
-    log.info({ signal }, 'Received signal, shutting down');
-    try {
-      if (telegramGateway) {
-        await telegramGateway.stop();
-      }
-      await dashboard.stop();
-      await orchestrator.shutdown();
-    } catch (err) {
-      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Error during shutdown');
-    }
+  // Graceful shutdown handler with 30-second timeout
+  const SHUTDOWN_TIMEOUT_MS = 30_000;
 
-    // Remove pidfile
+  const cleanupPidFile = () => {
     const pidFile = path.join(configDir, 'state', 'daemon.pid');
     try {
       fs.unlinkSync(pidFile);
     } catch {
       // Already removed
     }
+  };
 
+  const shutdown = async (signal: string) => {
+    log.info({ signal }, 'Received signal, shutting down');
+
+    const graceful = async () => {
+      try {
+        if (telegramGateway) {
+          await telegramGateway.stop();
+        }
+        await dashboard.stop();
+        await orchestrator.shutdown();
+      } catch (err) {
+        log.error({ err: err instanceof Error ? err.message : String(err) }, 'Error during shutdown');
+      }
+    };
+
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Shutdown timed out after 30 seconds')), SHUTDOWN_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([graceful(), timeout]);
+    } catch (err) {
+      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Shutdown timeout — forcing exit');
+      cleanupPidFile();
+      process.exit(1);
+    }
+
+    cleanupPidFile();
     process.exit(0);
   };
 

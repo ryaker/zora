@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check, Play } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check, Play, WifiOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 
@@ -32,6 +32,13 @@ interface SystemInfo {
 const ZORA_VERSION = 'v0.9.0';
 const MAX_LOGS = 100;
 let logIdCounter = 0;
+
+/** SSE reconnection constants */
+const SSE_MAX_RETRIES = 10;
+const SSE_BASE_DELAY_MS = 1000;
+const SSE_MAX_DELAY_MS = 30000;
+
+type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -140,6 +147,33 @@ const WelcomePanel: React.FC = () => (
   </div>
 );
 
+/** DASH-01: Connection status banner — LCARS-styled indicator for SSE state */
+const ConnectionBanner: React.FC<{ status: ConnectionStatus }> = ({ status }) => {
+  if (status === 'connected') return null;
+
+  const isReconnecting = status === 'reconnecting';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className={`flex items-center gap-2 px-4 py-1.5 mb-2 font-data text-xs uppercase tracking-wider border-l-2 ${
+        isReconnecting
+          ? 'bg-zora-amber/10 border-zora-amber text-zora-amber'
+          : 'bg-red-500/10 border-red-500 text-red-400'
+      }`}
+    >
+      <WifiOff size={12} className={isReconnecting ? 'animate-pulse' : ''} />
+      <span>
+        {isReconnecting
+          ? 'Reconnecting to event stream...'
+          : 'Connection lost — reload to retry'}
+      </span>
+    </motion.div>
+  );
+};
+
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [jobs, setJobs] = useState<JobStatus[]>([]);
@@ -155,6 +189,7 @@ const App: React.FC = () => {
   const [taskPrompt, setTaskPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [sseStatus, setSseStatus] = useState<ConnectionStatus>('disconnected');
 
   useEffect(() => {
     const fetchHealth = async () => {
@@ -195,14 +230,22 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // SSE event stream for real-time activity feed
+  // DASH-01: SSE event stream with exponential backoff reconnection
   useEffect(() => {
-    const eventSource = new EventSource('/api/events');
+    let eventSource: EventSource | null = null;
+    let retryCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let unmounted = false;
 
-    eventSource.onmessage = (event) => {
+    function handleMessage(event: MessageEvent) {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'connected') return;
+        if (data.type === 'connected') {
+          // Successful connection — reset retry counter
+          retryCount = 0;
+          setSseStatus('connected');
+          return;
+        }
 
         let message: string;
         switch (data.type) {
@@ -270,14 +313,52 @@ const App: React.FC = () => {
           ...prev,
         ].slice(0, MAX_LOGS));
       }
-    };
+    }
 
-    eventSource.onerror = () => {
-      console.warn('SSE connection lost, reconnecting...');
-    };
+    function handleError() {
+      if (unmounted) return;
+
+      // Close the failed connection
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+
+      if (retryCount >= SSE_MAX_RETRIES) {
+        setSseStatus('disconnected');
+        console.error(`[SSE] Connection lost after ${SSE_MAX_RETRIES} retries`);
+        setLogs(prev => [
+          { id: ++logIdCounter, message: 'Connection lost — automatic reconnection exhausted' },
+          ...prev,
+        ].slice(0, MAX_LOGS));
+        return;
+      }
+
+      setSseStatus('reconnecting');
+      // Exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+      const delay = Math.min(SSE_BASE_DELAY_MS * Math.pow(2, retryCount), SSE_MAX_DELAY_MS);
+      retryCount++;
+      console.warn(`[SSE] Connection lost, retry ${retryCount}/${SSE_MAX_RETRIES} in ${delay}ms`);
+
+      retryTimer = setTimeout(() => {
+        if (!unmounted) connect();
+      }, delay);
+    }
+
+    function connect() {
+      if (unmounted) return;
+
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = handleMessage;
+      eventSource.onerror = handleError;
+    }
+
+    connect();
 
     return () => {
-      eventSource.close();
+      unmounted = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (eventSource) eventSource.close();
     };
   }, []);
 
@@ -409,6 +490,11 @@ const App: React.FC = () => {
         </div>
         <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
       </div>
+
+      {/* DASH-01: Connection status banner */}
+      <AnimatePresence>
+        <ConnectionBanner status={sseStatus} />
+      </AnimatePresence>
 
       <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
 

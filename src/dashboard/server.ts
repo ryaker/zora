@@ -16,6 +16,7 @@ import type { SessionManager } from '../orchestrator/session-manager.js';
 import type { SteeringManager } from '../steering/steering-manager.js';
 import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
+import { createAuthMiddleware } from './auth-middleware.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('dashboard');
@@ -40,6 +41,13 @@ export interface DashboardOptions {
   submitTask?: SubmitTaskFn;
   port?: number;
   host?: string;
+  /**
+   * Bearer token for dashboard API authentication.
+   * When set, all API routes (except /api/health) require
+   * Authorization: Bearer <token>. When unset, auth is
+   * skipped (localhost-only use case).
+   */
+  dashboardToken?: string;
 }
 
 export class DashboardServer {
@@ -56,7 +64,21 @@ export class DashboardServer {
     this._app.use(express.json({ limit: '1mb' }));
 
     // R21: Rate limiting — 100 requests per 15 minutes per IP
+    // Localhost is exempted so the dashboard's own polling (health, jobs,
+    // system) doesn't consume the rate limit budget. This is intentional:
+    // the frontend is served from localhost and polls ~100 req/15min.
     this._app.use(this._createRateLimiter());
+
+    // SEC-01: Mount Bearer token auth on API routes when a token is configured.
+    // When no dashboardToken is set, auth is skipped entirely — this covers
+    // the localhost-only use case where the dashboard is not exposed externally.
+    const token = options.dashboardToken ?? process.env['ZORA_DASHBOARD_TOKEN'];
+    if (token) {
+      this._app.use('/api', createAuthMiddleware({ staticToken: token }));
+      log.info('Dashboard API authentication enabled');
+    } else {
+      log.warn('Dashboard API authentication disabled — no dashboardToken configured');
+    }
 
     // Serve static frontend files (Vite build output)
     const staticPath = path.join(__dirname, 'frontend', 'dist');
