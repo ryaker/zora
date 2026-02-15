@@ -67,7 +67,7 @@ export class Router {
   ];
 
   /** Simple token count threshold — tasks below this are "simple" */
-  private static readonly SIMPLE_TOKEN_THRESHOLD = 80;
+  private static readonly SIMPLE_TOKEN_THRESHOLD = 20;
 
   constructor(options: RouterOptions) {
     this._providers = options.providers;
@@ -145,20 +145,20 @@ export class Router {
       mixed: 0,
     };
 
-    for (const kw of Router.REASONING_KEYWORDS) {
-      if (text.includes(kw)) scores.reasoning += 2; // Reasoning gets double weight
-    }
-    for (const kw of Router.CODING_KEYWORDS) {
-      if (text.includes(kw)) scores.coding += 1;
-    }
-    for (const kw of Router.SEARCH_KEYWORDS) {
-      if (text.includes(kw)) scores.search += 1;
-    }
-    for (const kw of Router.DATA_KEYWORDS) {
-      if (text.includes(kw)) scores.data += 1;
-    }
-    for (const kw of Router.CREATIVE_KEYWORDS) {
-      if (text.includes(kw)) scores.creative += 1;
+    const keywordConfig: [TaskResourceType, readonly string[], number][] = [
+      ['reasoning', Router.REASONING_KEYWORDS, 2],
+      ['coding', Router.CODING_KEYWORDS, 1],
+      ['search', Router.SEARCH_KEYWORDS, 1],
+      ['data', Router.DATA_KEYWORDS, 1],
+      ['creative', Router.CREATIVE_KEYWORDS, 1],
+    ];
+
+    for (const [type, keywords, weight] of keywordConfig) {
+      for (const kw of keywords) {
+        if (text.includes(kw)) {
+          scores[type] += weight;
+        }
+      }
     }
 
     // Pick the resource type with highest score; default to reasoning
@@ -184,8 +184,12 @@ export class Router {
       nonZeroScores >= 3
     ) {
       complexity = 'complex';
-    } else if (text.length < Router.SIMPLE_TOKEN_THRESHOLD && !text.includes('research')) {
-      complexity = 'simple';
+    } else {
+      // Estimate token count by whitespace splitting (rough approximation)
+      const tokenCount = text.split(/\s+/).length;
+      if (tokenCount < Router.SIMPLE_TOKEN_THRESHOLD && !text.includes('research')) {
+        complexity = 'simple';
+      }
     }
 
     return { complexity, resourceType };
