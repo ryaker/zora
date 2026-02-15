@@ -1137,7 +1137,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 3,
@@ -1160,7 +1160,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 1,
@@ -1275,7 +1275,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 5,
@@ -1298,7 +1298,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 4,
@@ -1321,7 +1321,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 3,
@@ -1344,7 +1344,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 4,
@@ -1367,7 +1367,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/SECURITY_HARDENING.md",
       "wsjf": {
         "usability_value": 4,
