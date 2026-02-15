@@ -19,6 +19,9 @@ import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
 import type { RoutineDefinition, CostTier } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('routine-manager');
 
 /**
  * Function signature for submitting routine tasks through the orchestration pipeline.
@@ -47,7 +50,7 @@ export class RoutineManager {
     try {
       await fs.mkdir(this._routinesDir, { recursive: true });
     } catch (err) {
-      console.error(`Failed to create routines directory at ${this._routinesDir}:`, err);
+      log.error({ dir: this._routinesDir, err }, 'Failed to create routines directory');
     }
 
     await this.loadAll();
@@ -65,7 +68,7 @@ export class RoutineManager {
         }
       }
     } catch (err) {
-      console.error(`Failed to read routines directory:`, err);
+      log.error({ err }, 'Failed to read routines directory');
     }
   }
 
@@ -83,10 +86,10 @@ export class RoutineManager {
           this.scheduleRoutine(definition);
         }
       } else {
-        console.error(`Invalid routine definition in ${filePath}`);
+        log.error({ filePath }, 'Invalid routine definition');
       }
     } catch (err) {
-      console.error(`Failed to load routine from ${filePath}:`, err);
+      log.error({ filePath, err }, 'Failed to load routine');
     }
   }
 
@@ -111,7 +114,7 @@ export class RoutineManager {
           maxCostTier: routine.max_cost_tier,
         });
       } catch (err) {
-        console.error(`Routine ${routine.name} failed:`, err);
+        log.error({ routine: routine.name, err }, 'Routine execution failed');
       }
     });
 
@@ -154,10 +157,7 @@ export class RoutineManager {
     if (r['max_cost_tier'] !== undefined) {
       const validTiers = ['free', 'included', 'metered', 'premium'];
       if (!validTiers.includes(r['max_cost_tier'] as string)) {
-        console.warn(
-          `Invalid max_cost_tier "${r['max_cost_tier']}" in routine "${r['name']}". ` +
-          `Valid values: ${validTiers.join(', ')}. Ignoring.`
-        );
+        log.warn({ routine: r['name'], costTier: r['max_cost_tier'], validTiers }, 'Invalid max_cost_tier, ignoring');
       }
     }
 

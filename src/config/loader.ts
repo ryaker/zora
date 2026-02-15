@@ -8,6 +8,9 @@
 import { readFile } from 'node:fs/promises';
 import { parse as parseTOML } from 'smol-toml';
 import type { ZoraConfig, ProviderConfig, McpServerEntry } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('config-loader');
 import { DEFAULT_CONFIG, validateConfig } from './defaults.js';
 
 export class ConfigError extends Error {
@@ -143,7 +146,7 @@ export function toSdkMcpServers(
     if (server.type === 'stdio' || (!server.type && server.command)) {
       // stdio transport
       if (!server.command) {
-        console.warn(`Skipping MCP server "${name}": stdio transport requires a command`);
+        log.warn({ server: name }, 'Skipping MCP server: stdio transport requires a command');
         continue;
       }
       result[name] = {
@@ -154,7 +157,7 @@ export function toSdkMcpServers(
     } else {
       // HTTP or SSE transport
       if (!server.url) {
-        console.warn(`Skipping MCP server "${name}": http/sse transport requires a url`);
+        log.warn({ server: name }, 'Skipping MCP server: http/sse transport requires a url');
         continue;
       }
       result[name] = {

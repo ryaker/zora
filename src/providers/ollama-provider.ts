@@ -24,6 +24,9 @@ import type {
   ProviderConfig,
 } from '../types.js';
 import { isTextEvent, isSteeringEvent } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('ollama-provider');
 
 export interface OllamaProviderOptions {
   config: ProviderConfig;
@@ -144,7 +147,7 @@ export class OllamaProvider implements LLMProvider {
 
     if (!response.ok) {
       const body = await response.text().catch((readErr) => {
-        console.error('[OllamaProvider] Failed to read error response body:', readErr);
+        log.error({ err: readErr }, 'Failed to read error response body');
         return '';
       });
       yield {
@@ -184,10 +187,7 @@ export class OllamaProvider implements LLMProvider {
         } catch (parseErr: unknown) {
           // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
           const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-          console.error('[OllamaProvider] Failed to parse streaming JSON line:', {
-            rawContent: line.slice(0, 200),
-            error: msg,
-          });
+          log.error({ rawContent: line.slice(0, 200), err: msg }, 'Failed to parse streaming JSON line');
           continue;
         }
 
@@ -337,10 +337,7 @@ export class OllamaProvider implements LLMProvider {
       } catch (parseErr: unknown) {
         // TYPE-05: Log malformed tool call JSON instead of silently dropping
         const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-        console.error('[OllamaProvider] Failed to parse JSON tool call:', {
-          rawContent: match[1]?.slice(0, 200),
-          error: msg,
-        });
+        log.error({ rawContent: match[1]?.slice(0, 200), err: msg }, 'Failed to parse JSON tool call');
       }
     }
 
@@ -367,7 +364,7 @@ export class OllamaProvider implements LLMProvider {
         totalBytes += str.length;
 
         if (totalBytes > MAX_BUFFER) {
-          console.warn('[OllamaProvider] Output exceeded 50MB, truncating stream.');
+          log.warn('Output exceeded 50MB, truncating stream');
           break;
         }
 

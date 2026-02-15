@@ -9,6 +9,9 @@
 
 import type { SteeringManager } from './steering-manager.js';
 import type { SteeringConfig } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('telegram-gateway');
 
 // Lazy-loaded: node-telegram-bot-api is an optional peer dependency
 type TelegramBotType = import('node-telegram-bot-api');
@@ -64,7 +67,7 @@ export class TelegramGateway {
     this._bot.on('message', (msg) => {
       const userId = msg.from?.id?.toString();
       if (!userId || !this._allowedUsers.has(userId)) {
-        console.warn(`[Telegram] Unauthorized access attempt from user ${userId}`);
+        log.warn({ userId }, 'Unauthorized access attempt');
         this._bot.sendMessage(msg.chat.id, '⛔ UNAUTHORIZED: Access Denied.');
         return;
       }

@@ -13,6 +13,9 @@ import fs from 'node:fs/promises';
 import { writeAtomic } from '../utils/fs.js';
 import { isENOENT } from '../utils/errors.js';
 import type { TaskContext } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('retry-queue');
 
 export interface RetryEntry {
   task: TaskContext;
@@ -52,7 +55,7 @@ export class RetryQueue {
         this._queue = [];
       } else {
         // For corruption or other errors, log it and start fresh.
-        console.warn(`[RetryQueue] Failed to load state from ${this._stateFile}, starting fresh. Error:`, err);
+        log.warn({ stateFile: this._stateFile, err }, 'Failed to load state, starting fresh');
         this._queue = [];
       }
     }

@@ -11,7 +11,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { AuditEntry, AuditEntryEventType } from './security-types.js';
+import { createLogger } from '../utils/logger.js';
 
+const log = createLogger('audit-logger');
 const GENESIS_HASH = 'genesis';
 
 export type AuditEntryInput = Omit<AuditEntry, 'previousHash' | 'hash' | 'entryId'>;
@@ -51,7 +53,7 @@ export class AuditLogger {
       this._writeQueue = this._writeQueue
         .catch((err) => {
           // ERR-01: Log previous write failures instead of silently swallowing them
-          console.error('[AuditLogger] Previous write operation failed:', err instanceof Error ? err.message : String(err));
+          log.error({ err: err instanceof Error ? err.message : String(err) }, 'Previous write operation failed');
         })
         .then(async () => {
           const entry = await this._appendEntry(input);
@@ -201,7 +203,7 @@ export class AuditLogger {
       } catch (err) {
         // R27: Log audit write failures instead of silently swallowing them.
         // For an audit log, silent failure means undetectable data loss.
-        console.error(`[AuditLogger] Failed to write audit entry for tool ${toolName}:`, err instanceof Error ? err.message : String(err));
+        log.error({ toolName, err: err instanceof Error ? err.message : String(err) }, 'Failed to write audit entry');
       }
 
       return {};
@@ -270,11 +272,7 @@ export class AuditLogger {
       await fs.appendFile(this._logPath, JSON.stringify(entry) + '\n', 'utf-8');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[AuditLogger] Failed to write audit entry to disk:', {
-        path: this._logPath,
-        entryId: entry.entryId,
-        error: error.message,
-      });
+      log.error({ path: this._logPath, entryId: entry.entryId, err: error.message }, 'Failed to write audit entry to disk');
       throw new Error(`Audit log write failed: ${error.message}`, { cause: error });
     }
 

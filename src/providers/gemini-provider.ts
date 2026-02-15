@@ -20,6 +20,9 @@ import type {
   ProviderConfig,
 } from '../types.js';
 import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('gemini-provider');
 
 export interface GeminiProviderOptions {
   config: ProviderConfig;
@@ -183,7 +186,7 @@ export class GeminiProvider implements LLMProvider {
         if (!bufferTruncated) {
           if (buffer.length + line.length + 1 > GeminiProvider.MAX_BUFFER_SIZE) {
             bufferTruncated = true;
-            console.warn(`[GeminiProvider] Tool-call parsing buffer exceeded ${GeminiProvider.MAX_BUFFER_SIZE} bytes; further output will not be parsed for tool calls.`);
+            log.warn({ maxBytes: GeminiProvider.MAX_BUFFER_SIZE }, 'Tool-call parsing buffer exceeded limit; further output will not be parsed for tool calls');
           } else {
             buffer += line + '\n';
           }
@@ -323,12 +326,7 @@ export class GeminiProvider implements LLMProvider {
       } catch (e) {
         // ERR-02: Log malformed XML tool calls with full context for debugging
         const error = e instanceof Error ? e : new Error(String(e));
-        console.error('[GeminiProvider] Failed to parse XML tool call:', {
-          tool: match[1],
-          rawContent: match[2]?.trim().slice(0, 200), // First 200 chars for context
-          error: error.message,
-          stack: error.stack,
-        });
+        log.error({ tool: match[1], rawContent: match[2]?.trim().slice(0, 200), err: error.message }, 'Failed to parse XML tool call');
       }
     }
 
@@ -350,11 +348,7 @@ export class GeminiProvider implements LLMProvider {
         } catch (e) {
           // ERR-02/TYPE-05: Log malformed JSON tool calls with full context for debugging
           const error = e instanceof Error ? e : new Error(String(e));
-          console.error('[GeminiProvider] Failed to parse JSON tool call:', {
-            rawContent: match[1]?.slice(0, 200),
-            error: error.message,
-            stack: error.stack,
-          });
+          log.error({ rawContent: match[1]?.slice(0, 200), err: error.message }, 'Failed to parse JSON tool call');
         }
       }
     }
@@ -373,7 +367,7 @@ export class GeminiProvider implements LLMProvider {
       const str = chunk.toString();
       totalBytes += str.length;
       if (totalBytes > GeminiProvider.MAX_BUFFER_SIZE) {
-        console.warn(`[GeminiProvider] Output exceeded ${GeminiProvider.MAX_BUFFER_SIZE} bytes, truncating stream.`);
+        log.warn({ maxBytes: GeminiProvider.MAX_BUFFER_SIZE }, 'Output exceeded maximum buffer size, truncating stream');
         yield '[Output truncated: exceeded maximum buffer size]';
         truncated = true;
         break;

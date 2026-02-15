@@ -9,6 +9,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { GeminiBridge } from './gemini-bridge.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('bridge-watchdog');
 
 export interface BridgeWatchdogOptions {
   healthCheckIntervalMs: number;
@@ -94,9 +97,7 @@ export class BridgeWatchdog {
 
       if (elapsed > this._maxStaleMs) {
         if (this._restartCount >= this._maxRestarts) {
-          console.error(
-            `[BridgeWatchdog] Max restarts (${this._maxRestarts}) exceeded. Stopping watchdog.`,
-          );
+          log.error({ maxRestarts: this._maxRestarts }, 'Max restarts exceeded, stopping watchdog');
           this.stop();
           return;
         }
@@ -105,9 +106,7 @@ export class BridgeWatchdog {
         const backoffMs = Math.min(1000 * Math.pow(2, this._restartCount), 60_000);
         this._restartCount++;
 
-        console.warn(
-          `[BridgeWatchdog] Heartbeat stale (${elapsed}ms). Restarting bridge (attempt ${this._restartCount}/${this._maxRestarts}, backoff ${backoffMs}ms).`,
-        );
+        log.warn({ elapsedMs: elapsed, attempt: this._restartCount, maxRestarts: this._maxRestarts, backoffMs }, 'Heartbeat stale, restarting bridge');
 
         this._bridge.stop();
 
@@ -125,7 +124,7 @@ export class BridgeWatchdog {
         }
       }
     } catch (err) {
-      console.error('[BridgeWatchdog] Health check error:', err);
+      log.error({ err }, 'Health check error');
     } finally {
       this._checking = false;
     }

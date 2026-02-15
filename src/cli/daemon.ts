@@ -16,6 +16,9 @@ import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('daemon');
 
 function createProviders(config: ZoraConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
@@ -42,7 +45,7 @@ async function main() {
   const policyPath = path.join(configDir, 'policy.toml');
 
   if (!fs.existsSync(configPath)) {
-    console.error('Config not found. Run `zora-agent init` first.');
+    log.error('Config not found. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -54,7 +57,7 @@ async function main() {
   try {
     policy = await loadPolicy(policyPath);
   } catch {
-    console.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
+    log.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 
@@ -74,7 +77,7 @@ async function main() {
       orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
         dashboard.broadcastEvent({ type: event.type, data: event.content });
       } }).catch(err => {
-        console.error(`[Daemon] Task ${jobId} failed:`, err);
+        log.error({ jobId, err }, 'Task failed');
         dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
       });
       return jobId;
@@ -84,16 +87,16 @@ async function main() {
   });
   await dashboard.start();
 
-  console.log('[Daemon] Zora daemon is running.');
+  log.info('Zora daemon is running');
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
-    console.log(`[Daemon] Received ${signal}, shutting down...`);
+    log.info({ signal }, 'Received signal, shutting down');
     try {
       await dashboard.stop();
       await orchestrator.shutdown();
     } catch (err) {
-      console.error(`[Daemon] Error during shutdown:`, err instanceof Error ? err.message : String(err));
+      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Error during shutdown');
     }
 
     // Remove pidfile
@@ -107,11 +110,11 @@ async function main() {
     process.exit(0);
   };
 
-  process.on('SIGTERM', () => { shutdown('SIGTERM').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
-  process.on('SIGINT', () => { shutdown('SIGINT').catch(err => { console.error('[Daemon] Shutdown error:', err); process.exit(1); }); });
+  process.on('SIGTERM', () => { shutdown('SIGTERM').catch(err => { log.error({ err }, 'Shutdown error'); process.exit(1); }); });
+  process.on('SIGINT', () => { shutdown('SIGINT').catch(err => { log.error({ err }, 'Shutdown error'); process.exit(1); }); });
 }
 
 main().catch((err) => {
-  console.error('[Daemon] Fatal error:', err);
+  log.fatal({ err }, 'Fatal error');
   process.exit(1);
 });

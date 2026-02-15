@@ -7,8 +7,10 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createLogger } from '../utils/logger.js';
 
 const execFileAsync = promisify(execFile);
+const log = createLogger('notifications');
 
 export class NotificationTools {
   /**
@@ -29,7 +31,7 @@ export class NotificationTools {
       await execFileAsync('osascript', ['-e', script]);
     } catch (err) {
       // If notification fails (e.g. not on macOS or headless), we log to console
-      console.log(`[Notification] ${title}: ${message}`);
+      log.info({ title, message }, 'Notification fallback (osascript unavailable)');
     }
   }
 }

@@ -8,6 +8,9 @@ import type { Command } from 'commander';
 import path from 'node:path';
 import { injectSteer, injectFlagDecision } from '../steering/steer-injector.js';
 import { FlagManager } from '../steering/flag-manager.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('steer-commands');
 
 export function registerSteerCommands(
   program: Command,
@@ -62,12 +65,12 @@ export function registerSteerCommands(
       const flags = await fm.getFlags();
       const flag = flags.find(f => f.flagId === flagId);
       if (!flag) {
-        console.error(`Flag not found: ${flagId}`);
+        log.error({ flagId }, 'Flag not found');
         process.exitCode = 1;
         return;
       }
       if (flag.jobId !== jobId) {
-        console.error(`Job ID mismatch: flag ${flagId} belongs to job ${flag.jobId}, not ${jobId}`);
+        log.error({ flagId, expected: jobId, actual: flag.jobId }, 'Job ID mismatch');
         process.exitCode = 1;
         return;
       }
@@ -90,12 +93,12 @@ export function registerSteerCommands(
       const flags = await fm.getFlags();
       const flag = flags.find(f => f.flagId === flagId);
       if (!flag) {
-        console.error(`Flag not found: ${flagId}`);
+        log.error({ flagId }, 'Flag not found');
         process.exitCode = 1;
         return;
       }
       if (flag.jobId !== jobId) {
-        console.error(`Job ID mismatch: flag ${flagId} belongs to job ${flag.jobId}, not ${jobId}`);
+        log.error({ flagId, expected: jobId, actual: flag.jobId }, 'Job ID mismatch');
         process.exitCode = 1;
         return;
       }

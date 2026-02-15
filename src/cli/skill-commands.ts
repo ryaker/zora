@@ -11,6 +11,9 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { loadSkills } from '../skills/skill-loader.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('skill-commands');
 
 export function registerSkillCommands(program: Command): void {
   const skill = program
@@ -48,10 +51,10 @@ export function registerSkillCommands(program: Command): void {
       const found = skills.find((s) => s.name === name);
 
       if (!found) {
-        console.error(`Skill "${name}" not found in ${skillsDir}`);
+        log.error({ name, skillsDir }, 'Skill not found');
         const similar = skills.filter((s) => s.name.includes(name));
         if (similar.length > 0) {
-          console.error(`\nDid you mean: ${similar.map((s) => s.name).join(', ')}?`);
+          log.info({ suggestions: similar.map((s) => s.name) }, 'Did you mean one of these?');
         }
         process.exit(1);
       }

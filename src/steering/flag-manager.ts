@@ -139,11 +139,7 @@ export class FlagManager {
                 ? 'permission' as const
                 : 'read_error' as const;
 
-          logger.warn(`FlagManager: Failed to load flag file`, {
-            path: filePath,
-            errorType,
-            error: errMsg,
-          });
+          logger.warn({ path: filePath, errorType, error: errMsg }, 'Failed to load flag file');
 
           this._filesFailed++;
           this._diagnostics.push({
@@ -167,11 +163,7 @@ export class FlagManager {
             ? 'permission' as const
             : 'read_error' as const;
 
-        logger.warn(`FlagManager: Failed to read flags directory`, {
-          path: this._flagsDir,
-          errorType,
-          error: errMsg,
-        });
+        logger.warn({ path: this._flagsDir, errorType, error: errMsg }, 'Failed to read flags directory');
 
         this._filesFailed++;
         this._diagnostics.push({
@@ -221,12 +213,7 @@ export class FlagManager {
           ? 'not_found' as const
           : 'read_error' as const;
 
-      logger.warn(`FlagManager: Failed to read flag decision`, {
-        flagId,
-        path: flagPath,
-        errorType,
-        error: errMsg,
-      });
+      logger.warn({ flagId, path: flagPath, errorType, error: errMsg }, 'Failed to read flag decision');
 
       this._diagnostics.push({
         file: `${flagId}.json`,
@@ -265,12 +252,7 @@ export class FlagManager {
       entry = JSON.parse(content) as FlagEntry;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      logger.warn(`FlagManager: Corrupted flag file during resolve`, {
-        flagId,
-        path: flagPath,
-        errorType: 'parse_error',
-        error: errMsg,
-      });
+      logger.warn({ flagId, path: flagPath, errorType: 'parse_error', error: errMsg }, 'Corrupted flag file during resolve');
       throw new Error(`Corrupted flag file: ${flagId}`);
     }
 
@@ -309,12 +291,7 @@ export class FlagManager {
       const errMsg = err instanceof Error ? err.message : String(err);
       const errorType = err instanceof SyntaxError ? 'parse_error' as const : 'read_error' as const;
 
-      logger.warn(`FlagManager: Failed to auto-resolve flag`, {
-        flagId,
-        path: flagPath,
-        errorType,
-        error: errMsg,
-      });
+      logger.warn({ flagId, path: flagPath, errorType, error: errMsg }, 'Failed to auto-resolve flag');
 
       this._diagnostics.push({
         file: `${flagId}.json`,

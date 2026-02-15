@@ -37,6 +37,9 @@ import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { IntentCapsuleManager } from '../security/intent-capsule.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('orchestrator');
 
 export interface OrchestratorOptions {
   config: ZoraConfig;
@@ -148,7 +151,7 @@ export class Orchestrator {
         try {
           await this._authMonitor.checkAll();
         } catch (err) {
-          console.error('[Orchestrator] AuthMonitor check failed:', err);
+          log.error({ err }, 'AuthMonitor check failed');
         }
         scheduleAuthCheck();
       }, 5 * 60 * 1000);
@@ -165,12 +168,12 @@ export class Orchestrator {
               await this.submitTask({ prompt: task.task, jobId: task.jobId });
               await this._retryQueue.remove(task.jobId);
             } catch (err) {
-              console.error(`[Orchestrator] Retry failed for ${task.jobId}:`, err);
+              log.error({ jobId: task.jobId, err }, 'Retry failed');
               // Leave task in queue for next poll cycle
             }
           }
         } catch (err) {
-          console.error('[Orchestrator] RetryQueue poll failed:', err);
+          log.error({ err }, 'RetryQueue poll failed');
         }
         scheduleRetryPoll();
       }, 30 * 1000);

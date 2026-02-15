@@ -17,7 +17,9 @@ import { runDoctorChecks } from './doctor.js';
 import type { DoctorResult } from './doctor.js';
 import type { PresetName } from './presets.js';
 import type { ZoraPolicy } from '../types.js';
+import { createLogger } from '../utils/logger.js';
 
+const log = createLogger('init');
 const ZORA_DIR = path.join(os.homedir(), '.zora');
 
 /**
@@ -277,14 +279,13 @@ async function runWizard(opts: {
       fs.existsSync(configPath) ? 'config.toml' : null,
       fs.existsSync(policyPath) ? 'policy.toml' : null,
     ].filter(Boolean).join(' and ');
-    console.error(`Existing ${existing} found in ${ZORA_DIR}.`);
-    console.error('Use --force to overwrite.');
+    log.error({ existing, dir: ZORA_DIR }, 'Existing configuration found. Use --force to overwrite.');
     process.exit(1);
   }
 
   // Validate preset name early
   if (opts.preset && !PRESET_ALIASES[opts.preset]) {
-    console.error(`Unknown preset "${opts.preset}". Valid presets: ${Object.keys(PRESET_ALIASES).join(', ')}`);
+    log.error({ preset: opts.preset, validPresets: Object.keys(PRESET_ALIASES) }, 'Unknown preset');
     process.exit(1);
   }
 
@@ -447,13 +448,13 @@ async function runWizard(opts: {
   try {
     parseTOML(policyToml);
   } catch (e) {
-    console.error('Generated policy.toml is invalid TOML:', e);
+    log.error({ err: e }, 'Generated policy.toml is invalid TOML');
     process.exit(1);
   }
   try {
     parseTOML(configToml);
   } catch (e) {
-    console.error('Generated config.toml is invalid TOML:', e);
+    log.error({ err: e }, 'Generated config.toml is invalid TOML');
     process.exit(1);
   }
 
