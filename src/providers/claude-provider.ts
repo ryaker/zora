@@ -353,8 +353,16 @@ export class ClaudeProvider implements LLMProvider {
 
   /**
    * Map an SDK message to zero or more AgentEvents.
-   * One SDK message can produce multiple events (e.g., an assistant message
-   * with both thinking and text content blocks).
+   *
+   * One SDK message can produce multiple events because an 'assistant' message
+   * contains an array of content blocks (thinking, text, tool_use, tool_result),
+   * each of which becomes a separate AgentEvent.
+   *
+   * Message type mapping:
+   *  - 'assistant' -> one event per content block (thinking/text/tool_call/tool_result).
+   *  - 'result' -> one 'done' event (success) or one 'error' event (failure).
+   *  - 'system'/'user' -> no events (informational/replay only).
+   *  - unknown types -> ignored gracefully (no crash on SDK additions).
    */
   private _mapSDKMessage(message: SDKMessage): AgentEvent[] {
     const events: AgentEvent[] = [];
@@ -463,7 +471,14 @@ export class ClaudeProvider implements LLMProvider {
 
   /**
    * Build a prompt string from task context.
-   * Includes memory context, history, and system prompt elements.
+   *
+   * The prompt is structured with XML-like delimiters:
+   *  1. <memory_context> -- Injected memory items for cross-session continuity.
+   *  2. <execution_history> -- Prior events, including tool calls/results and
+   *     human steering messages. Enables restarts and handoffs to resume mid-task.
+   *  3. The raw task prompt.
+   *
+   * The system prompt (SOUL.md + policy hints) is passed separately via sdkOptions.
    */
   private _buildPrompt(task: TaskContext): string {
     const parts: string[] = [];
@@ -533,6 +548,9 @@ export class ClaudeProvider implements LLMProvider {
 
   /**
    * Heuristic to detect auth errors from error messages.
+   * Pattern-matches against known SDK and HTTP error strings.
+   * Used to update _lastAuthStatus so isAvailable() excludes this provider
+   * and the orchestrator can trigger re-authentication.
    */
   private _isAuthError(message: string): boolean {
     const authPatterns = [
