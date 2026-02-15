@@ -6,8 +6,14 @@
  *   - Tier 2: Rolling context (Daily Notes)
  *   - Tier 3: Structured items, salience, categories
  *   - Aggregates fragments into TaskContext.memoryContext
+ *
+ * Integrity (MEM-18):
+ *   - SHA-256 baselines on MEMORY.md to detect tampering
+ *   - Baselines stored in .memory-integrity.json alongside the memory dir
+ *   - Mismatch logs a warning (non-fatal — user may legitimately edit)
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,6 +22,17 @@ import { StructuredMemory } from './structured-memory.js';
 import { SalienceScorer } from './salience-scorer.js';
 import { CategoryOrganizer } from './category-organizer.js';
 import type { MemoryItem, CategorySummary, SalienceScore } from './memory-types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('memory-manager');
+
+/** Shape of the .memory-integrity.json file. */
+interface MemoryIntegrityData {
+  hash: string;
+  updatedAt: string;
+}
+
+const INTEGRITY_FILENAME = '.memory-integrity.json';
 
 export class MemoryManager {
   private readonly _config: MemoryConfig;
@@ -50,14 +67,21 @@ export class MemoryManager {
     const longTermDir = path.dirname(longTermFile);
     await fs.mkdir(longTermDir, { recursive: true, mode: 0o700 });
 
+    let fileCreated = false;
     try {
       const defaultContent = '# Zora Long-term Memory\n\n- No persistent memories yet.\n';
       // Use 'wx' to atomically fail if the file already exists (preventing race conditions)
       await fs.writeFile(longTermFile, defaultContent, { mode: 0o600, flag: 'wx' });
+      fileCreated = true;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw err;
       }
+    }
+
+    // Generate integrity baseline for newly created MEMORY.md
+    if (fileCreated) {
+      await this._saveIntegrityHash();
     }
 
     // Tier 3: Structured memory + categories
@@ -234,7 +258,12 @@ export class MemoryManager {
 
   private async _readLongTerm(): Promise<string | null> {
     try {
-      return await fs.readFile(this._getLongTermPath(), 'utf8');
+      const content = await fs.readFile(this._getLongTermPath(), 'utf8');
+
+      // Verify integrity hash (non-fatal on mismatch)
+      await this._verifyIntegrityHash(content);
+
+      return content;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
@@ -246,7 +275,7 @@ export class MemoryManager {
   private async _readDailyNotes(days: number): Promise<string[]> {
     const notes: string[] = [];
     const dir = this._getDailyNotesPath();
-    
+
     try {
       const files = await fs.readdir(dir);
       const dateFiles = files
@@ -266,5 +295,81 @@ export class MemoryManager {
     }
 
     return notes;
+  }
+
+  // ─── Integrity Hashing (MEM-18) ──────────────────────────────────
+
+  /** Path to the integrity baseline file alongside the memory directory. */
+  private _getIntegrityPath(): string {
+    return path.join(path.dirname(this._getLongTermPath()), INTEGRITY_FILENAME);
+  }
+
+  /** Compute SHA-256 hash of the given content. */
+  private _computeHash(content: string): string {
+    return crypto.createHash('sha256').update(content).digest('hex');
+  }
+
+  /**
+   * Saves a SHA-256 baseline for the current MEMORY.md content.
+   * Called after any write to MEMORY.md.
+   */
+  async _saveIntegrityHash(): Promise<void> {
+    try {
+      const content = await fs.readFile(this._getLongTermPath(), 'utf8');
+      const data: MemoryIntegrityData = {
+        hash: this._computeHash(content),
+        updatedAt: new Date().toISOString(),
+      };
+      await fs.writeFile(
+        this._getIntegrityPath(),
+        JSON.stringify(data, null, 2),
+        { mode: 0o600 },
+      );
+    } catch (err) {
+      log.warn({ err }, 'Failed to save memory integrity hash');
+    }
+  }
+
+  /**
+   * Verifies the current MEMORY.md content against the stored hash baseline.
+   * Logs a warning on mismatch but does not throw (the file may have been
+   * legitimately edited by the user).
+   */
+  private async _verifyIntegrityHash(content: string): Promise<boolean> {
+    try {
+      const raw = await fs.readFile(this._getIntegrityPath(), 'utf8');
+      const data = JSON.parse(raw) as MemoryIntegrityData;
+      const currentHash = this._computeHash(content);
+
+      if (data.hash !== currentHash) {
+        log.warn(
+          {
+            expected: data.hash,
+            actual: currentHash,
+            baselineDate: data.updatedAt,
+          },
+          'MEMORY.md integrity mismatch: file may have been modified externally',
+        );
+        return false;
+      }
+
+      return true;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // No baseline yet — first run or baseline was deleted
+        log.info('No memory integrity baseline found; skipping verification');
+        return true;
+      }
+      log.warn({ err }, 'Failed to verify memory integrity hash');
+      return true; // Don't block on verification errors
+    }
+  }
+
+  /**
+   * Refreshes the integrity baseline for MEMORY.md.
+   * Call this after legitimate external edits to acknowledge the new content.
+   */
+  async refreshIntegrityBaseline(): Promise<void> {
+    await this._saveIntegrityHash();
   }
 }

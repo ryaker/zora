@@ -24,6 +24,8 @@ import type {
   DoneEventContent,
   ErrorEventContent,
   TextEventContent,
+  ToolResultEventContent,
+  ToolCallEventContent,
 } from '../types.js';
 import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
@@ -39,6 +41,8 @@ import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { IntentCapsuleManager } from '../security/intent-capsule.js';
+import { LeakDetector } from '../security/leak-detector.js';
+import { sanitizeInput } from '../security/prompt-defense.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('orchestrator');
@@ -78,6 +82,7 @@ export class Orchestrator {
 
   // Security
   private _intentCapsuleManager!: IntentCapsuleManager;
+  private _leakDetector!: LeakDetector;
 
   // Background systems
   private _heartbeatSystem: HeartbeatSystem | null = null;
@@ -126,6 +131,9 @@ export class Orchestrator {
       crypto.randomBytes(32).toString('hex'),
     );
     this._policyEngine.setIntentCapsuleManager(this._intentCapsuleManager);
+
+    // SEC-03: Wire LeakDetector for scanning tool outputs
+    this._leakDetector = new LeakDetector();
 
     this._sessionManager = new SessionManager(this._baseDir);
 
@@ -301,18 +309,24 @@ export class Orchestrator {
       ...memoryContext,
     ].join('\n\n');
 
+    // SEC-03: Scan user prompt for injection patterns (warn but don't block by default)
+    const sanitizedPrompt = sanitizeInput(options.prompt);
+    if (sanitizedPrompt !== options.prompt) {
+      log.warn({ jobId }, 'Prompt injection pattern detected in user input — sanitized');
+    }
+
     // ASI01: Create signed intent capsule for goal drift detection
     if (this._intentCapsuleManager) {
-      this._intentCapsuleManager.createCapsule(options.prompt);
+      this._intentCapsuleManager.createCapsule(sanitizedPrompt);
     }
 
     // Classify task for routing
-    const classification = this._router.classifyTask(options.prompt);
+    const classification = this._router.classifyTask(sanitizedPrompt);
 
     // Build task context
     const taskContext: TaskContext = {
       jobId,
-      task: options.prompt,
+      task: sanitizedPrompt,
       requiredCapabilities: [],
       complexity: classification.complexity,
       resourceType: classification.resourceType,
@@ -370,6 +384,34 @@ export class Orchestrator {
       for await (const event of provider.execute(taskContext)) {
         // R8: Persist events to SessionManager
         await this._sessionManager.appendEvent(taskContext.jobId, event);
+
+        // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
+        if (event.type === 'tool_result') {
+          const toolResultContent = event.content as ToolResultEventContent;
+          const resultText = typeof toolResultContent.result === 'string'
+            ? toolResultContent.result
+            : JSON.stringify(toolResultContent.result ?? '');
+          const leaks = this._leakDetector.scan(resultText);
+          if (leaks.length > 0) {
+            log.warn(
+              { jobId: taskContext.jobId, toolCallId: toolResultContent.toolCallId, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+              'Potential secret leak detected in tool output',
+            );
+          }
+        }
+
+        // SEC-03: Scan tool call arguments for leaked secrets
+        if (event.type === 'tool_call') {
+          const toolCallContent = event.content as ToolCallEventContent;
+          const argsText = JSON.stringify(toolCallContent.arguments ?? {});
+          const leaks = this._leakDetector.scan(argsText);
+          if (leaks.length > 0) {
+            log.warn(
+              { jobId: taskContext.jobId, tool: toolCallContent.tool, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+              'Potential secret leak detected in tool call arguments',
+            );
+          }
+        }
 
         // R7: Poll SteeringManager during execution
         if (event.type === 'text' || event.type === 'tool_result') {
