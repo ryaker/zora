@@ -37,7 +37,7 @@ const program = new Command();
 program
   .name('zora-agent')
   .description('Long-running autonomous personal AI agent')
-  .version('0.9.3');
+  .version('0.9.4');
 
 /**
  * Creates LLMProvider instances from config.
@@ -132,6 +132,7 @@ program
 
     try {
       let spinnerActive = true;
+      let streamedText = false;
       const spinner = clack.spinner();
       spinner.start('Running task...');
 
@@ -149,6 +150,7 @@ program
 
           switch (event.type) {
             case 'text':
+              streamedText = true;
               console.log((event.content as { text: string }).text);
               break;
             case 'tool_call': {
@@ -164,11 +166,12 @@ program
       });
 
       if (spinnerActive) {
-        // No streaming events were received — print the final result
         spinner.stop('Task complete.');
-        if (result) {
-          console.log('\n' + result);
-        }
+      }
+
+      // Only print final result if we didn't already stream it
+      if (result && !streamedText) {
+        console.log('\n' + result);
       }
     } finally {
       await orchestrator.shutdown();

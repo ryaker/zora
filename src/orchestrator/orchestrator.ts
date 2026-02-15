@@ -288,6 +288,7 @@ export class Orchestrator {
       modelPreference: options.model,
       maxCostTier: options.maxCostTier,
       maxTurns: options.maxTurns,
+      canUseTool: this._policyEngine.createCanUseTool(),
     };
 
     // R2: Route to provider

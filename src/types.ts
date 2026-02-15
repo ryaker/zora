@@ -118,6 +118,12 @@ export interface TaskContext {
   maxCostTier?: CostTier;   // cost ceiling for routing (e.g. 'included' skips 'premium')
   maxTurns?: number;
   timeout?: number;
+  /** SDK canUseTool callback — enforces policy on every tool call */
+  canUseTool?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { signal: AbortSignal },
+  ) => Promise<{ behavior: 'allow' | 'deny'; message?: string; updatedInput?: Record<string, unknown> }>;
 }
 
 // ─── LLM Provider Interface ─────────────────────────────────────────

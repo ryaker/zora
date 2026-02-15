@@ -428,6 +428,39 @@ export class PolicyEngine {
       }
     }
 
+    // Check command arguments against denied filesystem paths
+    const pathCheckResult = this._checkCommandPaths(command);
+    if (!pathCheckResult.allowed) {
+      return pathCheckResult;
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Extracts path-like arguments from a shell command and validates
+   * them against the filesystem policy (denied_paths).
+   */
+  private _checkCommandPaths(command: string): ValidationResult {
+    const fsPolicy = this._policy.filesystem;
+    if (!fsPolicy || fsPolicy.denied_paths.length === 0) {
+      return { allowed: true };
+    }
+
+    // Extract arguments that look like paths (start with /, ~, or ./)
+    const tokens = command.match(/(?:["']([^"']+)["']|(\S+))/g) ?? [];
+    for (const raw of tokens.slice(1)) { // skip the command itself
+      const token = raw.replace(/^["']|["']$/g, '');
+      if (token.startsWith('/') || token.startsWith('~') || token.startsWith('./') || token.startsWith('../')) {
+        const resolved = path.resolve(this._resolveHome(token));
+        if (this._isWithinDeniedPaths(resolved, fsPolicy)) {
+          return {
+            allowed: false,
+            reason: `Path '${token}' is within a denied directory — access blocked by security policy`,
+          };
+        }
+      }
+    }
     return { allowed: true };
   }
 

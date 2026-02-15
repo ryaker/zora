@@ -264,6 +264,11 @@ export class ClaudeProvider implements LLMProvider {
       sdkOptions['allowedTools'] = this._allowedTools;
     }
 
+    // Wire policy enforcement into the SDK
+    if (task.canUseTool) {
+      sdkOptions['canUseTool'] = task.canUseTool;
+    }
+
     // Build the prompt from task context
     const prompt = this._buildPrompt(task);
 
