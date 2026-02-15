@@ -140,6 +140,8 @@ export type AgentEventContent =
 export interface AgentEvent {
   type: AgentEventType;
   timestamp: Date;
+  /** LOG-04: Provider or component that emitted this event (e.g. 'claude', 'gemini', 'system') */
+  source?: string;
   content: unknown;
 }
 

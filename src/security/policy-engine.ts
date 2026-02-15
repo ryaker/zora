@@ -448,10 +448,9 @@ export class PolicyEngine {
       return { allowed: true };
     }
 
-    // Extract arguments that look like paths (start with /, ~, or ./)
-    const tokens = command.match(/(?:["']([^"']+)["']|(\S+))/g) ?? [];
-    for (const raw of tokens.slice(1)) { // skip the command itself
-      const token = raw.replace(/^["']|["']$/g, '');
+    // Use proper shell tokenizer to extract arguments
+    const tokens = this._shellTokenize(command);
+    for (const token of tokens.slice(1)) { // skip the command itself
       if (token.startsWith('/') || token.startsWith('~') || token.startsWith('./') || token.startsWith('../')) {
         const resolved = path.resolve(this._resolveHome(token));
         if (this._isWithinDeniedPaths(resolved, fsPolicy)) {
@@ -896,35 +895,181 @@ export class PolicyEngine {
   }
 
   /**
-   * Splits command chains (&&, ||, ;, |) while respecting quoted strings.
+   * Tokenize a shell command string, handling:
+   * - Double quotes with escape sequences (\" \\ \$ \`)
+   * - Single quotes (literal, no escapes except '')
+   * - Backslash escaping outside quotes
+   * - Empty strings ("" and '')
+   * Returns the unquoted token values.
+   */
+  private _shellTokenize(input: string): string[] {
+    const tokens: string[] = [];
+    let current = '';
+    let inToken = false;
+    let i = 0;
+
+    const finishToken = () => {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+    };
+
+    while (i < input.length) {
+      const ch = input[i]!;
+
+      // Whitespace outside quotes ends the current token
+      if (/\s/.test(ch)) {
+        finishToken();
+        i++;
+        continue;
+      }
+
+      inToken = true;
+
+      if (ch === '\\' && i + 1 < input.length) {
+        // Backslash escape outside quotes: take next char literally
+        current += input[i + 1];
+        i += 2;
+        continue;
+      }
+
+      if (ch === '"') {
+        // Double-quoted string: handle \", \\, \$, \`
+        i++; // skip opening "
+        while (i < input.length && input[i] !== '"') {
+          if (input[i] === '\\' && i + 1 < input.length) {
+            const next = input[i + 1]!;
+            if (next === '"' || next === '\\' || next === '$' || next === '`') {
+              current += next;
+              i += 2;
+              continue;
+            }
+          }
+          current += input[i];
+          i++;
+        }
+        i++; // skip closing "
+        continue;
+      }
+
+      if (ch === "'") {
+        // Single-quoted string: everything is literal, no escape sequences
+        i++; // skip opening '
+        while (i < input.length && input[i] !== "'") {
+          current += input[i];
+          i++;
+        }
+        i++; // skip closing '
+        continue;
+      }
+
+      // Regular character
+      current += ch;
+      i++;
+    }
+
+    finishToken();
+    return tokens;
+  }
+
+  /**
+   * Splits command chains (&&, ||, ;, |) while respecting quoted strings,
+   * escape sequences, and command substitution ($(...) and backticks).
    */
   private _splitChainedCommands(command: string): string[] {
-    // Simple but more robust parser that respects quotes
     const commands: string[] = [];
     let current = '';
     let inQuote: string | null = null;
+    let parenDepth = 0; // Track $(...) nesting
+    let backtickDepth = 0;
 
     for (let i = 0; i < command.length; i++) {
       const char = command[i]!;
       const nextChar = command[i + 1];
 
-      if ((char === '"' || char === "'") && command[i - 1] !== '\\') {
-        if (inQuote === char) {
-          inQuote = null;
-        } else if (!inQuote) {
-          inQuote = char;
-        }
-        current += char;
-      } else if (!inQuote && (char === ';' || (char === '&' && nextChar === '&') || (char === '|' && nextChar === '|'))) {
-        if (current.trim()) commands.push(current.trim());
-        current = '';
-        if (char !== ';') i++; // Skip the second char of && or ||
-      } else if (!inQuote && char === '|') {
-        if (current.trim()) commands.push(current.trim());
-        current = '';
-      } else {
-        current += char;
+      // Handle escape sequences
+      if (char === '\\' && !inQuote && i + 1 < command.length) {
+        current += char + (nextChar ?? '');
+        i++;
+        continue;
       }
+      if (char === '\\' && inQuote === '"' && i + 1 < command.length) {
+        const next = nextChar ?? '';
+        if (next === '"' || next === '\\' || next === '$' || next === '`') {
+          current += char + next;
+          i++;
+          continue;
+        }
+      }
+
+      // Track quote state
+      if (char === '"' && inQuote !== "'") {
+        inQuote = inQuote === '"' ? null : '"';
+        current += char;
+        continue;
+      }
+      if (char === "'" && inQuote !== '"') {
+        inQuote = inQuote === "'" ? null : "'";
+        current += char;
+        continue;
+      }
+
+      // Track command substitution: $( ... )
+      if (!inQuote && char === '$' && nextChar === '(') {
+        // Enter command substitution and consume both "$("
+        parenDepth++;
+        current += '$(';
+        i++;
+        continue;
+      }
+      if (!inQuote && parenDepth > 0 && char === '(') {
+        // Nested parentheses inside $(...) - increment depth
+        parenDepth++;
+        current += char;
+        continue;
+      }
+      if (!inQuote && char === ')' && parenDepth > 0) {
+        parenDepth--;
+        current += char;
+        continue;
+      }
+
+      // Track backtick command substitution
+      if (!inQuote && char === '`') {
+        backtickDepth = backtickDepth > 0 ? 0 : 1;
+        current += char;
+        continue;
+      }
+
+      // Only split on operators when not inside quotes or substitutions
+      if (!inQuote && parenDepth === 0 && backtickDepth === 0) {
+        if (char === ';') {
+          if (current.trim()) commands.push(current.trim());
+          current = '';
+          continue;
+        }
+        if (char === '&' && nextChar === '&') {
+          if (current.trim()) commands.push(current.trim());
+          current = '';
+          i++; // Skip second &
+          continue;
+        }
+        if (char === '|' && nextChar === '|') {
+          if (current.trim()) commands.push(current.trim());
+          current = '';
+          i++; // Skip second |
+          continue;
+        }
+        if (char === '|') {
+          if (current.trim()) commands.push(current.trim());
+          current = '';
+          continue;
+        }
+      }
+
+      current += char;
     }
 
     if (current.trim()) commands.push(current.trim());
@@ -932,30 +1077,23 @@ export class PolicyEngine {
   }
 
   /**
-   * Extracts the base binary name from a command string, respecting quotes.
+   * Extracts the base binary name from a command string, respecting quotes
+   * and escape sequences.
    */
   private _extractBaseCommand(command: string): string {
-    const trimmed = command.trim();
-    let firstPart = '';
-    let inQuote: string | null = null;
+    const tokens = this._shellTokenize(command.trim());
+    if (tokens.length === 0) return '';
 
-    for (let i = 0; i < trimmed.length; i++) {
-      const char = trimmed[i]!;
-      if ((char === '"' || char === "'") && trimmed[i - 1] !== '\\') {
-        if (inQuote === char) {
-          inQuote = null;
-        } else if (!inQuote) {
-          inQuote = char;
-        }
-      } else if (!inQuote && /\s/.test(char)) {
-        break;
-      } else {
-        firstPart += char;
-      }
+    // Skip common variable assignments (e.g., "FOO=bar cmd")
+    let cmdToken = tokens[0]!;
+    let idx = 0;
+    while (idx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx]!)) {
+      idx++;
+    }
+    if (idx < tokens.length) {
+      cmdToken = tokens[idx]!;
     }
 
-    // Remove surrounding quotes from the binary path if they exist
-    const binaryPath = firstPart.replace(/^["']|["']$/g, '');
-    return path.basename(binaryPath);
+    return path.basename(cmdToken);
   }
 }

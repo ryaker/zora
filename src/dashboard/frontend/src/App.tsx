@@ -253,7 +253,9 @@ const App: React.FC = () => {
         if (data.type === 'done' || data.type === 'job_failed') {
           axios.get('/api/jobs').then(res => {
             if (res.data.jobs) setJobs(res.data.jobs);
-          }).catch(() => {});
+          }).catch((err) => {
+            console.warn('[Dashboard] Failed to refresh jobs list:', err?.message ?? err);
+          });
         }
       } catch {
         // Malformed SSE data — ignore

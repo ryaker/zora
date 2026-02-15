@@ -84,4 +84,106 @@ describe('FailoverController', () => {
 
     expect(result).toBeNull();
   });
+
+  describe('classifyError', () => {
+    it('classifies by HTTP status code with high confidence', () => {
+      const err = Object.assign(new Error('Something happened'), { status: 429 });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.confidence).toBe('high');
+      expect(result.retryable).toBe(true);
+    });
+
+    it('classifies auth errors by HTTP status 401', () => {
+      const err = Object.assign(new Error('Forbidden'), { status: 401 });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('auth');
+      expect(result.confidence).toBe('high');
+      expect(result.retryable).toBe(false);
+    });
+
+    it('classifies auth errors by HTTP status 403', () => {
+      const err = Object.assign(new Error('Forbidden'), { status: 403 });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('auth');
+      expect(result.confidence).toBe('high');
+    });
+
+    it('classifies by structured error code', () => {
+      const err = Object.assign(new Error('Error'), { code: 'RESOURCE_EXHAUSTED' });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.confidence).toBe('high');
+    });
+
+    it('classifies by message patterns with medium confidence', () => {
+      const err = new Error('Rate limit exceeded');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.confidence).toBe('medium');
+    });
+
+    it('classifies authentication failed message', () => {
+      const err = new Error('Authentication failed: session expired');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('auth');
+      expect(result.confidence).toBe('medium');
+    });
+
+    it('avoids false positives on "limit" substring', () => {
+      // "limit" in a non-rate-limit context should not match
+      const err = new Error('You have reached the maximum item limit in your library');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('unknown');
+    });
+
+    it('avoids false positives on "token" substring', () => {
+      // "token" in a non-auth context should not match
+      const err = new Error('Credential token limited to 100 characters');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('unknown');
+    });
+
+    it('classifies unknown errors', () => {
+      const err = new Error('Something completely unexpected');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('unknown');
+      expect(result.confidence).toBe('low');
+    });
+
+    it('classifies timeout errors', () => {
+      const err = new Error('Request timed out');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('timeout');
+      expect(result.retryable).toBe(true);
+    });
+
+    it('classifies Gemini RESOURCE_EXHAUSTED code', () => {
+      const err = Object.assign(new Error('Quota exhausted'), { code: 'resource_exhausted' });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.confidence).toBe('high');
+    });
+
+    it('classifies OpenAI rate_limit_error code', () => {
+      const err = Object.assign(new Error('Rate limited'), { code: 'rate_limit_error' });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.confidence).toBe('high');
+    });
+
+    it('classifies server errors as transient', () => {
+      const err = Object.assign(new Error('Internal Server Error'), { status: 500 });
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('transient');
+      expect(result.retryable).toBe(true);
+    });
+
+    it('extracts HTTP status from error message', () => {
+      const err = new Error('Error 429: Too many requests');
+      const result = controller.classifyError(err);
+      expect(result.category).toBe('rate_limit');
+      expect(result.httpStatus).toBe(429);
+    });
+  });
 });

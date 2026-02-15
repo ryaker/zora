@@ -148,6 +148,7 @@ export class GeminiProvider implements LLMProvider {
     this._activeProcesses.set(task.jobId, child);
     
     let buffer = '';
+    let bufferTruncated = false;
 
     // Track spawn/execution errors
     let spawnError: Error | null = null;
@@ -165,6 +166,7 @@ export class GeminiProvider implements LLMProvider {
       yield {
         type: 'error',
         timestamp: new Date(),
+        source: this.name,
         content: { message: `Failed to open stdio streams for ${this._cliPath}` },
       };
       this._activeProcesses.delete(task.jobId);
@@ -177,10 +179,19 @@ export class GeminiProvider implements LLMProvider {
     try {
       for await (const line of stdoutLines) {
         if (spawnError) throw spawnError;
-        buffer += line + '\n';
+        // OPS-04: Cap the tool-call parsing buffer at MAX_BUFFER_SIZE
+        if (!bufferTruncated) {
+          if (buffer.length + line.length + 1 > GeminiProvider.MAX_BUFFER_SIZE) {
+            bufferTruncated = true;
+            console.warn(`[GeminiProvider] Tool-call parsing buffer exceeded ${GeminiProvider.MAX_BUFFER_SIZE} bytes; further output will not be parsed for tool calls.`);
+          } else {
+            buffer += line + '\n';
+          }
+        }
         yield {
           type: 'text',
           timestamp: new Date(),
+          source: this.name,
           content: { text: line },
         };
       }
@@ -206,6 +217,7 @@ export class GeminiProvider implements LLMProvider {
         yield {
           type: 'error',
           timestamp: new Date(),
+          source: this.name,
           content: { message: errorMessage, code, isQuotaError },
         };
         return;
@@ -217,6 +229,7 @@ export class GeminiProvider implements LLMProvider {
         yield {
           type: 'tool_call',
           timestamp: new Date(),
+          source: this.name,
           content: toolCall,
         };
       }
@@ -224,6 +237,7 @@ export class GeminiProvider implements LLMProvider {
       yield {
         type: 'done',
         timestamp: new Date(),
+        source: this.name,
         content: { text: 'Gemini task complete' },
       };
 
@@ -232,6 +246,7 @@ export class GeminiProvider implements LLMProvider {
       yield {
         type: 'error',
         timestamp: new Date(),
+        source: this.name,
         content: { message: `Gemini execution failed: ${msg}` },
       };
     } finally {

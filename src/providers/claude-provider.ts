@@ -302,6 +302,7 @@ export class ClaudeProvider implements LLMProvider {
         yield {
           type: 'done' as AgentEventType,
           timestamp: new Date(),
+          source: this.name,
           content: { text: '' },
         };
       }
@@ -328,6 +329,7 @@ export class ClaudeProvider implements LLMProvider {
       yield {
         type: 'error' as AgentEventType,
         timestamp: new Date(),
+        source: this.name,
         content: {
           message: errorMessage,
           isAuthError: this._isAuthError(errorMessage),
@@ -366,6 +368,7 @@ export class ClaudeProvider implements LLMProvider {
               events.push({
                 type: 'thinking',
                 timestamp: new Date(),
+                source: this.name,
                 content: { text: block.thinking },
               });
               break;
@@ -373,6 +376,7 @@ export class ClaudeProvider implements LLMProvider {
               events.push({
                 type: 'text',
                 timestamp: new Date(),
+                source: this.name,
                 content: { text: block.text },
               });
               break;
@@ -380,6 +384,7 @@ export class ClaudeProvider implements LLMProvider {
               events.push({
                 type: 'tool_call',
                 timestamp: new Date(),
+                source: this.name,
                 content: {
                   toolCallId: block.id,
                   tool: block.name,
@@ -391,6 +396,7 @@ export class ClaudeProvider implements LLMProvider {
               events.push({
                 type: 'tool_result',
                 timestamp: new Date(),
+                source: this.name,
                 content: {
                   toolCallId: block.tool_use_id,
                   result: block.content,
@@ -408,6 +414,7 @@ export class ClaudeProvider implements LLMProvider {
           events.push({
             type: 'error',
             timestamp: new Date(),
+            source: this.name,
             content: {
               message: msg.errors?.join('; ') ?? `SDK error: ${msg.subtype}`,
               subtype: msg.subtype,
@@ -420,6 +427,7 @@ export class ClaudeProvider implements LLMProvider {
           events.push({
             type: 'done',
             timestamp: new Date(),
+            source: this.name,
             content: {
               text: msg.result ?? '',
               duration_ms: msg.duration_ms,

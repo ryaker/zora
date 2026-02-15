@@ -133,6 +133,50 @@ describe('PolicyEngine', () => {
       const result = engine.validateCommand('/usr/bin/git commit');
       expect(result.allowed).toBe(true);
     });
+
+    it('handles escaped quotes inside double-quoted strings', () => {
+      const result = engine.validateCommand('ls "foo \\"bar\\" baz"');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('handles single quotes inside double-quoted strings', () => {
+      const result = engine.validateCommand('ls "foo \'bar\' baz"');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('handles empty string arguments', () => {
+      const result = engine.validateCommand('ls ""');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('handles backslash escaping outside quotes', () => {
+      const result = engine.validateCommand('ls foo\\ bar');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('detects injection with backtick command substitution', () => {
+      const result = engine.validateCommand('ls `rm -rf /`');
+      // ls is allowed, the backticks are just arguments
+      expect(result.allowed).toBe(true);
+    });
+
+    it('detects injection with $() command substitution in chained commands', () => {
+      // The semicolon should split this into two commands
+      const result = engine.validateCommand('ls foo; sudo rm -rf /');
+      expect(result.allowed).toBe(false);
+    });
+
+    it('does not split on operators inside $() substitution', () => {
+      // The && inside $() should not split the command
+      const result = engine.validateCommand('npm run $(echo "test && build")');
+      expect(result.allowed).toBe(true);
+    });
+
+    it('handles variable assignments before commands', () => {
+      policy.shell.allowed_commands = ['npm', 'ls', 'git', 'node'];
+      const result = engine.validateCommand('NODE_ENV=production node app.js');
+      expect(result.allowed).toBe(true);
+    });
   });
 });
 
