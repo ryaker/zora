@@ -190,6 +190,13 @@ export class MemoryManager {
     return this._structuredMemory;
   }
 
+  /**
+   * Returns the resolved path to the long-term memory file (MEMORY.md).
+   */
+  getLongTermPath(): string {
+    return this._getLongTermPath();
+  }
+
   private _resolvePath(p: string): string {
     if (p.startsWith('~/')) {
       return path.join(os.homedir(), p.slice(2));

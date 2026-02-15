@@ -140,18 +140,56 @@ Controls automatic failover when a provider fails.
 
 ### `[memory]`
 
-Persistent memory system for context across sessions.
+Persistent memory system for context across sessions. Zora's memory operates in three tiers:
+
+- **Tier 1: Long-term knowledge** (`MEMORY.md`) — Human-curated, loaded into every session.
+- **Tier 2: Daily notes** (`daily/YYYY-MM-DD.md`) — Agent-written session logs, rolling window.
+- **Tier 3: Structured items** (`items/*.json`) — Individual facts with salience scoring and category organization.
+
+#### Storage paths
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file. |
-| `daily_notes_dir` | string | `"~/.zora/memory/daily"` | Directory for daily note files. |
-| `items_dir` | string | `"~/.zora/memory/items"` | Directory for individual memory items. |
-| `categories_dir` | string | `"~/.zora/memory/categories"` | Directory for category summaries. |
-| `context_days` | integer | `7` | Number of recent days of notes to include in context. |
-| `max_context_items` | integer | `20` | Maximum memory items injected into task context. |
-| `max_category_summaries` | integer | `5` | Maximum category summaries injected into context. |
-| `auto_extract_interval` | integer | `10` | Number of tasks between automatic memory extraction. |
+| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file (Tier 1). Loaded into every session's system prompt. Only editable by humans via `zora memory edit`. |
+| `daily_notes_dir` | string | `"~/.zora/memory/daily"` | Directory for daily note files (Tier 2). Each day produces a `YYYY-MM-DD.md` file. |
+| `items_dir` | string | `"~/.zora/memory/items"` | Directory for structured memory items (Tier 3). Each item stored as a JSON file. |
+| `categories_dir` | string | `"~/.zora/memory/categories"` | Directory for category summary files. Auto-generated from item categories. |
+
+#### Context loading
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `context_days` | integer | `7` | Number of recent days of daily notes to include in task context. Older notes are still on disk but not injected. |
+| `max_context_items` | integer | `20` | Maximum Tier 3 memory items injected into task context, ranked by salience score. |
+| `max_category_summaries` | integer | `5` | Maximum category summaries injected into context. Categories are selected by relevance to the current task. |
+
+#### Extraction and salience
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_extract` | boolean | `true` | Enable automatic memory extraction after task completion. When enabled, the agent is prompted to extract key facts from completed work. |
+| `auto_extract_interval` | integer | `10` | Number of completed tasks between automatic extraction runs. Only applies when `auto_extract = true`. |
+| `salience_half_life_days` | integer | `14` | Half-life in days for the recency decay function. After this many days without access, a memory item's recency score drops to 50%. Lower values make the agent forget faster. |
+| `salience_reinforcement_weight` | float | `0.3` | Weight multiplied by `access_count` in the salience formula. Higher values make frequently accessed items score higher. |
+
+#### Example
+
+```toml
+[memory]
+long_term_file = "~/.zora/memory/MEMORY.md"
+daily_notes_dir = "~/.zora/memory/daily"
+items_dir = "~/.zora/memory/items"
+categories_dir = "~/.zora/memory/categories"
+context_days = 3
+max_context_items = 5
+max_category_summaries = 3
+auto_extract = true
+auto_extract_interval = 10
+salience_half_life_days = 14
+salience_reinforcement_weight = 0.3
+```
+
+Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora init`.
 
 ### `[security]`
 
