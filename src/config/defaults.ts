@@ -83,7 +83,8 @@ export const DEFAULT_STEERING: SteeringConfig = {
   telegram: {
     enabled: false,
     allowed_users: [],
-    rate_limit_per_min: 20
+    rate_limit_per_min: 20,
+    mode: 'polling' as const,
   }
 };
 

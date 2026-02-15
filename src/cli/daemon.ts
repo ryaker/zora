@@ -16,6 +16,8 @@ import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
+import { TelegramGateway } from '../steering/telegram-gateway.js';
+import type { TelegramConfig } from '../steering/telegram-gateway.js';
 
 function createProviders(config: ZoraConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
@@ -84,12 +86,39 @@ async function main() {
   });
   await dashboard.start();
 
+  // Initialize Telegram gateway if enabled and configured
+  let telegramGateway: TelegramGateway | undefined;
+  const telegramConfig = config.steering.telegram;
+  if (telegramConfig?.enabled) {
+    const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      console.warn('[Daemon] Telegram enabled but no bot_token configured and TELEGRAM_BOT_TOKEN not set. Skipping.');
+    } else {
+      console.warn(
+        '[Daemon] Telegram: Ensure you are using a dedicated bot token for this Zora instance. ' +
+        'Sharing a bot token across multiple processes causes polling conflicts and lost messages.'
+      );
+      try {
+        telegramGateway = await TelegramGateway.create(
+          { ...telegramConfig, enabled: true } as TelegramConfig,
+          orchestrator.steeringManager,
+        );
+        console.log(`[Daemon] Telegram gateway started (mode: ${telegramConfig.mode ?? 'polling'}).`);
+      } catch (err) {
+        console.error('[Daemon] Failed to start Telegram gateway:', err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
   console.log('[Daemon] Zora daemon is running.');
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`[Daemon] Received ${signal}, shutting down...`);
     try {
+      if (telegramGateway) {
+        await telegramGateway.stop();
+      }
       await dashboard.stop();
       await orchestrator.shutdown();
     } catch (err) {
