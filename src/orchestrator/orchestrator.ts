@@ -31,11 +31,13 @@ import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
-import { SessionManager } from './session-manager.js';
+import { SessionManager, BufferedSessionWriter } from './session-manager.js';
 import { ExecutionLoop, type CustomToolDefinition } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
+import { createMemoryTools } from '../tools/memory-tools.js';
+import { ValidationPipeline } from '../memory/validation-pipeline.js';
 import { HeartbeatSystem } from '../routines/heartbeat.js';
 import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
@@ -88,9 +90,13 @@ export class Orchestrator {
   private _heartbeatSystem: HeartbeatSystem | null = null;
   private _routineManager: RoutineManager | null = null;
 
+  // Memory tools
+  private _validationPipeline!: ValidationPipeline;
+
   // Background intervals
   private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
   private _retryPollTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _consolidationTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private _booted = false;
 
@@ -142,6 +148,7 @@ export class Orchestrator {
 
     this._memoryManager = new MemoryManager(this._config.memory, this._baseDir);
     await this._memoryManager.init();
+    this._validationPipeline = new ValidationPipeline();
 
     // R2: Wire Router
     this._router = new Router({
@@ -230,6 +237,30 @@ export class Orchestrator {
     );
     await this._routineManager.init();
 
+    // Schedule daily note consolidation (check once per day)
+    const scheduleConsolidation = () => {
+      this._consolidationTimeout = setTimeout(async () => {
+        try {
+          const count = await this._memoryManager.consolidateDailyNotes(7);
+          if (count > 0) {
+            log.info({ consolidated: count }, 'Daily notes consolidated');
+          }
+        } catch (err) {
+          log.warn({ err }, 'Daily note consolidation failed');
+        }
+        scheduleConsolidation();
+      }, 24 * 60 * 60 * 1000); // 24 hours
+    };
+    // Run first check shortly after boot (30 seconds), then daily
+    this._consolidationTimeout = setTimeout(async () => {
+      try {
+        await this._memoryManager.consolidateDailyNotes(7);
+      } catch (err) {
+        log.warn({ err }, 'Initial daily note consolidation failed');
+      }
+      scheduleConsolidation();
+    }, 30 * 1000);
+
     this._booted = true;
   }
 
@@ -247,6 +278,10 @@ export class Orchestrator {
     if (this._retryPollTimeout) {
       clearTimeout(this._retryPollTimeout);
       this._retryPollTimeout = null;
+    }
+    if (this._consolidationTimeout) {
+      clearTimeout(this._consolidationTimeout);
+      this._consolidationTimeout = null;
     }
 
     // Stop heartbeat and routines
@@ -280,7 +315,12 @@ export class Orchestrator {
   async submitTask(options: SubmitTaskOptions): Promise<string> {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-    // MEM-05 / ORCH-07: Inject memory context gracefully — never crash if memory is unavailable
+    // Reset per-task state: ValidationPipeline rate limit is per-session, not per-orchestrator-lifetime.
+    // Without this, after MAX_SAVES_PER_SESSION saves across all tasks, memory_save permanently blocks.
+    this._validationPipeline.resetSession();
+
+    // MEM-05 / ORCH-07: Progressive memory context — lightweight index, not full dump.
+    // The LLM uses memory_search / recall_context tools for on-demand retrieval.
     let memoryContext: string[] = [];
     try {
       memoryContext = await this._memoryManager.loadContext();
@@ -323,6 +363,9 @@ export class Orchestrator {
     // Classify task for routing
     const classification = this._router.classifyTask(sanitizedPrompt);
 
+    // Build custom tools (permissions + memory tools + recall_context)
+    const customTools = this._createCustomTools();
+
     // Build task context
     const taskContext: TaskContext = {
       jobId,
@@ -336,6 +379,7 @@ export class Orchestrator {
       modelPreference: options.model,
       maxCostTier: options.maxCostTier,
       maxTurns: options.maxTurns,
+      customTools,
       canUseTool: this._policyEngine.createCanUseTool(),
     };
 
@@ -379,129 +423,140 @@ export class Orchestrator {
   ): Promise<string> {
     let result = '';
 
+    // Event batching: buffer session writes, flush every 500ms or on done/error.
+    // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
+    const bufferedWriter = new BufferedSessionWriter(this._sessionManager, taskContext.jobId, 500);
+
     try {
-      // Execute via the provider's async generator
-      for await (const event of provider.execute(taskContext)) {
-        // R8: Persist events to SessionManager
-        await this._sessionManager.appendEvent(taskContext.jobId, event);
+      try {
+        // Execute via the provider's async generator
+        for await (const event of provider.execute(taskContext)) {
+          // R8: Persist events via buffered writer (batched disk I/O)
+          bufferedWriter.append(event);
 
-        // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
-        if (event.type === 'tool_result') {
-          const toolResultContent = event.content as ToolResultEventContent;
-          const resultText = typeof toolResultContent.result === 'string'
-            ? toolResultContent.result
-            : JSON.stringify(toolResultContent.result ?? '');
-          const leaks = this._leakDetector.scan(resultText);
-          if (leaks.length > 0) {
-            log.warn(
-              { jobId: taskContext.jobId, toolCallId: toolResultContent.toolCallId, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
-              'Potential secret leak detected in tool output',
+          // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
+          if (event.type === 'tool_result') {
+            const toolResultContent = event.content as ToolResultEventContent;
+            const resultText = typeof toolResultContent.result === 'string'
+              ? toolResultContent.result
+              : JSON.stringify(toolResultContent.result ?? '');
+            const leaks = this._leakDetector.scan(resultText);
+            if (leaks.length > 0) {
+              log.warn(
+                { jobId: taskContext.jobId, toolCallId: toolResultContent.toolCallId, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+                'Potential secret leak detected in tool output',
+              );
+            }
+          }
+
+          // SEC-03: Scan tool call arguments for leaked secrets
+          if (event.type === 'tool_call') {
+            const toolCallContent = event.content as ToolCallEventContent;
+            const argsText = JSON.stringify(toolCallContent.arguments ?? {});
+            const leaks = this._leakDetector.scan(argsText);
+            if (leaks.length > 0) {
+              log.warn(
+                { jobId: taskContext.jobId, tool: toolCallContent.tool, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+                'Potential secret leak detected in tool call arguments',
+              );
+            }
+          }
+
+          // R7: Poll SteeringManager with debouncing (max once per 2 seconds)
+          if (event.type === 'text' || event.type === 'tool_result') {
+            const pendingMessages = await this._steeringManager.cachedGetPendingMessages(taskContext.jobId, 2000);
+            for (const msg of pendingMessages) {
+              // Inject steering as an event
+              const steerEvent: AgentEvent = {
+                type: 'steering',
+                timestamp: new Date(),
+                content: { text: msg.type === 'steer' ? msg.message : `[${msg.type}]`, source: msg.source, author: msg.author },
+              };
+              bufferedWriter.append(steerEvent);
+              taskContext.history.push(steerEvent);
+              if (onEvent) onEvent(steerEvent);
+
+              // Archive the processed message and invalidate cache
+              await this._steeringManager.archiveMessage(taskContext.jobId, msg.id);
+              this._steeringManager.invalidatePendingCache(taskContext.jobId);
+            }
+          }
+
+          // Notify caller
+          if (onEvent) onEvent(event);
+
+          // Track history for failover handoff
+          taskContext.history.push(event);
+
+          // Capture result text
+          if (event.type === 'done') {
+            result = (event.content as DoneEventContent).text ?? '';
+          }
+
+          // Handle errors — trigger failover (R3)
+          if (event.type === 'error') {
+            const errorContent = event.content as ErrorEventContent;
+            const error = new Error(errorContent.message ?? 'Unknown provider error');
+
+            // Guard: skip failover if depth exceeded
+            if (failoverDepth >= Orchestrator.MAX_FAILOVER_DEPTH) {
+              throw error;
+            }
+
+            // R3: Connect FailoverController to error path
+            const failoverResult = await this._failoverController.handleFailure(
+              taskContext,
+              provider,
+              error,
             );
-          }
-        }
 
-        // SEC-03: Scan tool call arguments for leaked secrets
-        if (event.type === 'tool_call') {
-          const toolCallContent = event.content as ToolCallEventContent;
-          const argsText = JSON.stringify(toolCallContent.arguments ?? {});
-          const leaks = this._leakDetector.scan(argsText);
-          if (leaks.length > 0) {
-            log.warn(
-              { jobId: taskContext.jobId, tool: toolCallContent.tool, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
-              'Potential secret leak detected in tool call arguments',
-            );
-          }
-        }
+            if (failoverResult) {
+              // Re-execute with the failover provider (increment depth)
+              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+            }
 
-        // R7: Poll SteeringManager during execution
-        if (event.type === 'text' || event.type === 'tool_result') {
-          const pendingMessages = await this._steeringManager.getPendingMessages(taskContext.jobId);
-          for (const msg of pendingMessages) {
-            // Inject steering as an event
-            const steerEvent: AgentEvent = {
-              type: 'steering',
-              timestamp: new Date(),
-              content: { text: msg.type === 'steer' ? msg.message : `[${msg.type}]`, source: msg.source, author: msg.author },
-            };
-            await this._sessionManager.appendEvent(taskContext.jobId, steerEvent);
-            taskContext.history.push(steerEvent);
-            if (onEvent) onEvent(steerEvent);
+            // R5: Enqueue for retry if no failover available
+            try {
+              await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+            } catch {
+              // Max retries exceeded or enqueue failed
+            }
 
-            // Archive the processed message
-            await this._steeringManager.archiveMessage(taskContext.jobId, msg.id);
-          }
-        }
-
-        // Notify caller
-        if (onEvent) onEvent(event);
-
-        // Track history for failover handoff
-        taskContext.history.push(event);
-
-        // Capture result text
-        if (event.type === 'done') {
-          result = (event.content as DoneEventContent).text ?? '';
-        }
-
-        // Handle errors — trigger failover (R3)
-        if (event.type === 'error') {
-          const errorContent = event.content as ErrorEventContent;
-          const error = new Error(errorContent.message ?? 'Unknown provider error');
-
-          // Guard: skip failover if depth exceeded
-          if (failoverDepth >= Orchestrator.MAX_FAILOVER_DEPTH) {
+            // Mark so the outer catch doesn't re-trigger failover
+            Orchestrator._failoverErrors.add(error);
             throw error;
           }
-
-          // R3: Connect FailoverController to error path
+        }
+      } catch (err) {
+        // Skip failover for errors already marked by the failover path
+        const isFailoverError = err instanceof Error && Orchestrator._failoverErrors.has(err);
+        if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
+          // R3: Try failover on execution exceptions
           const failoverResult = await this._failoverController.handleFailure(
             taskContext,
             provider,
-            error,
+            err,
           );
 
           if (failoverResult) {
-            // Re-execute with the failover provider (increment depth)
+            // Mark the error so downstream doesn't re-trigger failover
+            Orchestrator._failoverErrors.add(err);
             return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
           }
 
-          // R5: Enqueue for retry if no failover available
+          // R5: Enqueue for retry
           try {
-            await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+            await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
           } catch {
-            // Max retries exceeded or enqueue failed
+            // Max retries exceeded
           }
-
-          // Mark so the outer catch doesn't re-trigger failover
-          Orchestrator._failoverErrors.add(error);
-          throw error;
         }
+        throw err;
       }
-    } catch (err) {
-      // Skip failover for errors already marked by the failover path
-      const isFailoverError = err instanceof Error && Orchestrator._failoverErrors.has(err);
-      if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
-        // R3: Try failover on execution exceptions
-        const failoverResult = await this._failoverController.handleFailure(
-          taskContext,
-          provider,
-          err,
-        );
-
-        if (failoverResult) {
-          // Mark the error so downstream doesn't re-trigger failover
-          Orchestrator._failoverErrors.add(err);
-          return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
-        }
-
-        // R5: Enqueue for retry
-        try {
-          await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
-        } catch {
-          // Max retries exceeded
-        }
-      }
-      throw err;
+    } finally {
+      // Always close the buffered writer — flushes remaining events and stops the timer.
+      // This runs on all exit paths: success, throw, and failover returns.
+      await bufferedWriter.close();
     }
 
     // Record completion in daily notes
@@ -604,9 +659,10 @@ export class Orchestrator {
 
   /**
    * Creates custom tools available to the agent during execution.
+   * Includes: permission tools, memory tools (search/save/forget), recall_context.
    */
   private _createCustomTools(): CustomToolDefinition[] {
-    return [
+    const permissionTools: CustomToolDefinition[] = [
       {
         name: 'check_permissions',
         description: 'Check if you have access to specific paths or commands before executing. Use this during planning to verify your boundaries.',
@@ -655,9 +711,6 @@ export class Orchestrator {
             }
           }
 
-          // The actual approval flow happens outside (CLI prompt, dashboard, etc.)
-          // For now, return the request details so the caller can present them to the user.
-          // In the CLI, this will be intercepted by the onEvent callback.
           return {
             granted: false,
             pending: true,
@@ -667,6 +720,39 @@ export class Orchestrator {
         },
       },
     ];
+
+    // Wire existing memory tools (memory_search, memory_save, memory_forget)
+    const memoryTools = createMemoryTools(this._memoryManager, this._validationPipeline);
+
+    // Add recall_context tool for daily notes retrieval
+    const recallContextTool: CustomToolDefinition = {
+      name: 'recall_context',
+      description:
+        'Retrieve recent daily notes (rolling conversation summaries). ' +
+        'Use this to get context from the past few days of agent activity.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          days: {
+            type: 'number',
+            description: 'Number of recent days to retrieve (default: 3, max: 14).',
+            default: 3,
+          },
+        },
+      },
+      handler: async (input: Record<string, unknown>): Promise<unknown> => {
+        const days = Math.min(Math.max((input.days as number) ?? 3, 1), 14);
+        const notes = await this._memoryManager.recallDailyNotes(days);
+
+        if (notes.length === 0) {
+          return { notes: [], message: 'No daily notes found for the requested period.' };
+        }
+
+        return { notes, count: notes.length, days };
+      },
+    };
+
+    return [...permissionTools, ...memoryTools, recallContextTool];
   }
 
   /**

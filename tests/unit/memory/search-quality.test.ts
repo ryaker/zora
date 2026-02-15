@@ -263,7 +263,7 @@ describe('Search Quality — MEM-10', () => {
   describe('Salience component composition', () => {
     const scorer = new SalienceScorer();
 
-    it('score is sum of all components (additive model)', () => {
+    it('score is product of all components (multiplicative model)', () => {
       const item = makeItem({
         summary: 'logging framework pino',
         tags: ['logging', 'pino'],
@@ -275,7 +275,9 @@ describe('Search Quality — MEM-10', () => {
       const result = scorer.scoreItem(item, 'logging');
       const { accessWeight, recencyDecay, relevanceScore, sourceTrustBonus } = result.components;
 
-      const expectedTotal = accessWeight + recencyDecay + relevanceScore + sourceTrustBonus;
+      // SalienceScorer uses multiplicative composition:
+      // score = relevanceScore * recencyDecay * frequencyBoost * trustScore
+      const expectedTotal = relevanceScore * recencyDecay * accessWeight * sourceTrustBonus;
       expect(result.score).toBeCloseTo(expectedTotal, 10);
     });
 
@@ -291,7 +293,7 @@ describe('Search Quality — MEM-10', () => {
       expect(decay).toBeGreaterThan(0.99);
     });
 
-    it('access weight scales linearly with count', () => {
+    it('frequency boost uses logarithmic scaling with base 1.0', () => {
       const item0 = makeItem({ access_count: 0 });
       const item10 = makeItem({ access_count: 10 });
       const item100 = makeItem({ access_count: 100 });
@@ -300,9 +302,14 @@ describe('Search Quality — MEM-10', () => {
       const score10 = scorer.scoreItem(item10, '');
       const score100 = scorer.scoreItem(item100, '');
 
-      expect(score0.components.accessWeight).toBe(0);
-      expect(score10.components.accessWeight).toBeCloseTo(3.0);
-      expect(score100.components.accessWeight).toBeCloseTo(30.0);
+      // frequencyBoost = 1.0 + log2(1 + count) * 0.15
+      expect(score0.components.accessWeight).toBeCloseTo(1.0); // 1 + log2(1)*0.15 = 1.0
+      expect(score10.components.accessWeight).toBeCloseTo(1.0 + Math.log2(11) * 0.15); // ~1.519
+      expect(score100.components.accessWeight).toBeCloseTo(1.0 + Math.log2(101) * 0.15); // ~2.0
+
+      // Monotonically increasing
+      expect(score10.components.accessWeight).toBeGreaterThan(score0.components.accessWeight);
+      expect(score100.components.accessWeight).toBeGreaterThan(score10.components.accessWeight);
     });
 
     it('relevance score is 0 for empty query', () => {

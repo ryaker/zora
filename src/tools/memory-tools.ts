@@ -11,7 +11,7 @@ import type { CustomToolDefinition } from '../orchestrator/execution-loop.js';
 import type { MemoryManager } from '../memory/memory-manager.js';
 import type { StructuredMemory } from '../memory/structured-memory.js';
 import type { ValidationPipeline } from '../memory/validation-pipeline.js';
-import type { MemoryItemType, SourceType } from '../memory/memory-types.js';
+import type { MemoryItem, MemoryItemType, SourceType } from '../memory/memory-types.js';
 
 const VALID_TYPES: MemoryItemType[] = ['profile', 'event', 'knowledge', 'behavior', 'skill', 'tool'];
 const VALID_SOURCE_TYPES: SourceType[] = ['user_instruction', 'agent_analysis', 'tool_output'];
@@ -156,12 +156,13 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
 
       let scores = await memoryManager.searchMemory(query, limit * 2); // fetch extra for filtering
 
-      // Build item map once from search results (avoid redundant listItems)
-      const itemIds = scores.map(s => s.itemId);
-      const allItems = await memoryManager.structuredMemory.listItems();
-      const itemMap = new Map(
-        allItems.filter(i => itemIds.includes(i.id)).map(i => [i.id, i])
-      );
+      // Build item map from read-only lookups (peekItem avoids inflating access_count
+      // and triggering disk writes for each search result)
+      const itemMap = new Map<string, MemoryItem>();
+      for (const s of scores) {
+        const item = await memoryManager.structuredMemory.peekItem(s.itemId);
+        if (item) itemMap.set(item.id, item);
+      }
 
       // Apply type filter if specified
       if (typeFilter) {

@@ -18,6 +18,8 @@ import type {
 
 export class SteeringManager {
   private readonly _steeringDir: string;
+  /** Debounce cache for getPendingMessages — avoids per-event readdir calls. */
+  private _pendingCache: Map<string, { messages: (SteeringMessage & { id: string })[]; timestamp: number }> = new Map();
 
   constructor(baseDir: string = path.join(os.homedir(), '.zora')) {
     this._steeringDir = path.join(baseDir, 'steering');
@@ -71,6 +73,29 @@ export class SteeringManager {
     return messages.sort((a, b) => 
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
+  }
+
+  /**
+   * Returns cached pending messages if the last poll was within maxAgeMs.
+   * Avoids per-event readdir + file read during streaming.
+   */
+  async cachedGetPendingMessages(
+    jobId: string,
+    maxAgeMs: number = 2000,
+  ): Promise<(SteeringMessage & { id: string })[]> {
+    const cached = this._pendingCache.get(jobId);
+    if (cached && (Date.now() - cached.timestamp) < maxAgeMs) {
+      return cached.messages;
+    }
+
+    const messages = await this.getPendingMessages(jobId);
+    this._pendingCache.set(jobId, { messages, timestamp: Date.now() });
+    return messages;
+  }
+
+  /** Invalidate the pending messages cache for a job (call after archiving). */
+  invalidatePendingCache(jobId: string): void {
+    this._pendingCache.delete(jobId);
   }
 
   /**

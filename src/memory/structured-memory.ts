@@ -65,6 +65,8 @@ export class StructuredMemory {
     };
     await this._writeItem(item);
     this._addToIndex(item);
+    // Persist index so cold starts don't need full rebuild
+    await this._saveIndex();
     return item;
   }
 
@@ -84,6 +86,19 @@ export class StructuredMemory {
       }
       throw err;
     }
+  }
+
+  /**
+   * Read-only item access — does NOT update access_count or last_accessed.
+   * Use this for search results where you need the item data but don't want
+   * to inflate access statistics or trigger disk writes.
+   */
+  async peekItem(id: string): Promise<MemoryItem | null> {
+    // Check cache first
+    const cached = this._itemCache.get(id);
+    if (cached) return cached;
+    // Read from disk without side effects
+    return this._readItemFile(id);
   }
 
   async updateItem(id: string, updates: Partial<MemoryItem>): Promise<MemoryItem | null> {
@@ -106,6 +121,7 @@ export class StructuredMemory {
     try {
       await fs.unlink(this._itemPath(id));
       this._removeFromIndex(id);
+      await this._saveIndex();
       return true;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -294,11 +310,20 @@ export class StructuredMemory {
         tokenize: (text: string) => text.toLowerCase().split(/[\s\-_./]+/).filter(t => t.length > 0),
       });
 
-      // Populate item cache from disk
-      const items = await this._readAllItems();
-      for (const item of items) {
-        this._itemCache.set(item.id, item);
+      // Validate: compare index document count against file count on disk
+      // (lightweight readdir, not full item read) to detect stale indexes.
+      let fileCount = 0;
+      try {
+        const files = await fs.readdir(this._itemsDir);
+        fileCount = files.filter(f => f.endsWith('.json')).length;
+      } catch {
+        // If dir missing, count is 0
       }
+
+      if (fileCount !== this._searchIndex.documentCount) {
+        return false; // triggers rebuildIndex() in init()
+      }
+
       return true;
     } catch {
       return false;

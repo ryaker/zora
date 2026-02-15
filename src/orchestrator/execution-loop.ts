@@ -9,10 +9,12 @@
 
 import {
   query,
+  createSdkMcpServer,
   type PermissionMode,
   type HookCallback,
   type CanUseTool,
   type AgentDefinition,
+  type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
 import { createLogger } from '../utils/logger.js';
@@ -35,6 +37,9 @@ export interface SdkHookMatcher {
 /**
  * Custom tool that Zora can inject into the SDK execution.
  * Used for Zora-specific tools like check_permissions and request_permissions.
+ *
+ * These are registered as an in-process MCP server via createSdkMcpServer(),
+ * which is the SDK's supported mechanism for custom tools.
  */
 export interface CustomToolDefinition {
   name: string;
@@ -81,17 +86,40 @@ export class ExecutionLoop {
     let result = '';
     let sessionId: string | undefined;
 
-    // Build custom tool schemas for SDK registration
-    const customToolSchemas = (this._opts.customTools ?? []).map(t => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.input_schema,
-    }));
+    // Register custom tools as an in-process MCP server (the SDK's supported mechanism).
+    // The old approach of passing { customTools } to sdkOptions was silently ignored.
+    const mcpServers: Record<string, McpServerConfig> = {
+      ...(this._opts.mcpServers as Record<string, McpServerConfig> ?? {}),
+    };
+
+    const customTools = this._opts.customTools ?? [];
+    const customToolNames: string[] = [];
+    if (customTools.length > 0) {
+      const toolDefs = customTools.map(t => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.input_schema as Record<string, unknown>,
+        handler: async (args: Record<string, unknown>) => {
+          const result = await t.handler(args);
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+          };
+        },
+      }));
+
+      mcpServers['zora-tools'] = createSdkMcpServer({
+        name: 'zora-tools',
+        version: '1.0.0',
+        tools: toolDefs,
+      });
+
+      customToolNames.push(...customTools.map(t => `mcp__zora-tools__${t.name}`));
+    }
 
     const sdkOptions: Record<string, unknown> = {
-      allowedTools: this._opts.allowedTools ?? DEFAULT_TOOLS,
+      allowedTools: [...(this._opts.allowedTools ?? DEFAULT_TOOLS), ...customToolNames],
       permissionMode: this._opts.permissionMode ?? 'default',
-      mcpServers: this._opts.mcpServers ?? {},
+      mcpServers,
       agents: this._opts.agents ?? {},
       systemPrompt: this._opts.systemPrompt,
       cwd: this._opts.cwd ?? process.cwd(),
@@ -100,7 +128,6 @@ export class ExecutionLoop {
       hooks: this._opts.hooks ?? {},
       canUseTool: this._opts.canUseTool,
       settingSources: ['user', 'project'],
-      ...(customToolSchemas.length > 0 ? { customTools: customToolSchemas } : {}),
     };
 
     // ERR-05: Timeout protection (default 30 minutes)
