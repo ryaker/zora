@@ -329,9 +329,22 @@ export class DashboardServer {
 
   /**
    * Broadcast an event to all connected SSE clients.
+   *
+   * Per the SSE spec, each line in a multi-line `data:` field is sent as a
+   * separate `data:` prefixed line.  JSON.stringify escapes control characters
+   * but if the serialised string somehow contains literal newlines (e.g. from
+   * pre-stringified content embedded in the event) the EventSource parser
+   * would split them, breaking JSON.parse on the client.  We guard against
+   * this by splitting on newlines and emitting each as its own `data:` line —
+   * the browser's EventSource will concatenate them with `\n` before handing
+   * the reassembled string to the `onmessage` handler.
    */
   broadcastEvent(event: { type: string; data: unknown }): void {
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
+    const json = JSON.stringify(event);
+    // Split on any literal newline that might have survived serialisation
+    const lines = json.split(/\r?\n/);
+    const payload = lines.map(l => `data: ${l}`).join('\n') + '\n\n';
+
     for (const client of this._sseClients) {
       try {
         client.write(payload);
