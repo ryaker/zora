@@ -135,16 +135,44 @@ export class MemoryManager {
 
   /**
    * Searches structured memory items by query, ranked by salience.
+   * Uses MiniSearch BM25+ scores composed with salience factors.
    */
   async searchMemory(query: string, limit?: number): Promise<SalienceScore[]> {
-    const items = await this._structuredMemory.searchItems(query);
-    return this._scorer.rankItems(items, query, limit);
+    const results = await this._structuredMemory.searchItemsWithScores(query);
+    const scored = results.map(({ item, bm25Score }) =>
+      this._scorer.scoreItem(item, query, bm25Score),
+    );
+    scored.sort((a, b) => b.score - a.score);
+    return limit !== undefined ? scored.slice(0, limit) : scored;
   }
 
   /**
-   * Deletes a structured memory item by ID.
+   * Soft-deletes a structured memory item by ID.
+   * Moves the item to an archive directory before removing.
    */
-  async forgetItem(id: string): Promise<boolean> {
+  async forgetItem(id: string, reason?: string): Promise<boolean> {
+    // Use getItem for direct lookup instead of listItems + find
+    const item = await this._structuredMemory.getItem(id);
+
+    if (item) {
+      const archiveDir = path.join(this._baseDir, 'memory', 'archive');
+      try {
+        await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
+        const archiveData = {
+          ...item,
+          archived_at: new Date().toISOString(),
+          archive_reason: reason ?? 'No reason provided',
+        };
+        await fs.writeFile(
+          path.join(archiveDir, `${id}.json`),
+          JSON.stringify(archiveData, null, 2),
+          { mode: 0o600 },
+        );
+      } catch {
+        // Archive is best-effort
+      }
+    }
+
     return this._structuredMemory.deleteItem(id);
   }
 

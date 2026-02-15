@@ -22,10 +22,11 @@ function makeItem(overrides: Partial<MemoryItem> = {}): MemoryItem {
 describe('SalienceScorer', () => {
   const scorer = new SalienceScorer();
 
-  it('computes access weight as count * 0.3', () => {
+  it('computes frequency boost with logarithmic scaling', () => {
     const item = makeItem({ access_count: 10 });
     const score = scorer.scoreItem(item, '');
-    expect(score.components.accessWeight).toBeCloseTo(3.0);
+    // frequencyBoost = 1.0 + log2(1 + 10) * 0.15 ≈ 1.519
+    expect(score.components.accessWeight).toBeCloseTo(1.519, 2);
   });
 
   it('computes recency decay — recent item near 1.0', () => {
@@ -35,18 +36,20 @@ describe('SalienceScorer', () => {
     expect(decay).toBeLessThanOrEqual(1.0);
   });
 
-  it('computes recency decay — 7-day-old item near 0.5', () => {
+  it('computes recency decay — 7-day-old item near 0.707 (14-day half-life)', () => {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const decay = scorer.recencyDecay(sevenDaysAgo);
-    expect(decay).toBeGreaterThan(0.45);
-    expect(decay).toBeLessThan(0.55);
+    // 14-day half-life: at 7 days = sqrt(0.5) ≈ 0.707
+    expect(decay).toBeGreaterThan(0.68);
+    expect(decay).toBeLessThan(0.73);
   });
 
-  it('computes recency decay — 14-day-old item near 0.25', () => {
+  it('computes recency decay — 14-day-old item near 0.5 (14-day half-life)', () => {
     const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
     const decay = scorer.recencyDecay(twoWeeksAgo);
-    expect(decay).toBeGreaterThan(0.2);
-    expect(decay).toBeLessThan(0.3);
+    // 14-day half-life: at 14 days = 0.5
+    expect(decay).toBeGreaterThan(0.45);
+    expect(decay).toBeLessThan(0.55);
   });
 
   it('computes relevance score with keyword overlap', () => {
@@ -69,10 +72,12 @@ describe('SalienceScorer', () => {
     expect(score).toBe(0);
   });
 
-  it('returns correct source trust bonuses', () => {
-    expect(scorer.sourceTrustBonus('user_instruction')).toBe(0.2);
-    expect(scorer.sourceTrustBonus('agent_analysis')).toBe(0.1);
-    expect(scorer.sourceTrustBonus('tool_output')).toBe(0.0);
+  it('returns correct trust scores (multiplicative)', () => {
+    expect(scorer.trustScore('user_instruction')).toBe(1.0);
+    expect(scorer.trustScore('agent_analysis')).toBe(0.7);
+    expect(scorer.trustScore('tool_output')).toBe(0.3);
+    // sourceTrustBonus delegates to trustScore
+    expect(scorer.sourceTrustBonus('user_instruction')).toBe(1.0);
   });
 
   it('ranks items in descending salience order', () => {

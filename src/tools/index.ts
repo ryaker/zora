@@ -6,3 +6,4 @@
  */
 
 export * from './notifications.js';
+export * from './memory-tools.js';
