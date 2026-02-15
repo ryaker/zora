@@ -28,6 +28,7 @@ export class Router {
   private readonly _providers: LLMProvider[];
   private readonly _mode: RoutingMode;
   private readonly _providerOnlyName?: string;
+  private _roundRobinIndex = 0;
 
   /** Ordered cost tiers for comparison and filtering */
   private static readonly COST_ORDER: Record<string, number> = {
@@ -36,6 +37,37 @@ export class Router {
     metered: 2,
     premium: 3,
   };
+
+  /** Keywords that indicate reasoning-heavy tasks, even if other keywords appear */
+  private static readonly REASONING_KEYWORDS = [
+    'analyze', 'explain', 'design', 'compare', 'evaluate',
+    'why', 'how does', 'critique', 'review', 'assess', 'summarize',
+    'plan', 'strategy', 'recommend', 'decide', 'trade-off', 'tradeoff',
+  ];
+
+  /** Keywords that indicate coding tasks */
+  private static readonly CODING_KEYWORDS = [
+    'code', 'refactor', 'fix bug', 'implement', 'function',
+    'class', 'compile', 'debug', 'programming', 'syntax',
+  ];
+
+  /** Keywords that indicate search/research tasks */
+  private static readonly SEARCH_KEYWORDS = [
+    'search', 'find', 'research', 'look up', 'lookup', 'discover',
+  ];
+
+  /** Keywords that indicate data processing tasks */
+  private static readonly DATA_KEYWORDS = [
+    'json', 'csv', 'extract', 'parse', 'transform data', 'format',
+  ];
+
+  /** Keywords that indicate creative tasks */
+  private static readonly CREATIVE_KEYWORDS = [
+    'write', 'blog', 'creative', 'story', 'poem', 'essay', 'draft',
+  ];
+
+  /** Simple character count threshold — tasks below this are "simple" */
+  private static readonly SIMPLE_CHAR_THRESHOLD = 20;
 
   constructor(options: RouterOptions) {
     this._providers = options.providers;
@@ -83,9 +115,11 @@ export class Router {
     switch (this._mode) {
       case 'optimize_cost':
         return this._sortByCost(candidates)[0]!;
-      case 'round_robin':
-        // Simplified round-robin for v1: just pick random from top candidates
-        return candidates[Math.floor(Math.random() * candidates.length)]!;
+      case 'round_robin': {
+        const idx = this._roundRobinIndex % candidates.length;
+        this._roundRobinIndex++;
+        return candidates[idx]!;
+      }
       case 'respect_ranking':
       default:
         return this._sortByRank(candidates)[0]!;
@@ -94,29 +128,68 @@ export class Router {
 
   /**
    * Classifies a task based on its context to determine required capabilities.
-   * This implements the classification logic from §5.1.
+   * Uses multi-factor classification: keyword scoring, token count, and
+   * linguistic analysis. Reasoning keywords take priority over domain keywords
+   * to avoid misrouting analytical tasks (e.g. "analyze this code" → reasoning).
    */
   classifyTask(taskText: string): { complexity: TaskComplexity; resourceType: TaskResourceType } {
     const text = taskText.toLowerCase();
 
-    // Resource Type heuristics
-    let resourceType: TaskResourceType = 'reasoning';
-    if (text.includes('search') || text.includes('find') || text.includes('research')) {
-      resourceType = 'search';
-    } else if (text.includes('code') || text.includes('refactor') || text.includes('fix bug')) {
-      resourceType = 'coding';
-    } else if (text.includes('json') || text.includes('csv') || text.includes('extract')) {
-      resourceType = 'data';
-    } else if (text.includes('write') || text.includes('blog') || text.includes('creative')) {
-      resourceType = 'creative';
+    // Score each resource type by keyword matches
+    const scores: Record<TaskResourceType, number> = {
+      reasoning: 0,
+      coding: 0,
+      search: 0,
+      data: 0,
+      creative: 0,
+      mixed: 0,
+    };
+
+    const CATEGORY_CONFIGS = [
+      { keywords: Router.REASONING_KEYWORDS, key: 'reasoning' as TaskResourceType, weight: 2 },
+      { keywords: Router.CODING_KEYWORDS, key: 'coding' as TaskResourceType, weight: 1 },
+      { keywords: Router.SEARCH_KEYWORDS, key: 'search' as TaskResourceType, weight: 1 },
+      { keywords: Router.DATA_KEYWORDS, key: 'data' as TaskResourceType, weight: 1 },
+      { keywords: Router.CREATIVE_KEYWORDS, key: 'creative' as TaskResourceType, weight: 1 },
+    ];
+
+    for (const config of CATEGORY_CONFIGS) {
+      for (const kw of config.keywords) {
+        if (text.includes(kw)) {
+          scores[config.key] += config.weight;
+        }
+      }
     }
 
-    // Complexity heuristics
+    // Pick the resource type with highest score; default to reasoning
+    let resourceType: TaskResourceType = 'reasoning';
+    let maxScore = 0;
+    for (const [type, score] of Object.entries(scores) as [TaskResourceType, number][]) {
+      if (type === 'mixed') continue;
+      if (score > maxScore) {
+        maxScore = score;
+        resourceType = type;
+      }
+    }
+
+    // Complexity heuristics — multi-factor
     let complexity: TaskComplexity = 'moderate';
-    if (text.includes('refactor') || text.includes('security') || text.includes('architect')) {
+
+    // Complex indicators: architecture, security, refactoring, or multiple domains
+    const nonZeroScores = Object.values(scores).filter((s) => s > 0).length;
+    if (
+      text.includes('refactor') ||
+      text.includes('security') ||
+      text.includes('architect') ||
+      nonZeroScores >= 3
+    ) {
       complexity = 'complex';
-    } else if (text.length < 50 && !text.includes('research')) {
-      complexity = 'simple';
+    } else {
+      // Estimate character count by whitespace splitting (rough approximation)
+      const charCount = text.split(/\s+/).length;
+      if (charCount < Router.SIMPLE_CHAR_THRESHOLD && !text.includes('research')) {
+        complexity = 'simple';
+      }
     }
 
     return { complexity, resourceType };

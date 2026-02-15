@@ -694,7 +694,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ORCHESTRATION.md",
       "wsjf": {
         "usability_value": 3,
@@ -704,7 +704,8 @@
         "job_size": 4,
         "score": 2.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "orchestration"
     },
     {
       "id": "ORCH-11",
@@ -716,7 +717,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/ORCHESTRATION.md",
       "wsjf": {
         "usability_value": 1,
@@ -726,7 +727,8 @@
         "job_size": 1,
         "score": 5.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "orchestration"
     },
     {
       "id": "TYPE-01",
