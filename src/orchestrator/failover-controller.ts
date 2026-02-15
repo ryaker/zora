@@ -17,6 +17,7 @@ import type {
   ToolCallEventContent,
   ToolResultEventContent,
 } from '../types.js';
+import { isTextEvent, isToolCallEvent } from '../types.js';
 import { Router } from './router.js';
 
 export interface FailoverResult {
@@ -95,21 +96,22 @@ export class FailoverController {
     const toolHistory: HandoffBundle['toolHistory'] = [];
 
     for (const event of history) {
-      if (event.type === 'text') {
-        const content = event.content as TextEventContent;
-        progress.push(content.text);
-      } else if (event.type === 'tool_call') {
-        const content = event.content as ToolCallEventContent;
+      if (isTextEvent(event)) {
+        progress.push(event.content.text);
+      } else if (isToolCallEvent(event)) {
         toolHistory.push({
-          toolCallId: content.toolCallId,
-          tool: content.tool,
-          arguments: content.arguments,
+          toolCallId: event.content.toolCallId,
+          tool: event.content.tool,
+          arguments: event.content.arguments,
         });
       } else if (event.type === 'tool_result') {
         const content = event.content as ToolResultEventContent;
         const lastTool = toolHistory[toolHistory.length - 1];
         if (lastTool && lastTool.toolCallId === content.toolCallId) {
-          const result = content.result as Record<string, unknown> | undefined;
+          // Handle result being a string or object
+          const result = typeof content.result === 'string'
+            ? { content: content.result }
+            : (content.result as Record<string, unknown> | undefined);
           lastTool.result = {
             status: content.error ? 'error' : 'ok',
             output: result ? String(result['content'] ?? result['stdout'] ?? '') : undefined,

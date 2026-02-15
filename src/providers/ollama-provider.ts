@@ -185,6 +185,11 @@ export class OllamaProvider implements LLMProvider {
           continue;
         }
 
+        // Null check before accessing chunk properties
+        if (!chunk) {
+          continue;
+        }
+
         const chunkMessage = chunk.message as Record<string, unknown> | undefined;
         if (chunkMessage?.content) {
           const text = String(chunkMessage.content);
