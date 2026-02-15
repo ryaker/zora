@@ -315,6 +315,10 @@ export class Orchestrator {
   async submitTask(options: SubmitTaskOptions): Promise<string> {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
+    // Reset per-task state: ValidationPipeline rate limit is per-session, not per-orchestrator-lifetime.
+    // Without this, after MAX_SAVES_PER_SESSION saves across all tasks, memory_save permanently blocks.
+    this._validationPipeline.resetSession();
+
     // MEM-05 / ORCH-07: Progressive memory context — lightweight index, not full dump.
     // The LLM uses memory_search / recall_context tools for on-demand retrieval.
     let memoryContext: string[] = [];

@@ -239,7 +239,8 @@ export class MemoryManager {
     const items: MemoryItem[] = [];
 
     for (const s of scores) {
-      const item = await this._structuredMemory.getItem(s.itemId);
+      // Use peekItem for read-only access — avoids inflating access stats during search
+      const item = await this._structuredMemory.peekItem(s.itemId);
       if (item) items.push(item);
     }
 
@@ -255,11 +256,16 @@ export class MemoryManager {
   }
 
   /**
-   * Consolidates daily notes older than threshold into structured memory items.
-   * Archives the consolidated files to memory/daily/archive/.
+   * Archives daily notes older than threshold to memory/daily/archive/.
+   * Appends a summary header to MEMORY.md noting the archived date range.
+   * Archived notes remain on disk in the archive/ subdirectory for manual
+   * review but are excluded from the active daily notes directory.
    *
-   * @param thresholdDays Notes older than this are consolidated (default: 7)
-   * @returns Number of notes consolidated
+   * Note: This does NOT consolidate note content into structured memory items.
+   * It is a housekeeping operation that moves old files out of the active path.
+   *
+   * @param thresholdDays Notes older than this are archived (default: 7)
+   * @returns Number of notes archived
    */
   async consolidateDailyNotes(thresholdDays: number = 7): Promise<number> {
     const dir = this._getDailyNotesPath();
@@ -282,18 +288,7 @@ export class MemoryManager {
 
     if (oldFiles.length === 0) return 0;
 
-    // Read old notes
-    const noteContents: string[] = [];
-    for (const file of oldFiles) {
-      try {
-        const content = await fs.readFile(path.join(dir, file), 'utf8');
-        noteContents.push(`[${file.replace('.md', '')}]\n${content}`);
-      } catch {
-        // Skip unreadable files
-      }
-    }
-
-    // Archive old files
+    // Archive old files (moved, not deleted — still accessible for manual review)
     const archiveDir = path.join(dir, 'archive');
     await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
     for (const file of oldFiles) {
@@ -304,22 +299,20 @@ export class MemoryManager {
       }
     }
 
-    // Append a consolidation note to MEMORY.md
-    if (noteContents.length > 0) {
-      const consolidationSummary = `\n## Consolidated ${oldFiles.length} daily notes (${oldFiles[0]!.replace('.md', '')} to ${oldFiles[oldFiles.length - 1]!.replace('.md', '')})\n`;
-      const ltPath = this._getLongTermPath();
-      try {
-        await fs.appendFile(ltPath, consolidationSummary, { mode: 0o600 });
-        await this._saveIntegrityHash();
-      } catch {
-        // Best-effort
-      }
+    // Append a consolidation summary to MEMORY.md
+    const consolidationSummary = `\n## Archived ${oldFiles.length} daily notes (${oldFiles[0]!.replace('.md', '')} to ${oldFiles[oldFiles.length - 1]!.replace('.md', '')})\n`;
+    const ltPath = this._getLongTermPath();
+    try {
+      await fs.appendFile(ltPath, consolidationSummary, { mode: 0o600 });
+      await this._saveIntegrityHash();
+    } catch {
+      // Best-effort
     }
 
     // Invalidate index cache
     this._indexCache = null;
 
-    log.info({ consolidated: oldFiles.length, thresholdDays }, 'Daily notes consolidated');
+    log.info({ archived: oldFiles.length, thresholdDays }, 'Daily notes archived');
     return oldFiles.length;
   }
 

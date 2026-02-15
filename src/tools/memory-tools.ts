@@ -156,10 +156,11 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
 
       let scores = await memoryManager.searchMemory(query, limit * 2); // fetch extra for filtering
 
-      // Build item map from targeted lookups (avoid redundant listItems that reads ALL items)
+      // Build item map from read-only lookups (peekItem avoids inflating access_count
+      // and triggering disk writes for each search result)
       const itemMap = new Map<string, MemoryItem>();
       for (const s of scores) {
-        const item = await memoryManager.structuredMemory.getItem(s.itemId);
+        const item = await memoryManager.structuredMemory.peekItem(s.itemId);
         if (item) itemMap.set(item.id, item);
       }
 

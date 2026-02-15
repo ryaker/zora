@@ -10,6 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { AgentEvent } from '../types.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('session-manager');
 
 /**
  * BufferedSessionWriter — Batches event writes to reduce disk I/O during streaming.
@@ -24,6 +27,10 @@ export class BufferedSessionWriter {
   private _buffer: AgentEvent[] = [];
   private _flushTimer: ReturnType<typeof setInterval> | null = null;
   private _flushing = false;
+  private _flushPromise: Promise<void> | null = null;
+
+  /** Max buffered events before dropping oldest (prevents OOM on persistent disk failure). */
+  private static readonly MAX_BUFFER_SIZE = 10_000;
 
   constructor(sessionManager: SessionManager, jobId: string, flushIntervalMs = 500) {
     this._sessionManager = sessionManager;
@@ -41,6 +48,10 @@ export class BufferedSessionWriter {
   /** Buffer an event for batched writing. */
   append(event: AgentEvent): void {
     this._buffer.push(event);
+    // Drop oldest events if buffer exceeds cap (prevents OOM on sustained disk failure)
+    if (this._buffer.length > BufferedSessionWriter.MAX_BUFFER_SIZE) {
+      this._buffer = this._buffer.slice(-BufferedSessionWriter.MAX_BUFFER_SIZE);
+    }
   }
 
   /** Flush all buffered events to disk as a single write. */
@@ -51,28 +62,45 @@ export class BufferedSessionWriter {
     const events = this._buffer;
     this._buffer = [];
 
-    try {
-      // Write all events in a single appendFile call
-      const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n';
-      await fs.promises.appendFile(
-        this._sessionManager.getSessionPath(this._jobId),
-        lines,
-        'utf8',
-      );
-    } catch {
-      // On write failure, put events back at front of buffer for retry
-      this._buffer = [...events, ...this._buffer];
-    } finally {
-      this._flushing = false;
-    }
+    const promise = (async () => {
+      try {
+        const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n';
+        await fs.promises.appendFile(
+          this._sessionManager.getSessionPath(this._jobId),
+          lines,
+          'utf8',
+        );
+      } catch (err) {
+        log.warn({ jobId: this._jobId, eventCount: events.length, err }, 'Session flush failed, re-buffering events');
+        // On write failure, put events back (capped by MAX_BUFFER_SIZE in append)
+        this._buffer = [...events, ...this._buffer];
+      } finally {
+        this._flushing = false;
+        this._flushPromise = null;
+      }
+    })();
+
+    this._flushPromise = promise;
+    await promise;
   }
 
-  /** Flush remaining events and stop the timer. */
+  /** Flush remaining events and stop the timer. Waits for any in-progress flush. */
   async close(): Promise<void> {
     if (this._flushTimer) {
       clearInterval(this._flushTimer);
       this._flushTimer = null;
     }
+    // Wait for any in-progress periodic flush to complete before final flush.
+    // Without this, close() could return while a periodic flush is mid-write,
+    // causing the final flush() to skip (due to _flushing guard) and lose tail events.
+    while (this._flushing) {
+      if (this._flushPromise) {
+        await this._flushPromise;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    // Final flush of any remaining buffered events
     await this.flush();
   }
 }

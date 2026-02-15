@@ -88,6 +88,19 @@ export class StructuredMemory {
     }
   }
 
+  /**
+   * Read-only item access — does NOT update access_count or last_accessed.
+   * Use this for search results where you need the item data but don't want
+   * to inflate access statistics or trigger disk writes.
+   */
+  async peekItem(id: string): Promise<MemoryItem | null> {
+    // Check cache first
+    const cached = this._itemCache.get(id);
+    if (cached) return cached;
+    // Read from disk without side effects
+    return this._readItemFile(id);
+  }
+
   async updateItem(id: string, updates: Partial<MemoryItem>): Promise<MemoryItem | null> {
     try {
       const data = await fs.readFile(this._itemPath(id), 'utf8');
@@ -297,16 +310,17 @@ export class StructuredMemory {
         tokenize: (text: string) => text.toLowerCase().split(/[\s\-_./]+/).filter(t => t.length > 0),
       });
 
-      // Populate item cache from disk
-      const items = await this._readAllItems();
-      for (const item of items) {
-        this._itemCache.set(item.id, item);
+      // Validate: compare index document count against file count on disk
+      // (lightweight readdir, not full item read) to detect stale indexes.
+      let fileCount = 0;
+      try {
+        const files = await fs.readdir(this._itemsDir);
+        fileCount = files.filter(f => f.endsWith('.json')).length;
+      } catch {
+        // If dir missing, count is 0
       }
 
-      // Validate: if items on disk don't match index size, the serialized
-      // index is stale (e.g. items were created after last index save).
-      // Force a rebuild to bring the index in sync.
-      if (items.length !== this._searchIndex.documentCount) {
+      if (fileCount !== this._searchIndex.documentCount) {
         return false; // triggers rebuildIndex() in init()
       }
 
