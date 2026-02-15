@@ -99,6 +99,7 @@ context_days = 7
 max_context_items = 20
 max_category_summaries = 5
 auto_extract_interval = 10
+auto_extract = true
 
 [security]
 policy_file = "/tmp/zora-test/policy.toml"

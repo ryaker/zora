@@ -57,6 +57,7 @@ export const DEFAULT_MEMORY: MemoryConfig = {
   max_context_items: 20,
   max_category_summaries: 5,
   auto_extract_interval: 10,
+  auto_extract: true,
 };
 
 export const DEFAULT_SECURITY: SecurityConfig = {

@@ -18,6 +18,7 @@ describe('MemoryManager', () => {
     max_context_items: 50,
     max_category_summaries: 10,
     auto_extract_interval: 3600,
+    auto_extract: true,
   };
 
   beforeEach(async () => {
