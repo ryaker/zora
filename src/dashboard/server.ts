@@ -2,7 +2,7 @@
  * DashboardServer — Local API and static file server for the Zora UI.
  *
  * Spec §6.0 "Web Dashboard Spec":
- *   - Binds to localhost:7070 by default.
+ *   - Binds to localhost:8070 by default.
  *   - Serves as the primary ingress for async steering.
  */
 
@@ -68,6 +68,8 @@ export class DashboardServer {
   /**
    * Simple in-memory rate limiter (no external dependency).
    * Limits to 100 requests per 15 minutes per IP.
+   * Exempts localhost requests to /api/* so the dashboard's own polling
+   * (health, jobs, system) doesn't consume the rate limit budget.
    * Prunes expired entries periodically to prevent unbounded memory growth.
    */
   private _createRateLimiter(): express.RequestHandler {
@@ -77,7 +79,16 @@ export class DashboardServer {
     let lastCleanup = Date.now();
 
     return (req, res, next) => {
+      // Exempt localhost API polling from rate limiting (#104).
+      // The dashboard frontend polls /api/health, /api/jobs, and /api/system
+      // frequently (~100 req/15min), which would hit the limit for its own UI.
       const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+      const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+      if (isLoopback && req.path.startsWith('/api/')) {
+        next();
+        return;
+      }
+
       const now = Date.now();
 
       // Prune expired entries every 5 minutes
@@ -320,9 +331,22 @@ export class DashboardServer {
 
   /**
    * Broadcast an event to all connected SSE clients.
+   *
+   * Per the SSE spec, each line in a multi-line `data:` field is sent as a
+   * separate `data:` prefixed line.  JSON.stringify escapes control characters
+   * but if the serialised string somehow contains literal newlines (e.g. from
+   * pre-stringified content embedded in the event) the EventSource parser
+   * would split them, breaking JSON.parse on the client.  We guard against
+   * this by splitting on newlines and emitting each as its own `data:` line —
+   * the browser's EventSource will concatenate them with `\n` before handing
+   * the reassembled string to the `onmessage` handler.
    */
   broadcastEvent(event: { type: string; data: unknown }): void {
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
+    const json = JSON.stringify(event);
+    // Split on any literal newline that might have survived serialisation
+    const lines = json.split(/\r?\n/);
+    const payload = lines.map(l => `data: ${l}`).join('\n') + '\n\n';
+
     for (const client of this._sseClients) {
       try {
         client.write(payload);
@@ -338,7 +362,7 @@ export class DashboardServer {
    * Starts the dashboard server on localhost.
    */
   async start(): Promise<void> {
-    const port = this._options.port ?? 7070;
+    const port = this._options.port ?? 8070;
     const host = this._options.host ?? '127.0.0.1';
     return new Promise((resolve) => {
       this._server = this._app.listen(port, host, () => {

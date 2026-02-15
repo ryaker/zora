@@ -160,7 +160,7 @@ You're all set! Here's what you have:
   zora-agent ask "..."     — Give Zora any task
   zora-agent status        — Check if everything's healthy
   zora-agent doctor        — Diagnose environment issues
-  zora-agent start         — Launch the dashboard at http://localhost:7070
+  zora-agent start         — Launch the dashboard at http://localhost:8070
 
 Want to learn more?
   - QUICKSTART.md    — More example tasks

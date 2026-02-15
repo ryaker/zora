@@ -354,11 +354,11 @@ Zora includes a local web dashboard so you can see what's happening without usin
 ### Accessing the dashboard
 
 ```bash
-# Start Zora (dashboard starts automatically on port 7070)
+# Start Zora (dashboard starts automatically on port 8070)
 node dist/cli/index.js start
 
 # Open in your browser
-open http://localhost:7070
+open http://localhost:8070
 ```
 
 ### Neural Steering: the coolest feature
@@ -561,7 +561,7 @@ Yes. Zora supports up to 3 parallel jobs by default (configurable in `config.tom
 │  CHECK STATUS   node dist/cli/index.js status                │
 │  START DAEMON   node dist/cli/index.js start                 │
 │  STOP DAEMON    node dist/cli/index.js stop                  │
-│  DASHBOARD      http://localhost:7070                        │
+│  DASHBOARD      http://localhost:8070                        │
 │                                                              │
 │  CONFIG FILES   ~/.zora/config.toml   (behavior)             │
 │                 ~/.zora/policy.toml   (security)             │

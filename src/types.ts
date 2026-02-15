@@ -414,6 +414,7 @@ export interface SteeringConfig {
     bot_token?: string;
     allowed_users: string[];
     rate_limit_per_min?: number;
+    mode?: 'polling' | 'webhook';
   };
 }
 

@@ -53,7 +53,7 @@ leak_detection = true
 
 [steering]
 enabled = true
-dashboard_port = 7070
+dashboard_port = 8070
 poll_interval = "5s"
 
 [notifications]

@@ -96,6 +96,20 @@ export class Orchestrator {
 
   /**
    * Boots all subsystems and starts background loops.
+   *
+   * Initialization order:
+   *  1. PolicyEngine + IntentCapsuleManager (security layer).
+   *  2. SessionManager (event persistence).
+   *  3. SteeringManager (human-in-the-loop).
+   *  4. MemoryManager (context injection).
+   *  5. Router (provider selection).
+   *  6. FailoverController (error recovery).
+   *  7. RetryQueue (deferred retry).
+   *  8. AuthMonitor (periodic auth checks every 5 min).
+   *  9. HeartbeatSystem + RoutineManager (scheduled tasks).
+   *
+   * Background loops use self-rescheduling setTimeout (not setInterval)
+   * to avoid overlapping async executions.
    */
   async boot(): Promise<void> {
     if (this._booted) return;
@@ -239,11 +253,19 @@ export class Orchestrator {
   }
 
   /**
-   * Submits a task through the full orchestration pipeline:
-   * 1. Load memory context (R6)
-   * 2. Classify and route to provider (R2)
-   * 3. Execute with event persistence (R8) and steering (R7)
-   * 4. Handle failures with failover (R3) and retry (R5)
+   * Submits a task through the full orchestration pipeline.
+   *
+   * Pipeline stages:
+   *  1. Load memory context from MemoryManager (daily notes, long-term items).
+   *  2. Load SOUL.md identity file and build the system prompt with policy awareness hints.
+   *  3. Create a signed intent capsule for goal drift detection (ASI01).
+   *  4. Classify the task by complexity and resource type for routing.
+   *  5. Route to the best available provider via the Router.
+   *  6. Execute via _executeWithProvider, which handles event persistence,
+   *     steering injection, failover, and retry queueing.
+   *
+   * @returns The final text result from the provider's 'done' event.
+   * @throws If no provider is available or all failover attempts fail.
    */
   async submitTask(options: SubmitTaskOptions): Promise<string> {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -316,6 +338,17 @@ export class Orchestrator {
 
   /**
    * Executes a task with a specific provider, handling failover and event persistence.
+   *
+   * During execution, this method:
+   * - Persists every event to the SessionManager for crash recovery.
+   * - Polls SteeringManager after text/tool_result events, injecting any pending
+   *   human steering messages into the event stream.
+   * - On error events: attempts failover via FailoverController. If failover
+   *   succeeds, recurses with the new provider (incrementing failoverDepth).
+   *   If failover fails, enqueues the task in the RetryQueue.
+   * - failoverDepth is capped at MAX_FAILOVER_DEPTH (3) to prevent unbounded recursion.
+   * - The _failoverErrors WeakSet prevents double-failover: errors already processed
+   *   by the failover path are not re-triggered in the outer catch block.
    */
   private async _executeWithProvider(
     provider: LLMProvider,

@@ -153,7 +153,7 @@ Make these changes explicitly in `policy.toml` and `config.toml`, then restart Z
 A local-only wizard can make the pre-authorization model clearer and safer.
 
 Proposed endpoint:
-- `http://localhost:7070/onboarding`
+- `http://localhost:8070/onboarding`
 
 Wizard steps:
 1. Prereqs check (doctor)

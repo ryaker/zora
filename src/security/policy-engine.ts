@@ -244,6 +244,14 @@ export class PolicyEngine {
 
   /**
    * Check if a tool invocation should be intercepted for dry-run.
+   *
+   * Dry-run interception follows a three-stage filter:
+   *  1. If `dry_run.tools` is non-empty, only intercept those specific tools.
+   *  2. If `dry_run.tools` is empty, intercept all tools in WRITE_TOOLS (Write, Edit, Bash).
+   *  3. For Bash specifically, skip read-only commands (ls, cat, git status, etc.)
+   *     so they execute normally even in dry-run mode.
+   *
+   * @returns A DryRunResult if intercepted, null if the tool should execute normally.
    */
   private _checkDryRun(toolName: string, input: Record<string, unknown>): DryRunResult | null {
     const dryRun = this._policy.dry_run;
@@ -324,6 +332,13 @@ export class PolicyEngine {
 
   /**
    * Validates if a filesystem path is allowed according to policy.
+   *
+   * Evaluation order (short-circuits on first denial):
+   *  1. Resolve ~ and make the path absolute.
+   *  2. If path is a symlink and follow_symlinks is false, resolve the real target
+   *     and check it against both denied and allowed paths.
+   *  3. Check denied_paths (deny always wins over allow).
+   *  4. Check allowed_paths.
    */
   validatePath(targetPath: string): ValidationResult {
     const fsPolicy = this._policy.filesystem;
@@ -476,6 +491,13 @@ export class PolicyEngine {
    * The SDK calls this before every tool execution. Return:
    *   { behavior: 'allow', updatedInput } to permit
    *   { behavior: 'deny', message } to block
+   *
+   * Enforcement order within the callback:
+   *  1. Tool-specific validation (Bash -> validateCommand, Read/Write/Edit -> validatePath, etc.)
+   *  2. Budget enforcement -- record the action and check session/type limits.
+   *  3. always_flag check -- prompt user for approval if the action category is flagged.
+   *  4. Intent capsule drift check -- detect if the action diverges from the original task goal.
+   *  5. Dry-run interception -- if enabled, deny with a preview message instead of executing.
    */
   createCanUseTool(): (
     toolName: string,
@@ -898,12 +920,17 @@ export class PolicyEngine {
   }
 
   /**
-   * Tokenize a shell command string, handling:
-   * - Double quotes with escape sequences (\" \\ \$ \`)
-   * - Single quotes (literal, no escapes except '')
-   * - Backslash escaping outside quotes
-   * - Empty strings ("" and '')
-   * Returns the unquoted token values.
+   * Tokenize a shell command string into individual arguments.
+   *
+   * Handles POSIX shell quoting rules:
+   * - Double quotes: interprets \\", \\\\, \\$, \\` as escape sequences.
+   * - Single quotes: all characters are literal (no escape sequences).
+   * - Backslash outside quotes: next character is taken literally.
+   * - Whitespace outside quotes: terminates the current token.
+   *
+   * Returns unquoted token values (quotes and escapes are resolved).
+   * Used by validateCommand to extract the base command name, and by
+   * _checkCommandPaths to find path-like arguments.
    */
   private _shellTokenize(input: string): string[] {
     const tokens: string[] = [];
@@ -978,8 +1005,13 @@ export class PolicyEngine {
   }
 
   /**
-   * Splits command chains (&&, ||, ;, |) while respecting quoted strings,
-   * escape sequences, and command substitution ($(...) and backticks).
+   * Splits command chains on operators (&&, ||, ;, |) while respecting:
+   * - Quoted strings (single and double) -- operators inside quotes are literal.
+   * - Escape sequences -- backslash-escaped characters are not treated as operators.
+   * - Command substitution -- $(...) and backtick blocks are treated as opaque.
+   *   Nested $() is tracked via parenDepth to avoid premature splitting.
+   *
+   * Each returned string is a standalone command to validate independently.
    */
   private _splitChainedCommands(command: string): string[] {
     const commands: string[] = [];

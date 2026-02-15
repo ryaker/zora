@@ -17,6 +17,8 @@ import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { TelegramGateway } from '../steering/telegram-gateway.js';
+import type { TelegramConfig } from '../steering/telegram-gateway.js';
 
 const log = createLogger('daemon');
 
@@ -82,10 +84,39 @@ async function main() {
       });
       return jobId;
     },
-    port: config.steering.dashboard_port ?? 7070,
+    port: config.steering.dashboard_port ?? 8070,
     host: process.env.ZORA_BIND_HOST,
   });
   await dashboard.start();
+
+  // Initialize Telegram gateway if enabled and configured
+  let telegramGateway: TelegramGateway | undefined;
+  const telegramConfig = config.steering.telegram;
+  if (telegramConfig?.enabled) {
+    const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      log.warn('Telegram enabled but no bot_token configured and TELEGRAM_BOT_TOKEN not set. Skipping.');
+    } else {
+      log.warn(
+        'Telegram: Ensure you are using a dedicated bot token for this Zora instance. ' +
+        'Sharing a bot token across multiple processes causes polling conflicts and lost messages.'
+      );
+      try {
+        const fullTelegramConfig: TelegramConfig = {
+          ...config.steering,
+          ...telegramConfig,
+          bot_token: token,
+        };
+        telegramGateway = await TelegramGateway.create(
+          fullTelegramConfig,
+          orchestrator.steeringManager,
+        );
+        log.info({ mode: telegramConfig.mode ?? 'polling' }, 'Telegram gateway started');
+      } catch (err) {
+        log.error({ err }, 'Failed to start Telegram gateway');
+      }
+    }
+  }
 
   log.info('Zora daemon is running');
 
@@ -93,6 +124,9 @@ async function main() {
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'Received signal, shutting down');
     try {
+      if (telegramGateway) {
+        await telegramGateway.stop();
+      }
       await dashboard.stop();
       await orchestrator.shutdown();
     } catch (err) {

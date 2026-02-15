@@ -75,7 +75,7 @@ export const DEFAULT_SECURITY: SecurityConfig = {
 export const DEFAULT_STEERING: SteeringConfig = {
   enabled: true,
   poll_interval: '5s',
-  dashboard_port: 7070,
+  dashboard_port: 8070,
   notify_on_flag: true,
   flag_timeout: '10m',
   auto_approve_low_risk: true,
@@ -83,7 +83,8 @@ export const DEFAULT_STEERING: SteeringConfig = {
   telegram: {
     enabled: false,
     allowed_users: [],
-    rate_limit_per_min: 20
+    rate_limit_per_min: 20,
+    mode: 'polling' as const,
   }
 };
 

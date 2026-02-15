@@ -105,7 +105,7 @@ Summarize what I now have:
 - `zora-agent ask "..."` — Give Zora any task
 - `zora-agent status` — Check system health
 - `zora-agent doctor` — Diagnose environment issues
-- `zora-agent start` — Launch the web dashboard at http://localhost:7070
+- `zora-agent start` — Launch the web dashboard at http://localhost:8070
 
 Point me to these docs for more:
 - QUICKSTART.md — More guided examples

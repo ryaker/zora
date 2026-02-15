@@ -115,11 +115,19 @@ jit_secret_decryption = true
 [steering]
 enabled = false
 poll_interval = "5s"
-dashboard_port = 7070
+dashboard_port = 8070
 notify_on_flag = true
 flag_timeout = "10m"
 auto_approve_low_risk = true
 always_flag_irreversible = true
+
+[steering.telegram]
+enabled = false
+# bot_token = "YOUR_BOT_TOKEN"  # Or set TELEGRAM_BOT_TOKEN env var
+# Use a dedicated bot token per Zora instance to avoid polling conflicts
+allowed_users = []
+rate_limit_per_min = 20
+mode = "polling"  # "polling" (default) or "webhook"
 
 [notifications]
 enabled = false
