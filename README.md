@@ -1,4 +1,4 @@
-![Zora Header](specs/v5/assets/zora_lcars_header.png)
+![Zora Header](docs/archive/v5-spec/assets/zora_lcars_header.png)
 
 # Zora
 
@@ -6,7 +6,7 @@
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Install
 
@@ -20,7 +20,7 @@ That's it. Three commands from zero to productive.
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## What It Can Do
 
@@ -47,7 +47,7 @@ That's it. Three commands from zero to productive.
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## How Security Works
 
@@ -68,7 +68,7 @@ See **[SECURITY.md](SECURITY.md)** for the full security guide and OWASP complia
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Architecture
 
@@ -91,7 +91,7 @@ See **[SECURITY.md](SECURITY.md)** for the full security guide and OWASP complia
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Project Status
 
@@ -122,7 +122,7 @@ Zora is in active development (v0.9.0). This table reflects what actually works 
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Dashboard
 
@@ -132,7 +132,7 @@ New to Zora? Use our **[AI Setup Assistant](docs/AI_SETUP_ASSISTANT.md)** — pa
 
 ---
 
-![Divider](specs/v5/assets/lcars_divider.svg)
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Documentation
 

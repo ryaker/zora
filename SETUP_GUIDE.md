@@ -1,10 +1,10 @@
-![Zora LCARS Header](specs/v5/assets/zora_lcars_header.png)
+![Zora LCARS Header](docs/archive/v5-spec/assets/zora_lcars_header.png)
 
 # Zora Setup Guide
 
 **No experience required.** This guide walks you through every step to get Zora running on your Mac, from installing prerequisites to giving it your first task. If you can copy and paste commands into a terminal, you can do this.
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Table of Contents
 
@@ -23,7 +23,7 @@
 13. [Understanding the Config Files](#understanding-the-config-files)
 14. [What's Next?](#whats-next)
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## What Is Zora?
 
@@ -61,7 +61,7 @@ Think of it as hiring a tireless digital employee that lives on your laptop.
 └─────────────────────────────────────────────────┘
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## What You Need Before Starting
 
@@ -76,7 +76,7 @@ Think of it as hiring a tireless digital employee that lives on your laptop.
 
 > **Don't worry** if you're missing Node.js or Git. Step 1 covers how to install them.
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 1: Install Node.js
 
@@ -119,7 +119,7 @@ git --version
 - ✅ If you see a version number, you're set.
 - ⚠️ If not, macOS will prompt you to install the Xcode Command Line Tools. Click "Install" and wait for it to finish.
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 2: Download Zora
 
@@ -147,7 +147,7 @@ You should see something like `/Users/yourname/zora`.
 └──────────────────────────────────────┘
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 3: Install Dependencies
 
@@ -161,7 +161,7 @@ npm install
 
 > **Warnings are OK.** Lines like `npm warn deprecated` are normal. Only red `ERR!` messages are actual problems.
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 4: Build the Project
 
@@ -176,7 +176,7 @@ npm run build
 - ✅ No output = success (TypeScript is the strong, silent type)
 - ⚠️ Errors? See [Troubleshooting](#troubleshooting)
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 5: Create Your Configuration Files
 
@@ -430,7 +430,7 @@ mkdir -p ~/.zora/audit
 └──────────────────────────────────────┘
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 6: Run the Tests
 
@@ -453,7 +453,7 @@ This runs both unit tests and browser tests. You should see green checkmarks and
 - ✅ All green? You're ready.
 - ⚠️ Tests fail? See [Troubleshooting](#troubleshooting).
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 7: Give Zora Its First Task
 
@@ -487,7 +487,7 @@ node dist/cli/index.js start
 node dist/cli/index.js stop
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Step 8: Launch the Dashboard
 
@@ -523,7 +523,7 @@ Then open your browser to the URL shown in the terminal (usually `http://localho
 └──────────────────┴──────────────────────────────┘
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Common Commands Cheat Sheet
 
@@ -555,7 +555,7 @@ Then open your browser to the URL shown in the terminal (usually `http://localho
 └────────────────────────────┴────────────────────────────────────┘
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Troubleshooting
 
@@ -630,7 +630,7 @@ Something else is using port 8070. Either stop that process or change `dashboard
 dashboard_port = 7071  # or any free port
 ```
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Understanding the Config Files
 
@@ -666,7 +666,7 @@ This file controls what Zora is and isn't allowed to do:
 >
 > **New in v0.6:** Action budgets prevent unbounded loops. Dry-run mode lets you preview what Zora would do without executing. See [SECURITY.md](SECURITY.md) for the full security guide.
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## What's Next?
 
@@ -680,11 +680,11 @@ Then explore the deeper docs:
 ├──────────────────────────────────────┬──────────────────────────┤
 │  Document                            │  What You'll Learn       │
 ├──────────────────────────────────────┼──────────────────────────┤
-│  specs/v5/ZORA_AGENT_SPEC.md         │  Full technical design   │
-│  specs/v5/docs/ARCHITECTURE.md       │  How the pieces fit      │
-│  specs/v5/docs/POLICY_REFERENCE.md   │  All policy options      │
-│  specs/v5/docs/POLICY_PRESETS.md     │  Safe/Balanced/Power     │
-│  specs/v5/IMPLEMENTATION_PLAN.md     │  Roadmap & what's next   │
+│  docs/archive/v5-spec/ZORA_AGENT_SPEC.md         │  Full technical design   │
+│  docs/archive/v5-spec/docs/ARCHITECTURE.md       │  How the pieces fit      │
+│  docs/archive/v5-spec/docs/POLICY_REFERENCE.md   │  All policy options      │
+│  docs/archive/v5-spec/docs/POLICY_PRESETS.md     │  Safe/Balanced/Power     │
+│  docs/archive/v5-spec/IMPLEMENTATION_PLAN.md     │  Roadmap & what's next   │
 └──────────────────────────────────────┴──────────────────────────┘
 ```
 
@@ -692,10 +692,10 @@ Then explore the deeper docs:
 
 1. **Create a SOUL file** -- Write `~/.zora/workspace/SOUL.md` describing your goals and preferences so Zora knows your priorities
 2. **Set up routines** -- Define recurring tasks (daily summaries, weekly reports) in your config
-3. **Tune your policy** -- Check the [Policy Presets](specs/v5/docs/POLICY_PRESETS.md) for pre-built configurations matching your risk tolerance
+3. **Tune your policy** -- Check the [Policy Presets](docs/archive/v5-spec/docs/POLICY_PRESETS.md) for pre-built configurations matching your risk tolerance
 4. **Launch the dashboard** -- Monitor everything from the LCARS-inspired tactical interface
 
-![LCARS Divider](specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 **Still stuck?** Open an issue at [https://github.com/ryaker/zora/issues](https://github.com/ryaker/zora/issues) and include:
 - Your macOS version (`sw_vers`)

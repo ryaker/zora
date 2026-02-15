@@ -132,7 +132,7 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       mode: 'allowlist',
       allowed_commands: [
         'ls', 'pwd', 'rg', 'git', 'node', 'pnpm', 'npm',
-        'python3', 'pip', 'jq', 'yq', 'find', 'sed', 'awk',
+        'python3', 'pip', 'jq', 'yq', 'find', 'sed', 'awk', 'mcp-cli',
       ],
       denied_commands: ['sudo', 'rm', 'chmod', 'chown'],
       split_chained_commands: true,
@@ -167,6 +167,7 @@ export const TOOL_STACKS: Record<string, string[]> = {
   python: ['python3', 'pip', 'pip3'],
   rust: ['cargo', 'rustc', 'rustup'],
   go: ['go'],
+  mcp: ['mcp-cli'],
   general: ['ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'grep', 'find', 'which', 'echo', 'mkdir', 'cp', 'mv', 'touch'],
 };
 

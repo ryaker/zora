@@ -1,4 +1,4 @@
-![Zora LCARS Header](../specs/v5/assets/zora_lcars_header.png)
+![Zora LCARS Header](archive/v5-spec/assets/zora_lcars_header.png)
 
 # Zora Beginner's Guide
 
@@ -6,7 +6,7 @@
 
 > **Haven't installed yet?** Start with the [Setup Guide](../SETUP_GUIDE.md) first, then come back here.
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Table of Contents
 
@@ -21,7 +21,7 @@
 9. [Tips for Getting the Best Results](#tips-for-getting-the-best-results)
 10. [Frequently Asked Questions](#frequently-asked-questions)
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## What Can Zora Actually Do?
 
@@ -72,7 +72,7 @@ Zora is like a digital assistant that lives on your computer and can **actually 
 - While staying inside security boundaries you define
 - On your local machine -- your data never leaves your computer
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Talking to Zora (The Basics)
 
@@ -124,7 +124,7 @@ node dist/cli/index.js start
 node dist/cli/index.js stop
 ```
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Real Examples You Can Try Right Now
 
@@ -166,7 +166,7 @@ node dist/cli/index.js ask "Search my daily notes in ~/.zora/memory/daily/ for a
 node dist/cli/index.js ask "In ~/Projects/website: 1) Run npm test 2) If any tests fail, fix them 3) Run the tests again to verify 4) Write a summary of what was broken and how it was fixed to ~/.zora/workspace/test-report.md"
 ```
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## How Zora Remembers Things
 
@@ -247,7 +247,7 @@ ls ~/.zora/memory/categories/
 node dist/cli/index.js ask "Summarize what you remember about my recent work from your daily notes and memory items."
 ```
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Automating Tasks with Routines
 
@@ -321,7 +321,7 @@ End-of-day summary:
 
 Save this file and Zora will pick it up when running as a daemon (`node dist/cli/index.js start`).
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## The Dashboard (Your Control Panel)
 
@@ -371,7 +371,7 @@ Imagine Zora is halfway through a big task and you realize you want it to change
 - In the dashboard, you type: "Only focus on src/api/ -- skip everything else"
 - Zora reads your steering message and narrows its focus without losing progress
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Multi-Model Architecture
 
@@ -411,9 +411,9 @@ Zora supports multiple AI providers and model tiers. Pick the right model for ea
 - **Your work doesn't stop.** If one provider goes down, the next picks up right where it left off.
 - **You can pick models per task.** In routine files, use `model_preference = "claude-haiku"` for cheap tasks or `"ollama"` for free local execution.
 - **You can cap costs.** Set `max_cost_tier = "free"` on a routine to only use free providers (Haiku, Gemini, Ollama).
-- **You can add more providers.** See the [Architecture docs](../specs/v5/docs/ARCHITECTURE.md) for details.
+- **You can add more providers.** See the [Architecture docs](archive/v5-spec/docs/ARCHITECTURE.md) for details.
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Security: What Zora Can and Can't Do
 
@@ -459,7 +459,7 @@ Pick a starting point that matches your comfort level:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Full preset configurations are in [Policy Presets](../specs/v5/docs/POLICY_PRESETS.md).
+Full preset configurations are in [Policy Presets](archive/v5-spec/docs/POLICY_PRESETS.md).
 
 ### Key concepts in plain English
 
@@ -481,7 +481,7 @@ Full preset configurations are in [Policy Presets](../specs/v5/docs/POLICY_PRESE
 
 If Zora tells you it can't do something because of policy, you can update `~/.zora/policy.toml` to allow it -- but do so deliberately.
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Tips for Getting the Best Results
 
@@ -519,7 +519,7 @@ tail -20 ~/.zora/audit/audit.jsonl
 
 Don't overthink security on day one. The Balanced preset is safe enough for daily use and permissive enough to be useful.
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Frequently Asked Questions
 
@@ -563,10 +563,10 @@ Yes. Zora supports up to 3 parallel jobs by default (configurable in `config.tom
 ### "Where do I go for help?"
 
 - Check the [Troubleshooting section](../SETUP_GUIDE.md#troubleshooting) in the Setup Guide
-- Browse the [full technical spec](../specs/v5/ZORA_AGENT_SPEC.md) for deep details
+- Browse the [full technical spec](archive/v5-spec/ZORA_AGENT_SPEC.md) for deep details
 - Open an issue at [github.com/ryaker/zora/issues](https://github.com/ryaker/zora/issues)
 
-![LCARS Divider](../specs/v5/assets/lcars_divider.svg)
+![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)
 
 ## Quick Reference Card
 
@@ -594,7 +594,7 @@ Yes. Zora supports up to 3 parallel jobs by default (configurable in `config.tom
 │                                                              │
 │  DOCS           SETUP_GUIDE.md                (installation) │
 │                 docs/BEGINNERS_GUIDE.md       (this file)    │
-│                 specs/v5/ZORA_AGENT_SPEC.md   (deep dive)    │
+│                 docs/archive/v5-spec/ZORA_AGENT_SPEC.md      │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```

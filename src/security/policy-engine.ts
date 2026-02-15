@@ -11,6 +11,12 @@
  *   - Action Budgeting (LLM06/LLM10): per-session limits on tool invocations
  *   - Dry Run Mode (ASI02): preview write operations without executing
  *   - Intent Capsule integration (ASI01): goal drift detection hooks
+ *
+ * Shell parsing (tokenization, command splitting, base command extraction)
+ * is delegated to ./shell-validator.ts.
+ *
+ * Policy serialization (summary, TOML persistence) is delegated to
+ * ./policy-serializer.ts.
  */
 
 import path from 'node:path';
@@ -21,9 +27,16 @@ import type { BudgetStatus, DryRunResult } from './security-types.js';
 import type { IntentCapsuleManager } from './intent-capsule.js';
 import type { AuditLogger } from './audit-logger.js';
 import { isENOENT } from '../utils/errors.js';
-import { createLogger } from '../utils/logger.js';
-
-const log = createLogger('policy-engine');
+import {
+  shellTokenize,
+  splitChainedCommands,
+  extractBaseCommand,
+  isReadOnlyCommand,
+} from './shell-validator.js';
+import {
+  getPolicySummary as _getPolicySummary,
+  writePolicyFile,
+} from './policy-serializer.js';
 
 export interface ValidationResult {
   allowed: boolean;
@@ -67,10 +80,6 @@ export class PolicyEngine {
   private _dryRunLog: DryRunResult[] = [];
 
   private static readonly WRITE_TOOLS = new Set(['Write', 'Edit', 'Bash']);
-  private static readonly READ_ONLY_COMMANDS = new Set([
-    'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'which', 'pwd',
-    'wc', 'diff', 'file', 'stat', 'echo', 'env', 'printenv', 'date', 'whoami',
-  ]);
 
   // ─── Intent Capsule (ASI01) ─────────────────────────────────────
   private _intentCapsuleManager?: IntentCapsuleManager;
@@ -266,7 +275,7 @@ export class PolicyEngine {
     // For Bash: only intercept if command modifies state (not read-only commands)
     if (toolName === 'Bash') {
       const command = (input['command'] as string) ?? '';
-      if (this._isReadOnlyCommand(command)) return null;
+      if (isReadOnlyCommand(command)) return null;
     }
 
     const wouldExecute = this._describeAction(toolName, input);
@@ -293,23 +302,6 @@ export class PolicyEngine {
     }
 
     return result;
-  }
-
-  /**
-   * Determine if a bash command is read-only.
-   */
-  private _isReadOnlyCommand(command: string): boolean {
-    const base = this._extractBaseCommand(command);
-    if (PolicyEngine.READ_ONLY_COMMANDS.has(base)) return true;
-    // git status, git log, git diff are read-only
-    if (base === 'git') {
-      const parts = command.trim().split(/\s+/);
-      const subCommand = parts[1] ?? '';
-      if (['status', 'log', 'diff', 'show', 'branch', 'remote', 'tag'].includes(subCommand)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -414,11 +406,11 @@ export class PolicyEngine {
 
     if (shellPolicy.mode === 'allowlist') {
       const commandsToValidate = shellPolicy.split_chained_commands
-        ? this._splitChainedCommands(command)
+        ? splitChainedCommands(command)
         : [command];
 
       for (const cmd of commandsToValidate) {
-        const baseCommand = this._extractBaseCommand(cmd);
+        const baseCommand = extractBaseCommand(cmd);
 
         // Check denied list first
         if (shellPolicy.denied_commands.includes(baseCommand)) {
@@ -438,7 +430,7 @@ export class PolicyEngine {
       }
     } else {
       // Denylist mode (less secure, but supported)
-      const baseCommand = this._extractBaseCommand(command);
+      const baseCommand = extractBaseCommand(command);
       if (shellPolicy.denied_commands.includes(baseCommand)) {
         return {
           allowed: false,
@@ -467,7 +459,7 @@ export class PolicyEngine {
     }
 
     // Use proper shell tokenizer to extract arguments
-    const tokens = this._shellTokenize(command);
+    const tokens = shellTokenize(command);
     for (const token of tokens.slice(1)) { // skip the command itself
       if (token.startsWith('/') || token.startsWith('~') || token.startsWith('./') || token.startsWith('../')) {
         const resolved = path.resolve(this._resolveHome(token));
@@ -662,7 +654,7 @@ export class PolicyEngine {
   private _classifyAction(toolName: string, input: Record<string, unknown>): string | null {
     if (toolName === 'Bash') {
       const command = (input['command'] as string | undefined) ?? '';
-      const base = this._extractBaseCommand(command);
+      const base = extractBaseCommand(command);
 
       // Map common commands to action categories
       if (base === 'git') {
@@ -727,38 +719,7 @@ export class PolicyEngine {
    * Intentionally terse to minimize context usage.
    */
   getPolicySummary(): string {
-    const fs = this._policy.filesystem;
-    const sh = this._policy.shell;
-    const lines: string[] = [];
-
-    if (fs.allowed_paths.length === 0) {
-      lines.push('Filesystem: LOCKED (no paths allowed)');
-    } else {
-      lines.push(`Filesystem: ${fs.allowed_paths.join(', ')}`);
-    }
-
-    if (fs.denied_paths.length > 0) {
-      lines.push(`Denied: ${fs.denied_paths.join(', ')}`);
-    }
-
-    if (sh.mode === 'deny_all') {
-      lines.push('Shell: DISABLED (no commands allowed)');
-    } else if (sh.mode === 'allowlist') {
-      lines.push(`Shell: ${sh.allowed_commands.join(', ')}`);
-    } else {
-      lines.push('Shell: denylist mode');
-    }
-
-    if (this._policy.budget) {
-      const b = this._policy.budget;
-      lines.push(`Budget: ${b.max_actions_per_session || 'unlimited'} actions/session, ${b.token_budget || 'unlimited'} tokens`);
-    }
-
-    if (this._policy.dry_run?.enabled) {
-      lines.push('Dry Run: ENABLED (write operations will be previewed only)');
-    }
-
-    return lines.join('\n');
+    return _getPolicySummary(this._policy);
   }
 
   /**
@@ -812,79 +773,7 @@ export class PolicyEngine {
 
     // Persist if we have a file path
     if (this._policyFilePath) {
-      this._writePolicyFile();
-    }
-  }
-
-  /**
-   * Writes the current policy state to the TOML file.
-   */
-  private _writePolicyFile(): void {
-    if (!this._policyFilePath) return;
-
-    try {
-      // Dynamic import would be async; since we store the import at module level, use sync write
-      // Build TOML manually for simplicity (avoids needing smol-toml at runtime here)
-      const lines: string[] = [
-        '# Zora Security Policy — auto-generated (runtime expansion applied)',
-        '',
-        '[filesystem]',
-        `allowed_paths = ${JSON.stringify(this._policy.filesystem.allowed_paths)}`,
-        `denied_paths = ${JSON.stringify(this._policy.filesystem.denied_paths)}`,
-        `resolve_symlinks = ${this._policy.filesystem.resolve_symlinks}`,
-        `follow_symlinks = ${this._policy.filesystem.follow_symlinks}`,
-        '',
-        '[shell]',
-        `mode = "${this._policy.shell.mode}"`,
-        `allowed_commands = ${JSON.stringify(this._policy.shell.allowed_commands)}`,
-        `denied_commands = ${JSON.stringify(this._policy.shell.denied_commands)}`,
-        `split_chained_commands = ${this._policy.shell.split_chained_commands}`,
-        `max_execution_time = "${this._policy.shell.max_execution_time}"`,
-        '',
-        '[actions]',
-        `reversible = ${JSON.stringify(this._policy.actions.reversible)}`,
-        `irreversible = ${JSON.stringify(this._policy.actions.irreversible)}`,
-        `always_flag = ${JSON.stringify(this._policy.actions.always_flag)}`,
-        '',
-        '[network]',
-        `allowed_domains = ${JSON.stringify(this._policy.network.allowed_domains)}`,
-        `denied_domains = ${JSON.stringify(this._policy.network.denied_domains)}`,
-        `max_request_size = "${this._policy.network.max_request_size}"`,
-        '',
-      ];
-
-      // Serialize budget section if present
-      if (this._policy.budget) {
-        const b = this._policy.budget;
-        lines.push(
-          '[budget]',
-          `max_actions_per_session = ${b.max_actions_per_session}`,
-          `token_budget = ${b.token_budget}`,
-          `on_exceed = "${b.on_exceed}"`,
-          '',
-          '[budget.max_actions_per_type]',
-        );
-        for (const [type, limit] of Object.entries(b.max_actions_per_type)) {
-          lines.push(`${type} = ${limit}`);
-        }
-        lines.push('');
-      }
-
-      // Serialize dry_run section if present
-      if (this._policy.dry_run) {
-        const dr = this._policy.dry_run;
-        lines.push(
-          '[dry_run]',
-          `enabled = ${dr.enabled}`,
-          `tools = ${JSON.stringify(dr.tools)}`,
-          `audit_dry_runs = ${dr.audit_dry_runs}`,
-          '',
-        );
-      }
-
-      fs.writeFileSync(this._policyFilePath, lines.join('\n'), 'utf-8');
-    } catch (err) {
-      log.error({ err: err instanceof Error ? err.message : String(err) }, 'Failed to persist policy expansion');
+      writePolicyFile(this._policy, this._policyFilePath);
     }
   }
 
@@ -917,218 +806,5 @@ export class PolicyEngine {
       const absDenied = path.resolve(this._resolveHome(denied));
       return p === absDenied || p.startsWith(absDenied + path.sep);
     });
-  }
-
-  /**
-   * Tokenize a shell command string into individual arguments.
-   *
-   * Handles POSIX shell quoting rules:
-   * - Double quotes: interprets \\", \\\\, \\$, \\` as escape sequences.
-   * - Single quotes: all characters are literal (no escape sequences).
-   * - Backslash outside quotes: next character is taken literally.
-   * - Whitespace outside quotes: terminates the current token.
-   *
-   * Returns unquoted token values (quotes and escapes are resolved).
-   * Used by validateCommand to extract the base command name, and by
-   * _checkCommandPaths to find path-like arguments.
-   */
-  private _shellTokenize(input: string): string[] {
-    const tokens: string[] = [];
-    let current = '';
-    let inToken = false;
-    let i = 0;
-
-    const finishToken = () => {
-      if (inToken) {
-        tokens.push(current);
-        current = '';
-        inToken = false;
-      }
-    };
-
-    while (i < input.length) {
-      const ch = input[i]!;
-
-      // Whitespace outside quotes ends the current token
-      if (/\s/.test(ch)) {
-        finishToken();
-        i++;
-        continue;
-      }
-
-      inToken = true;
-
-      if (ch === '\\' && i + 1 < input.length) {
-        // Backslash escape outside quotes: take next char literally
-        current += input[i + 1];
-        i += 2;
-        continue;
-      }
-
-      if (ch === '"') {
-        // Double-quoted string: handle \", \\, \$, \`
-        i++; // skip opening "
-        while (i < input.length && input[i] !== '"') {
-          if (input[i] === '\\' && i + 1 < input.length) {
-            const next = input[i + 1]!;
-            if (next === '"' || next === '\\' || next === '$' || next === '`') {
-              current += next;
-              i += 2;
-              continue;
-            }
-          }
-          current += input[i];
-          i++;
-        }
-        i++; // skip closing "
-        continue;
-      }
-
-      if (ch === "'") {
-        // Single-quoted string: everything is literal, no escape sequences
-        i++; // skip opening '
-        while (i < input.length && input[i] !== "'") {
-          current += input[i];
-          i++;
-        }
-        i++; // skip closing '
-        continue;
-      }
-
-      // Regular character
-      current += ch;
-      i++;
-    }
-
-    finishToken();
-    return tokens;
-  }
-
-  /**
-   * Splits command chains on operators (&&, ||, ;, |) while respecting:
-   * - Quoted strings (single and double) -- operators inside quotes are literal.
-   * - Escape sequences -- backslash-escaped characters are not treated as operators.
-   * - Command substitution -- $(...) and backtick blocks are treated as opaque.
-   *   Nested $() is tracked via parenDepth to avoid premature splitting.
-   *
-   * Each returned string is a standalone command to validate independently.
-   */
-  private _splitChainedCommands(command: string): string[] {
-    const commands: string[] = [];
-    let current = '';
-    let inQuote: string | null = null;
-    let parenDepth = 0; // Track $(...) nesting
-    let backtickDepth = 0;
-
-    for (let i = 0; i < command.length; i++) {
-      const char = command[i]!;
-      const nextChar = command[i + 1];
-
-      // Handle escape sequences
-      if (char === '\\' && !inQuote && i + 1 < command.length) {
-        current += char + (nextChar ?? '');
-        i++;
-        continue;
-      }
-      if (char === '\\' && inQuote === '"' && i + 1 < command.length) {
-        const next = nextChar ?? '';
-        if (next === '"' || next === '\\' || next === '$' || next === '`') {
-          current += char + next;
-          i++;
-          continue;
-        }
-      }
-
-      // Track quote state
-      if (char === '"' && inQuote !== "'") {
-        inQuote = inQuote === '"' ? null : '"';
-        current += char;
-        continue;
-      }
-      if (char === "'" && inQuote !== '"') {
-        inQuote = inQuote === "'" ? null : "'";
-        current += char;
-        continue;
-      }
-
-      // Track command substitution: $( ... )
-      if (!inQuote && char === '$' && nextChar === '(') {
-        // Enter command substitution and consume both "$("
-        parenDepth++;
-        current += '$(';
-        i++;
-        continue;
-      }
-      if (!inQuote && parenDepth > 0 && char === '(') {
-        // Nested parentheses inside $(...) - increment depth
-        parenDepth++;
-        current += char;
-        continue;
-      }
-      if (!inQuote && char === ')' && parenDepth > 0) {
-        parenDepth--;
-        current += char;
-        continue;
-      }
-
-      // Track backtick command substitution
-      if (!inQuote && char === '`') {
-        backtickDepth = backtickDepth > 0 ? 0 : 1;
-        current += char;
-        continue;
-      }
-
-      // Only split on operators when not inside quotes or substitutions
-      if (!inQuote && parenDepth === 0 && backtickDepth === 0) {
-        if (char === ';') {
-          if (current.trim()) commands.push(current.trim());
-          current = '';
-          continue;
-        }
-        if (char === '&' && nextChar === '&') {
-          if (current.trim()) commands.push(current.trim());
-          current = '';
-          i++; // Skip second &
-          continue;
-        }
-        if (char === '|' && nextChar === '|') {
-          if (current.trim()) commands.push(current.trim());
-          current = '';
-          i++; // Skip second |
-          continue;
-        }
-        if (char === '|') {
-          if (current.trim()) commands.push(current.trim());
-          current = '';
-          continue;
-        }
-      }
-
-      current += char;
-    }
-
-    if (current.trim()) commands.push(current.trim());
-    return commands;
-  }
-
-  /**
-   * Extracts the base binary name from a command string, respecting quotes
-   * and escape sequences.
-   */
-  private _extractBaseCommand(command: string): string {
-    const tokens = this._shellTokenize(command.trim());
-    if (tokens.length === 0) return '';
-
-    // Skip common variable assignments (e.g., "FOO=bar cmd")
-    let cmdToken = tokens[0]!;
-    let idx = 0;
-    while (idx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx]!)) {
-      idx++;
-    }
-    if (idx < tokens.length) {
-      cmdToken = tokens[idx]!;
-    }
-
-    return path.basename(cmdToken);
   }
 }

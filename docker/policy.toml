@@ -8,7 +8,7 @@ follow_symlinks = false
 
 [shell]
 mode = "allowlist"
-allowed_commands = ["ls", "echo", "cat"]
+allowed_commands = ["ls", "echo", "cat", "mcp-cli"]
 denied_commands = ["rm", "sudo"]
 split_chained_commands = true
 max_execution_time = "30s"

@@ -408,6 +408,7 @@ async function runWizard(opts: {
           { value: 'python', label: 'Python', hint: 'python3, pip, pip3' },
           { value: 'rust', label: 'Rust', hint: 'cargo, rustc, rustup' },
           { value: 'go', label: 'Go', hint: 'go' },
+          { value: 'mcp', label: 'MCP', hint: 'mcp-cli (bridge to MCP servers)' },
           { value: 'general', label: 'General CLI', hint: 'ls, pwd, cat, head, grep, find, etc.' },
         ],
         initialValues: ['node', 'general'],

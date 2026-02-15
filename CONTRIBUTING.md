@@ -9,7 +9,7 @@ This repository is spec-first. Code will land after the core architecture and se
 ## How to contribute
 
 1. Open an issue describing the change.
-2. Keep scope focused and aligned with the v0.5 spec under `specs/v5/`.
+2. Keep scope focused and aligned with the current spec under `specs/`.
 3. Use clear, atomic commits.
 
 ## Proposals
