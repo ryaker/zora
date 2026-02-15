@@ -17,6 +17,7 @@ export interface TelegramConfig extends SteeringConfig {
   bot_token?: string;
   allowed_users: string[];
   enabled: boolean;
+  mode?: 'polling' | 'webhook';
 }
 
 export class TelegramGateway {
@@ -46,14 +47,25 @@ export class TelegramGateway {
     try {
       const mod = await import('node-telegram-bot-api');
       TelegramBot = mod.default;
-    } catch {
+    } catch (importErr) {
+      const isModuleNotFound =
+        importErr instanceof Error &&
+        ('code' in importErr && (importErr as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND' ||
+         importErr.message.includes('Cannot find'));
       throw new Error(
-        'Telegram support requires node-telegram-bot-api.\n' +
-        'Install it: npm install node-telegram-bot-api'
+        'Telegram support requires the optional peer dependency node-telegram-bot-api.\n' +
+        (isModuleNotFound
+          ? 'Install it in your project: npm install node-telegram-bot-api\n' +
+            'If installed globally, ensure it is resolvable from zora-agent\'s module path.'
+          : `Unexpected import error: ${importErr instanceof Error ? importErr.message : String(importErr)}`)
       );
     }
 
-    const bot = new TelegramBot(token, { polling: true });
+    const mode = config.mode ?? 'polling';
+    if (mode === 'webhook') {
+      console.warn('[Telegram] Webhook mode selected. Ensure your webhook URL is configured externally.');
+    }
+    const bot = new TelegramBot(token, { polling: mode === 'polling' });
     return new TelegramGateway(bot, steeringManager, config.allowed_users);
   }
 
