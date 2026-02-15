@@ -130,6 +130,7 @@ export class FailoverController {
   ): Promise<FailoverResult | null> {
     if (!this._config.enabled) return null;
 
+    // Cache classification result to avoid redundant calls
     const classified = this.classifyError(error);
     const isQuotaError = classified.category === 'rate_limit' || classified.category === 'quota';
     const isAuthError = classified.category === 'auth';

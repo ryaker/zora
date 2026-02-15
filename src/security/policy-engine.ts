@@ -1023,8 +1023,8 @@ export class PolicyEngine {
         i++;
         continue;
       }
-      if (!inQuote && char === '(' && parenDepth > 0) {
-        // Nested parentheses inside $(...)
+      if (!inQuote && parenDepth > 0 && char === '(') {
+        // Nested parentheses inside $(...) - increment depth
         parenDepth++;
         current += char;
         continue;

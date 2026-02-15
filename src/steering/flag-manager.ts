@@ -130,11 +130,14 @@ export class FlagManager {
           this._diagnostics.push({ file, status: 'loaded', timestamp: Date.now() });
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          const code = (err as NodeJS.ErrnoException).code;
           const errorType = err instanceof SyntaxError
             ? 'parse_error' as const
-            : (err as NodeJS.ErrnoException).code === 'EACCES'
-              ? 'permission' as const
-              : 'read_error' as const;
+            : code === 'ENOENT'
+              ? 'not_found' as const
+              : code === 'EACCES'
+                ? 'permission' as const
+                : 'read_error' as const;
 
           logger.warn(`FlagManager: Failed to load flag file`, {
             path: filePath,
@@ -158,7 +161,11 @@ export class FlagManager {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') {
         const errMsg = err instanceof Error ? err.message : String(err);
-        const errorType = code === 'EACCES' ? 'permission' as const : 'read_error' as const;
+        const errorType = code === 'ENOENT'
+          ? 'not_found' as const
+          : code === 'EACCES'
+            ? 'permission' as const
+            : 'read_error' as const;
 
         logger.warn(`FlagManager: Failed to read flags directory`, {
           path: this._flagsDir,
