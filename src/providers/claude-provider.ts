@@ -26,6 +26,7 @@ import type {
   CostTier,
   ProviderConfig,
 } from '../types.js';
+import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -136,7 +137,7 @@ export class ClaudeProvider implements LLMProvider {
   readonly costTier: CostTier;
 
   private readonly _config: ProviderConfig;
-  private readonly _queryFn: QueryFn;
+  private _queryFn: QueryFn;
   private readonly _cwd: string;
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
@@ -193,7 +194,7 @@ export class ClaudeProvider implements LLMProvider {
     const sdk = await import('@anthropic-ai/claude-agent-sdk');
     const realQuery = sdk.query as unknown as QueryFn;
     // Cache it so we don't re-import
-    (this as any)._queryFn = realQuery;
+    this._queryFn = realQuery;
     return realQuery;
   }
 
@@ -479,24 +480,21 @@ export class ClaudeProvider implements LLMProvider {
     if (task.history.length > 0) {
       parts.push('<execution_history>');
       for (const event of task.history) {
-        if (event.type === 'text') {
+        if (isTextEvent(event)) {
           parts.push('  <assistant_response>');
-          parts.push((event.content as any).text);
+          parts.push(event.content.text);
           parts.push('  </assistant_response>');
-        } else if (event.type === 'tool_call') {
-          const c = event.content as any;
-          parts.push(`  <tool_call name="${c.tool}" id="${c.toolCallId}">`);
-          parts.push(JSON.stringify(c.arguments, null, 2));
+        } else if (isToolCallEvent(event)) {
+          parts.push(`  <tool_call name="${event.content.tool}" id="${event.content.toolCallId}">`);
+          parts.push(JSON.stringify(event.content.arguments, null, 2));
           parts.push('  </tool_call>');
-        } else if (event.type === 'tool_result') {
-          const c = event.content as any;
-          parts.push(`  <tool_result id="${c.toolCallId}">`);
-          parts.push(JSON.stringify(c.result, null, 2));
+        } else if (isToolResultEvent(event)) {
+          parts.push(`  <tool_result id="${event.content.toolCallId}">`);
+          parts.push(JSON.stringify(event.content.result, null, 2));
           parts.push('  </tool_result>');
-        } else if (event.type === 'steering') {
-          const c = event.content as any;
-          parts.push(`  <human_steering source="${c.source}" author="${c.author}">`);
-          parts.push(c.text);
+        } else if (isSteeringEvent(event)) {
+          parts.push(`  <human_steering source="${event.content.source}" author="${event.content.author}">`);
+          parts.push(event.content.text);
           parts.push('  </human_steering>');
         }
       }

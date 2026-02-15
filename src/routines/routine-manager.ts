@@ -75,7 +75,7 @@ export class RoutineManager {
   async loadRoutine(filePath: string): Promise<void> {
     try {
       const content = await fs.readFile(filePath, 'utf8');
-      const raw = smol.parse(content) as any;
+      const raw: unknown = smol.parse(content);
 
       if (this._isValidRoutine(raw)) {
         const definition = raw as RoutineDefinition;
@@ -133,24 +133,29 @@ export class RoutineManager {
   /**
    * Basic validation for RoutineDefinition.
    */
-  private _isValidRoutine(raw: any): raw is RoutineDefinition {
+  private _isValidRoutine(raw: unknown): raw is RoutineDefinition {
+    if (!raw || typeof raw !== 'object') return false;
+    const obj = raw as Record<string, unknown>;
+    const routine = obj['routine'];
+    const task = obj['task'];
     if (
-      !raw ||
-      typeof raw.routine !== 'object' ||
-      typeof raw.routine.name !== 'string' ||
-      typeof raw.routine.schedule !== 'string' ||
-      typeof raw.task !== 'object' ||
-      typeof raw.task.prompt !== 'string'
+      !routine || typeof routine !== 'object' ||
+      !task || typeof task !== 'object'
     ) {
+      return false;
+    }
+    const r = routine as Record<string, unknown>;
+    const t = task as Record<string, unknown>;
+    if (typeof r['name'] !== 'string' || typeof r['schedule'] !== 'string' || typeof t['prompt'] !== 'string') {
       return false;
     }
 
     // Validate optional max_cost_tier if present
-    if (raw.routine.max_cost_tier !== undefined) {
+    if (r['max_cost_tier'] !== undefined) {
       const validTiers = ['free', 'included', 'metered', 'premium'];
-      if (!validTiers.includes(raw.routine.max_cost_tier)) {
+      if (!validTiers.includes(r['max_cost_tier'] as string)) {
         console.warn(
-          `Invalid max_cost_tier "${raw.routine.max_cost_tier}" in routine "${raw.routine.name}". ` +
+          `Invalid max_cost_tier "${r['max_cost_tier']}" in routine "${r['name']}". ` +
           `Valid values: ${validTiers.join(', ')}. Ignoring.`
         );
       }

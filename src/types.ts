@@ -80,12 +80,101 @@ export type AgentEventType =
   | 'done'
   | 'steering';
 
+/** TYPE-06: Typed event payload interfaces for each event type */
+export interface TextEventContent {
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ThinkingEventContent {
+  text: string;
+}
+
+export interface ToolCallEventContent {
+  toolCallId: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ToolResultEventContent {
+  toolCallId: string;
+  result: unknown;
+  error?: string;
+}
+
+export interface ErrorEventContent {
+  message: string;
+  code?: number | string;
+  isAuthError?: boolean;
+  isQuotaError?: boolean;
+  subtype?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface DoneEventContent {
+  text: string;
+  duration_ms?: number;
+  num_turns?: number;
+  total_cost_usd?: number;
+  model?: string;
+  aborted?: boolean;
+  [key: string]: unknown;
+}
+
+export interface SteeringEventContent {
+  text: string;
+  source: string;
+  author: string;
+}
+
+/** Discriminated union of all typed event payloads */
+export type AgentEventContent =
+  | TextEventContent
+  | ThinkingEventContent
+  | ToolCallEventContent
+  | ToolResultEventContent
+  | ErrorEventContent
+  | DoneEventContent
+  | SteeringEventContent;
+
 export interface AgentEvent {
   type: AgentEventType;
   timestamp: Date;
   /** LOG-04: Provider or component that emitted this event (e.g. 'claude', 'gemini', 'system') */
   source?: string;
   content: unknown;
+}
+
+/**
+ * Type-safe event accessors. Use these helpers to narrow event content
+ * after checking event.type via discriminated union pattern.
+ */
+export function isTextEvent(event: AgentEvent): event is AgentEvent & { content: TextEventContent } {
+  return event.type === 'text';
+}
+
+export function isToolCallEvent(event: AgentEvent): event is AgentEvent & { content: ToolCallEventContent } {
+  return event.type === 'tool_call';
+}
+
+export function isToolResultEvent(event: AgentEvent): event is AgentEvent & { content: ToolResultEventContent } {
+  return event.type === 'tool_result';
+}
+
+export function isErrorEvent(event: AgentEvent): event is AgentEvent & { content: ErrorEventContent } {
+  return event.type === 'error';
+}
+
+export function isDoneEvent(event: AgentEvent): event is AgentEvent & { content: DoneEventContent } {
+  return event.type === 'done';
+}
+
+export function isSteeringEvent(event: AgentEvent): event is AgentEvent & { content: SteeringEventContent } {
+  return event.type === 'steering';
+}
+
+export function isThinkingEvent(event: AgentEvent): event is AgentEvent & { content: ThinkingEventContent } {
+  return event.type === 'thinking';
 }
 
 // ─── Task Context ────────────────────────────────────────────────────
@@ -129,6 +218,13 @@ export interface TaskContext {
 }
 
 // ─── LLM Provider Interface ─────────────────────────────────────────
+
+/**
+ * TYPE-07: Known provider types for exhaustiveness checking in factory/switch code.
+ * Adding a new provider? Add its config type string here so the compiler
+ * flags every switch that needs updating.
+ */
+export type KnownProviderType = 'claude-sdk' | 'gemini-cli' | 'ollama';
 
 /**
  * The core provider contract. All providers (Claude, Gemini, OpenAI, Ollama, custom)
@@ -193,6 +289,43 @@ export interface AuditEvent {
 
 // ─── Configuration Types ─────────────────────────────────────────────
 
+/** TYPE-04: Base config shared by all providers */
+export interface BaseProviderConfig {
+  name: string;
+  rank: number;
+  capabilities: ProviderCapability[];
+  cost_tier: CostTier;
+  enabled: boolean;
+  model?: string;
+  max_turns?: number;
+  max_concurrent_jobs?: number;
+}
+
+/** TYPE-04: Claude SDK provider config */
+export interface ClaudeProviderConfig extends BaseProviderConfig {
+  type: 'claude-sdk';
+  auth_method?: 'mac_session' | 'api_key';
+  api_key_env?: string;
+}
+
+/** TYPE-04: Gemini CLI provider config */
+export interface GeminiProviderConfig extends BaseProviderConfig {
+  type: 'gemini-cli';
+  auth_method?: 'workspace_sso' | 'api_key';
+  cli_path?: string;
+  api_key_env?: string;
+}
+
+/** TYPE-04: Ollama local provider config */
+export interface OllamaProviderConfig extends BaseProviderConfig {
+  type: 'ollama';
+  endpoint?: string;
+}
+
+/**
+ * Flat ProviderConfig retaining all fields for backward compatibility.
+ * Consumers can narrow via `config.type` discriminant when available.
+ */
 export interface ProviderConfig {
   name: string;
   type: string;
@@ -208,6 +341,9 @@ export interface ProviderConfig {
   api_key_env?: string;
   endpoint?: string;
 }
+
+/** TYPE-04: Typed provider config discriminated union */
+export type TypedProviderConfig = ClaudeProviderConfig | GeminiProviderConfig | OllamaProviderConfig;
 
 export interface AgentConfig {
   name: string;

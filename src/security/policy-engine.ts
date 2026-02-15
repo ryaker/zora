@@ -20,6 +20,7 @@ import type { ZoraPolicy, FilesystemPolicy } from '../types.js';
 import type { BudgetStatus, DryRunResult } from './security-types.js';
 import type { IntentCapsuleManager } from './intent-capsule.js';
 import type { AuditLogger } from './audit-logger.js';
+import { isENOENT } from '../utils/errors.js';
 
 export interface ValidationResult {
   allowed: boolean;
@@ -350,7 +351,7 @@ export class PolicyEngine {
       } catch (err: unknown) {
         // If file doesn't exist yet (e.g. for write_file), we skip realpath check,
         // but other errors should lead to failure.
-        if (!(err instanceof Error && 'code' in err && (err as any).code === 'ENOENT')) {
+        if (!isENOENT(err)) {
           return {
             allowed: false,
             reason: `Error resolving symlink ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,

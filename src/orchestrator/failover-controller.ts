@@ -13,7 +13,11 @@ import type {
   TaskContext,
   HandoffBundle,
   FailoverConfig,
+  TextEventContent,
+  ToolCallEventContent,
+  ToolResultEventContent,
 } from '../types.js';
+import { isTextEvent, isToolCallEvent } from '../types.js';
 import { Router } from './router.js';
 
 export type ErrorCategory = 'rate_limit' | 'quota' | 'auth' | 'timeout' | 'transient' | 'permanent' | 'unknown';
@@ -179,26 +183,29 @@ export class FailoverController {
     // Extract progress/artifacts from history
     const progress: string[] = [];
     const artifacts: string[] = [];
-    const toolHistory: any[] = [];
+    const toolHistory: HandoffBundle['toolHistory'] = [];
 
     for (const event of history) {
-      if (event.type === 'text') {
-        progress.push((event.content as any).text);
-      } else if (event.type === 'tool_call') {
-        const content = event.content as any;
+      if (isTextEvent(event)) {
+        progress.push(event.content.text);
+      } else if (isToolCallEvent(event)) {
         toolHistory.push({
-          toolCallId: content.toolCallId,
-          tool: content.tool,
-          arguments: content.arguments,
+          toolCallId: event.content.toolCallId,
+          tool: event.content.tool,
+          arguments: event.content.arguments,
         });
       } else if (event.type === 'tool_result') {
-        const content = event.content as any;
+        const content = event.content as ToolResultEventContent;
         const lastTool = toolHistory[toolHistory.length - 1];
         if (lastTool && lastTool.toolCallId === content.toolCallId) {
+          // Handle result being a string or object
+          const result = typeof content.result === 'string'
+            ? { content: content.result }
+            : (content.result as Record<string, unknown> | undefined);
           lastTool.result = {
-            status: content.result.success ? 'ok' : 'error',
-            output: content.result.content || content.result.stdout,
-            error: content.result.error || content.result.stderr,
+            status: content.error ? 'error' : 'ok',
+            output: result ? String(result['content'] ?? result['stdout'] ?? '') : undefined,
+            error: content.error ?? (result ? String(result['stderr'] ?? '') : undefined),
           };
         }
       }
