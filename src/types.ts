@@ -386,6 +386,8 @@ export interface MemoryConfig {
   max_context_items: number;
   max_category_summaries: number;
   auto_extract_interval: number;
+  /** Enable automatic memory extraction after job completion (default: true) */
+  auto_extract: boolean;
 }
 
 export interface SecurityConfig {

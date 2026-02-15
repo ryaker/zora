@@ -85,6 +85,7 @@ function makeConfig(baseDir: string): ZoraConfig {
       max_context_items: 20,
       max_category_summaries: 5,
       auto_extract_interval: 10,
+      auto_extract: true,
     },
     security: {
       policy_file: path.join(baseDir, 'policy.toml'),

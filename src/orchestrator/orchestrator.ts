@@ -23,6 +23,7 @@ import type {
   AgentEvent,
   DoneEventContent,
   ErrorEventContent,
+  TextEventContent,
 } from '../types.js';
 import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
@@ -32,6 +33,7 @@ import { SessionManager } from './session-manager.js';
 import { ExecutionLoop, type CustomToolDefinition } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
+import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { HeartbeatSystem } from '../routines/heartbeat.js';
 import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
@@ -270,8 +272,13 @@ export class Orchestrator {
   async submitTask(options: SubmitTaskOptions): Promise<string> {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-    // R6: Inject MemoryManager context systematically
-    const memoryContext = await this._memoryManager.loadContext();
+    // MEM-05 / ORCH-07: Inject memory context gracefully — never crash if memory is unavailable
+    let memoryContext: string[] = [];
+    try {
+      memoryContext = await this._memoryManager.loadContext();
+    } catch (err) {
+      log.warn({ err, jobId }, 'Memory context injection failed, continuing without memory');
+    }
 
     // Load SOUL.md for agent identity (fixes bug: file was created but never read)
     const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
@@ -458,7 +465,99 @@ export class Orchestrator {
     // Record completion in daily notes
     await this._memoryManager.appendDailyNote(`Completed task: ${taskContext.task}`);
 
+    // MEM-09: Async memory extraction after successful job completion
+    if (this._config.memory.auto_extract) {
+      this._runExtractionAsync(taskContext).catch(err => {
+        log.warn({ err, jobId: taskContext.jobId }, 'Post-job memory extraction failed');
+      });
+    }
+
     return result;
+  }
+
+  /**
+   * MEM-09: Runs memory extraction asynchronously after job completion.
+   *
+   * Collects text events from the job history, passes them through
+   * ExtractionPipeline, deduplicates against existing items, and
+   * persists new items via StructuredMemory. Appends a daily note
+   * summarizing what was extracted.
+   *
+   * Runs fire-and-forget — errors are caught by the caller.
+   */
+  private async _runExtractionAsync(taskContext: TaskContext): Promise<void> {
+    // Collect conversation text from job history
+    const messages = taskContext.history
+      .filter(e => e.type === 'text' || e.type === 'done')
+      .map(e => {
+        const content = e.content as TextEventContent | DoneEventContent;
+        return content.text;
+      })
+      .filter(Boolean);
+
+    if (messages.length === 0) {
+      return; // Nothing to extract from
+    }
+
+    // Get existing categories for context
+    const categories = await this._memoryManager.getCategories();
+    const categoryNames = categories.map(c => c.category);
+
+    // Create extraction pipeline using the first available provider as the LLM
+    const extractFn = async (prompt: string): Promise<string> => {
+      const extractLoop = new ExecutionLoop({
+        systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+        permissionMode: 'default',
+        cwd: process.cwd(),
+        maxTurns: 1,
+      });
+      return extractLoop.run(prompt);
+    };
+
+    const pipeline = new ExtractionPipeline(extractFn);
+    const result = await pipeline.extract(messages, categoryNames);
+
+    if (result.errors.length > 0) {
+      log.debug({ errors: result.errors, jobId: taskContext.jobId }, 'Extraction had errors');
+    }
+
+    if (result.items.length === 0) {
+      return;
+    }
+
+    // Deduplicate against existing items
+    const existingItems = await this._memoryManager.structuredMemory.listItems();
+    const uniqueItems = pipeline.deduplicateItems(result.items, existingItems);
+
+    // Persist each new item
+    let savedCount = 0;
+    for (const item of uniqueItems) {
+      try {
+        await this._memoryManager.structuredMemory.createItem({
+          type: item.type,
+          summary: item.summary,
+          source: item.source || taskContext.jobId,
+          source_type: item.source_type,
+          tags: item.tags,
+          category: item.category,
+        });
+        savedCount++;
+      } catch (err) {
+        log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
+      }
+    }
+
+    // Append daily note summarizing extraction
+    if (savedCount > 0) {
+      await this._memoryManager.appendDailyNote(
+        `Extracted ${savedCount} memory item(s) from job ${taskContext.jobId}`,
+      );
+    }
+
+    log.info(
+      { jobId: taskContext.jobId, extracted: result.items.length, saved: savedCount },
+      'Memory extraction complete',
+    );
   }
 
   /**

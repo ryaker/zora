@@ -142,6 +142,7 @@ function createTestConfig(): ZoraConfig {
       max_context_items: 10,
       max_category_summaries: 5,
       auto_extract_interval: 60,
+      auto_extract: true,
     },
     security: {
       policy_file: 'policy.toml',
