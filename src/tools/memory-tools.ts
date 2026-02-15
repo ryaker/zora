@@ -82,6 +82,9 @@ function createMemorySaveTool(
       const sourceType = (input.source_type as SourceType) ?? 'agent_analysis';
 
       // Run validation gates
+      // NOTE: listItems() reads all items for dedup/contradiction checking.
+      // This is O(N) but acceptable for small-medium collections (<10k items).
+      // For large scale, consider: Bloom filter, dedup index, or batch validation.
       const existingItems = await structuredMemory.listItems();
       const validation = validationPipeline.validate(content, tags, existingItems);
 
@@ -153,10 +156,15 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
 
       let scores = await memoryManager.searchMemory(query, limit * 2); // fetch extra for filtering
 
+      // Build item map once from search results (avoid redundant listItems)
+      const itemIds = scores.map(s => s.itemId);
+      const allItems = await memoryManager.structuredMemory.listItems();
+      const itemMap = new Map(
+        allItems.filter(i => itemIds.includes(i.id)).map(i => [i.id, i])
+      );
+
       // Apply type filter if specified
       if (typeFilter) {
-        const allItems = await memoryManager.structuredMemory.listItems();
-        const itemMap = new Map(allItems.map(i => [i.id, i]));
         scores = scores.filter(s => {
           const item = itemMap.get(s.itemId);
           return item && item.type === typeFilter;
@@ -175,10 +183,7 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
         return { results: [], message: 'No matching memories found.' };
       }
 
-      // Fetch full items for results
-      const allItems = await memoryManager.structuredMemory.listItems();
-      const itemMap = new Map(allItems.map(i => [i.id, i]));
-
+      // Map results using the already-built itemMap
       const results = scores.map(s => {
         const item = itemMap.get(s.itemId);
         return item

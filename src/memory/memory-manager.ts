@@ -151,9 +151,8 @@ export class MemoryManager {
    * Moves the item to an archive directory before removing.
    */
   async forgetItem(id: string, reason?: string): Promise<boolean> {
-    // Read the item before deleting so we can archive it
-    const items = await this._structuredMemory.listItems();
-    const item = items.find(i => i.id === id);
+    // Use getItem for direct lookup instead of listItems + find
+    const item = await this._structuredMemory.getItem(id);
 
     if (item) {
       const archiveDir = path.join(this._baseDir, 'memory', 'archive');

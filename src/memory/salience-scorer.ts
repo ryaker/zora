@@ -70,6 +70,9 @@ export class SalienceScorer {
         return 0.7;
       case 'tool_output':
         return 0.3;
+      default:
+        // Fallback for unknown source types (should not happen with proper typing)
+        return 0.0;
     }
   }
 
