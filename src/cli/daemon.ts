@@ -99,8 +99,14 @@ async function main() {
         'Sharing a bot token across multiple processes causes polling conflicts and lost messages.'
       );
       try {
+        // Construct TelegramConfig by merging telegram-specific config with parent SteeringConfig defaults
+        const fullTelegramConfig: TelegramConfig = {
+          ...config.steering,
+          ...telegramConfig,
+          bot_token: token,
+        };
         telegramGateway = await TelegramGateway.create(
-          { ...telegramConfig, enabled: true } as TelegramConfig,
+          fullTelegramConfig,
           orchestrator.steeringManager,
         );
         console.log(`[Daemon] Telegram gateway started (mode: ${telegramConfig.mode ?? 'polling'}).`);
