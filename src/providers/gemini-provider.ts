@@ -326,7 +326,7 @@ export class GeminiProvider implements LLMProvider {
       } catch (e) {
         // ERR-02: Log malformed XML tool calls with full context for debugging
         const error = e instanceof Error ? e : new Error(String(e));
-        log.error({ tool: match[1], rawContent: match[2]?.trim().slice(0, 200), err: error.message }, 'Failed to parse XML tool call');
+        log.error({ err: error, tool: match[1], rawContent: match[2]?.trim().slice(0, 200) }, 'Failed to parse XML tool call');
       }
     }
 
@@ -348,7 +348,7 @@ export class GeminiProvider implements LLMProvider {
         } catch (e) {
           // ERR-02/TYPE-05: Log malformed JSON tool calls with full context for debugging
           const error = e instanceof Error ? e : new Error(String(e));
-          log.error({ rawContent: match[1]?.slice(0, 200), err: error.message }, 'Failed to parse JSON tool call');
+          log.error({ err: error, rawContent: match[1]?.slice(0, 200) }, 'Failed to parse JSON tool call');
         }
       }
     }

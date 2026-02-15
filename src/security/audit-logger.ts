@@ -272,7 +272,7 @@ export class AuditLogger {
       await fs.appendFile(this._logPath, JSON.stringify(entry) + '\n', 'utf-8');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      log.error({ path: this._logPath, entryId: entry.entryId, err: error.message }, 'Failed to write audit entry to disk');
+      log.error({ err: error, path: this._logPath, entryId: entry.entryId }, 'Failed to write audit entry to disk');
       throw new Error(`Audit log write failed: ${error.message}`, { cause: error });
     }
 

@@ -186,8 +186,8 @@ export class OllamaProvider implements LLMProvider {
           chunk = parsed as Record<string, unknown>;
         } catch (parseErr: unknown) {
           // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
-          const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-          log.error({ rawContent: line.slice(0, 200), err: msg }, 'Failed to parse streaming JSON line');
+          const error = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
+          log.error({ err: error, rawContent: line.slice(0, 200) }, 'Failed to parse streaming JSON line');
           continue;
         }
 
@@ -336,8 +336,8 @@ export class OllamaProvider implements LLMProvider {
         }
       } catch (parseErr: unknown) {
         // TYPE-05: Log malformed tool call JSON instead of silently dropping
-        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-        log.error({ rawContent: match[1]?.slice(0, 200), err: msg }, 'Failed to parse JSON tool call');
+        const error = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
+        log.error({ err: error, rawContent: match[1]?.slice(0, 200) }, 'Failed to parse JSON tool call');
       }
     }
 
