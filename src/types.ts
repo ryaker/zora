@@ -219,6 +219,13 @@ export interface TaskContext {
 // ─── LLM Provider Interface ─────────────────────────────────────────
 
 /**
+ * TYPE-07: Known provider types for exhaustiveness checking in factory/switch code.
+ * Adding a new provider? Add its config type string here so the compiler
+ * flags every switch that needs updating.
+ */
+export type KnownProviderType = 'claude-sdk' | 'gemini-cli' | 'ollama';
+
+/**
  * The core provider contract. All providers (Claude, Gemini, OpenAI, Ollama, custom)
  * implement this interface. See spec §4.2.
  */

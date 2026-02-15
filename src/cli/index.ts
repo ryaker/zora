@@ -19,7 +19,7 @@ import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
-import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
+import type { ZoraPolicy, ZoraConfig, LLMProvider, KnownProviderType } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -48,7 +48,12 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
   for (const pConfig of config.providers) {
     if (!pConfig.enabled) continue;
 
-    switch (pConfig.type) {
+    // TYPE-07: Cast to KnownProviderType for exhaustiveness checking.
+    // If a new provider type is added to KnownProviderType, TypeScript
+    // will flag the missing case via the `never` check in the default branch.
+    const providerType = pConfig.type as KnownProviderType;
+
+    switch (providerType) {
       case 'claude-sdk':
         providers.push(new ClaudeProvider({ config: pConfig }));
         break;
@@ -58,8 +63,13 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));
         break;
-      default:
+      default: {
+        // Exhaustiveness check: if KnownProviderType gains a new member
+        // and we don't add a case, TypeScript reports an error here.
+        const _exhaustive: never = providerType;
         console.warn(`Unknown provider type: ${pConfig.type}, skipping ${pConfig.name}`);
+        void _exhaustive;
+      }
     }
   }
 

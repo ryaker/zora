@@ -106,7 +106,7 @@ export class ExecutionLoop {
     let lastEventTime = Date.now();
 
     try {
-      for await (const message of query({ prompt, options: sdkOptions as any })) {
+      for await (const message of query({ prompt, options: sdkOptions as Record<string, unknown> })) {
         // Clear previous timeout and set new one (reset on each event)
         if (timeoutHandle) clearTimeout(timeoutHandle);
         lastEventTime = Date.now();
@@ -122,8 +122,9 @@ export class ExecutionLoop {
         }, streamTimeout);
 
         // Capture session ID from init message
-        if ('session_id' in message && !sessionId) {
-          sessionId = (message as any).session_id;
+        const msg = message as Record<string, unknown>;
+        if ('session_id' in message && !sessionId && typeof msg['session_id'] === 'string') {
+          sessionId = msg['session_id'];
         }
 
         // Notify listener if registered
@@ -132,8 +133,8 @@ export class ExecutionLoop {
         }
 
         // Extract final result
-        if ('result' in message && typeof (message as any).result === 'string') {
-          result = (message as any).result;
+        if ('result' in message && typeof msg['result'] === 'string') {
+          result = msg['result'];
         }
       }
 

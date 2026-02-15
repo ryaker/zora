@@ -13,6 +13,9 @@ import type {
   TaskContext,
   HandoffBundle,
   FailoverConfig,
+  TextEventContent,
+  ToolCallEventContent,
+  ToolResultEventContent,
 } from '../types.js';
 import { Router } from './router.js';
 
@@ -89,26 +92,28 @@ export class FailoverController {
     // Extract progress/artifacts from history
     const progress: string[] = [];
     const artifacts: string[] = [];
-    const toolHistory: any[] = [];
+    const toolHistory: HandoffBundle['toolHistory'] = [];
 
     for (const event of history) {
       if (event.type === 'text') {
-        progress.push((event.content as any).text);
+        const content = event.content as TextEventContent;
+        progress.push(content.text);
       } else if (event.type === 'tool_call') {
-        const content = event.content as any;
+        const content = event.content as ToolCallEventContent;
         toolHistory.push({
           toolCallId: content.toolCallId,
           tool: content.tool,
           arguments: content.arguments,
         });
       } else if (event.type === 'tool_result') {
-        const content = event.content as any;
+        const content = event.content as ToolResultEventContent;
         const lastTool = toolHistory[toolHistory.length - 1];
         if (lastTool && lastTool.toolCallId === content.toolCallId) {
+          const result = content.result as Record<string, unknown> | undefined;
           lastTool.result = {
-            status: content.result.success ? 'ok' : 'error',
-            output: content.result.content || content.result.stdout,
-            error: content.result.error || content.result.stderr,
+            status: content.error ? 'error' : 'ok',
+            output: result ? String(result['content'] ?? result['stdout'] ?? '') : undefined,
+            error: content.error ?? (result ? String(result['stderr'] ?? '') : undefined),
           };
         }
       }

@@ -136,7 +136,7 @@ export class ClaudeProvider implements LLMProvider {
   readonly costTier: CostTier;
 
   private readonly _config: ProviderConfig;
-  private readonly _queryFn: QueryFn;
+  private _queryFn: QueryFn;
   private readonly _cwd: string;
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
@@ -193,7 +193,7 @@ export class ClaudeProvider implements LLMProvider {
     const sdk = await import('@anthropic-ai/claude-agent-sdk');
     const realQuery = sdk.query as unknown as QueryFn;
     // Cache it so we don't re-import
-    (this as any)._queryFn = realQuery;
+    this._queryFn = realQuery;
     return realQuery;
   }
 

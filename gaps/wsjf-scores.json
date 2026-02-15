@@ -564,7 +564,7 @@
       "blocked_by": [
         "TEST-01"
       ],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/TESTING.md",
       "wsjf": {
         "usability_value": 3,
@@ -574,7 +574,8 @@
         "job_size": 5,
         "score": 2.2
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "quality"
     },
     {
       "id": "TEST-03",
@@ -745,7 +746,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/TYPE_SAFETY.md",
       "wsjf": {
         "usability_value": 1,
@@ -755,7 +756,8 @@
         "job_size": 5,
         "score": 1.0
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "quality"
     },
     {
       "id": "TYPE-02",
@@ -767,7 +769,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/TYPE_SAFETY.md",
       "wsjf": {
         "usability_value": 2,
@@ -777,7 +779,8 @@
         "job_size": 5,
         "score": 1.2
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "quality"
     },
     {
       "id": "TYPE-03",
@@ -858,7 +861,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/TYPE_SAFETY.md",
       "wsjf": {
         "usability_value": 1,
@@ -868,7 +871,8 @@
         "job_size": 3,
         "score": 1.67
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "quality"
     },
     {
       "id": "TYPE-08",
@@ -880,7 +884,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "gaps/TYPE_SAFETY.md",
       "wsjf": {
         "usability_value": 1,
@@ -890,7 +894,8 @@
         "job_size": 6,
         "score": 0.67
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "quality"
     },
     {
       "id": "ERR-06",

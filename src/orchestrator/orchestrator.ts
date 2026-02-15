@@ -21,6 +21,8 @@ import type {
   CostTier,
   TaskContext,
   AgentEvent,
+  DoneEventContent,
+  ErrorEventContent,
 } from '../types.js';
 import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
@@ -303,8 +305,8 @@ export class Orchestrator {
     return this._executeWithProvider(selectedProvider, taskContext, options.onEvent);
   }
 
-  /** Symbol used to mark errors that have already been through the failover path */
-  private static readonly _FAILOVER_SENTINEL = Symbol.for('zora.failoverSentinel');
+  /** Tracks errors that have already been through the failover path */
+  private static readonly _failoverErrors = new WeakSet<Error>();
 
   /** Maximum depth of failover recursion to prevent unbounded re-execution */
   private static readonly MAX_FAILOVER_DEPTH = 3;
@@ -334,7 +336,7 @@ export class Orchestrator {
             const steerEvent: AgentEvent = {
               type: 'steering',
               timestamp: new Date(),
-              content: { text: (msg as any).message, source: msg.source, author: msg.author },
+              content: { text: msg.type === 'steer' ? msg.message : `[${msg.type}]`, source: msg.source, author: msg.author },
             };
             await this._sessionManager.appendEvent(taskContext.jobId, steerEvent);
             taskContext.history.push(steerEvent);
@@ -353,12 +355,12 @@ export class Orchestrator {
 
         // Capture result text
         if (event.type === 'done') {
-          result = (event.content as any).text ?? '';
+          result = (event.content as DoneEventContent).text ?? '';
         }
 
         // Handle errors — trigger failover (R3)
         if (event.type === 'error') {
-          const errorContent = event.content as any;
+          const errorContent = event.content as ErrorEventContent;
           const error = new Error(errorContent.message ?? 'Unknown provider error');
 
           // Guard: skip failover if depth exceeded
@@ -386,13 +388,13 @@ export class Orchestrator {
           }
 
           // Mark so the outer catch doesn't re-trigger failover
-          (error as any)[Orchestrator._FAILOVER_SENTINEL] = true;
+          Orchestrator._failoverErrors.add(error);
           throw error;
         }
       }
     } catch (err) {
       // Skip failover for errors already marked by the failover path
-      const isFailoverError = err instanceof Error && (err as any)[Orchestrator._FAILOVER_SENTINEL];
+      const isFailoverError = err instanceof Error && Orchestrator._failoverErrors.has(err);
       if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
         // R3: Try failover on execution exceptions
         const failoverResult = await this._failoverController.handleFailure(
@@ -403,7 +405,7 @@ export class Orchestrator {
 
         if (failoverResult) {
           // Mark the error so downstream doesn't re-trigger failover
-          (err as any)[Orchestrator._FAILOVER_SENTINEL] = true;
+          Orchestrator._failoverErrors.add(err);
           return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
         }
 

@@ -11,6 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import { writeAtomic } from '../utils/fs.js';
+import { isENOENT } from '../utils/errors.js';
 import type { TaskContext } from '../types.js';
 
 export interface RetryEntry {
@@ -38,13 +39,15 @@ export class RetryQueue {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       
       const content = await fs.readFile(this._stateFile, 'utf8');
-      const raw = JSON.parse(content) as any[];
+      const raw = JSON.parse(content) as Array<Record<string, unknown>>;
       this._queue = raw.map(entry => ({
-        ...entry,
-        nextRunAt: new Date(entry.nextRunAt)
+        task: entry['task'] as TaskContext,
+        retryCount: entry['retryCount'] as number,
+        lastError: entry['lastError'] as string,
+        nextRunAt: new Date(entry['nextRunAt'] as string),
       }));
-    } catch (err: any) {
-      if (err?.code === 'ENOENT') {
+    } catch (err: unknown) {
+      if (isENOENT(err)) {
         // File doesn't exist, which is fine on first run.
         this._queue = [];
       } else {
