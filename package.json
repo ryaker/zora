@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc && npm run build:frontend",
     "build:backend": "tsc",
-    "build:frontend": "cd src/dashboard/frontend && npm run build",
+    "build:frontend": "cd src/dashboard/frontend && (test -d node_modules || npm ci --ignore-scripts) && npm run build",
     "install:frontend": "cd src/dashboard/frontend && npm install --ignore-scripts",
     "dev": "tsx src/index.ts",
     "test": "npm run test:unit && npm run test:browser",
