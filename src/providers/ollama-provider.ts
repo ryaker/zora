@@ -167,15 +167,22 @@ export class OllamaProvider implements LLMProvider {
       for await (const line of this._streamLines(response.body)) {
         if (!line.trim()) continue;
 
-        let chunk: any;
+        let chunk: Record<string, unknown>;
         try {
-          chunk = JSON.parse(line);
-        } catch {
-          continue; // Skip malformed lines
+          chunk = JSON.parse(line) as Record<string, unknown>;
+        } catch (parseErr: unknown) {
+          // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
+          const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          console.error('[OllamaProvider] Failed to parse streaming JSON line:', {
+            rawContent: line.slice(0, 200),
+            error: msg,
+          });
+          continue;
         }
 
-        if (chunk.message?.content) {
-          const text = chunk.message.content;
+        const chunkMessage = chunk.message as Record<string, unknown> | undefined;
+        if (chunkMessage?.content) {
+          const text = String(chunkMessage.content);
           fullText += text;
           yield {
             type: 'text' as AgentEventType,
@@ -210,7 +217,7 @@ export class OllamaProvider implements LLMProvider {
         }
       }
     } catch (err: unknown) {
-      if ((err as any)?.name === 'AbortError') {
+      if (err instanceof Error && err.name === 'AbortError') {
         yield {
           type: 'done' as AgentEventType,
           timestamp: new Date(),
@@ -271,10 +278,11 @@ export class OllamaProvider implements LLMProvider {
 
     // History as conversation turns
     for (const event of task.history) {
+      const eventContent = event.content as Record<string, unknown>;
       if (event.type === 'text') {
-        messages.push({ role: 'assistant', content: (event.content as any).text });
+        messages.push({ role: 'assistant', content: String(eventContent.text ?? '') });
       } else if (event.type === 'steering') {
-        messages.push({ role: 'user', content: (event.content as any).text });
+        messages.push({ role: 'user', content: String(eventContent.text ?? '') });
       }
     }
 
@@ -288,24 +296,29 @@ export class OllamaProvider implements LLMProvider {
    * Parse tool calls from Ollama response text.
    * Ollama models may output tool calls in JSON format within the text.
    */
-  private _parseToolCalls(text: string): any[] {
-    const toolCalls: any[] = [];
+  private _parseToolCalls(text: string): Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> {
+    const toolCalls: Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> = [];
 
     // Look for JSON blocks that resemble tool calls
     const jsonRegex = /```json\s*(\{.*?\})\s*```/gs;
     let match;
     while ((match = jsonRegex.exec(text)) !== null) {
       try {
-        const data = JSON.parse(match[1]!);
-        if (data.tool && data.arguments) {
+        const data = JSON.parse(match[1]!) as Record<string, unknown>;
+        if (typeof data.tool === 'string' && data.arguments && typeof data.arguments === 'object') {
           toolCalls.push({
             toolCallId: `call_${Math.random().toString(36).slice(2, 9)}`,
             tool: data.tool,
-            arguments: data.arguments,
+            arguments: data.arguments as Record<string, unknown>,
           });
         }
-      } catch {
-        // Malformed JSON — skip
+      } catch (parseErr: unknown) {
+        // TYPE-05: Log malformed tool call JSON instead of silently dropping
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        console.error('[OllamaProvider] Failed to parse JSON tool call:', {
+          rawContent: match[1]?.slice(0, 200),
+          error: msg,
+        });
       }
     }
 

@@ -471,24 +471,22 @@ export class ClaudeProvider implements LLMProvider {
     if (task.history.length > 0) {
       parts.push('<execution_history>');
       for (const event of task.history) {
+        const c = event.content as Record<string, unknown>;
         if (event.type === 'text') {
           parts.push('  <assistant_response>');
-          parts.push((event.content as any).text);
+          parts.push(String(c.text ?? ''));
           parts.push('  </assistant_response>');
         } else if (event.type === 'tool_call') {
-          const c = event.content as any;
-          parts.push(`  <tool_call name="${c.tool}" id="${c.toolCallId}">`);
+          parts.push(`  <tool_call name="${String(c.tool ?? '')}" id="${String(c.toolCallId ?? '')}">`);
           parts.push(JSON.stringify(c.arguments, null, 2));
           parts.push('  </tool_call>');
         } else if (event.type === 'tool_result') {
-          const c = event.content as any;
-          parts.push(`  <tool_result id="${c.toolCallId}">`);
+          parts.push(`  <tool_result id="${String(c.toolCallId ?? '')}">`);
           parts.push(JSON.stringify(c.result, null, 2));
           parts.push('  </tool_result>');
         } else if (event.type === 'steering') {
-          const c = event.content as any;
-          parts.push(`  <human_steering source="${c.source}" author="${c.author}">`);
-          parts.push(c.text);
+          parts.push(`  <human_steering source="${String(c.source ?? '')}" author="${String(c.author ?? '')}">`);
+          parts.push(String(c.text ?? ''));
           parts.push('  </human_steering>');
         }
       }

@@ -39,7 +39,7 @@ export class GeminiProvider implements LLMProvider {
   private _lastRequestAt: Date | null = null;
 
   /** Active child processes indexed by jobId for abort support */
-  private readonly _activeProcesses: Map<string, any> = new Map();
+  private readonly _activeProcesses: Map<string, import('node:child_process').ChildProcess> = new Map();
 
   constructor(options: GeminiProviderOptions) {
     const { config } = options;
@@ -259,24 +259,22 @@ export class GeminiProvider implements LLMProvider {
     if (task.history.length > 0) {
       parts.push('<history>');
       for (const event of task.history) {
+        const c = event.content as Record<string, unknown>;
         if (event.type === 'text') {
           parts.push('  <assistant>');
-          parts.push((event.content as any).text);
+          parts.push(String(c.text ?? ''));
           parts.push('  </assistant>');
         } else if (event.type === 'tool_call') {
-          const c = event.content as any;
-          parts.push(`  <tool_call name="${c.tool}" id="${c.toolCallId}">`);
+          parts.push(`  <tool_call name="${String(c.tool ?? '')}" id="${String(c.toolCallId ?? '')}">`);
           parts.push(JSON.stringify(c.arguments));
           parts.push('  </tool_call>');
         } else if (event.type === 'tool_result') {
-          const c = event.content as any;
-          parts.push(`  <tool_result id="${c.toolCallId}">`);
+          parts.push(`  <tool_result id="${String(c.toolCallId ?? '')}">`);
           parts.push(JSON.stringify(c.result));
           parts.push('  </tool_result>');
         } else if (event.type === 'steering') {
-          const c = event.content as any;
           parts.push('  <human_steering>');
-          parts.push(c.text);
+          parts.push(String(c.text ?? ''));
           parts.push('  </human_steering>');
         }
       }
@@ -287,18 +285,20 @@ export class GeminiProvider implements LLMProvider {
     return parts.join('\n\n');
   }
 
-  private _parseToolCalls(text: string): any[] {
-    const toolCalls: any[] = [];
+  private _parseToolCalls(text: string): Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> {
+    const toolCalls: Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> = [];
 
     // 1. XML pattern
     const xmlRegex = /<tool_call\s+name=["'](.+?)["']>(.*?)<\/tool_call>/gs;
     let match;
     while ((match = xmlRegex.exec(text)) !== null) {
       try {
+        const toolName = match[1] ?? '';
+        const rawArgs = match[2]?.trim() ?? '';
         toolCalls.push({
           toolCallId: `call_${Math.random().toString(36).slice(2, 9)}`,
-          tool: match[1],
-          arguments: JSON.parse(match[2]!.trim()),
+          tool: toolName,
+          arguments: JSON.parse(rawArgs) as Record<string, unknown>,
         });
       } catch (e) {
         // ERR-02: Log malformed XML tool calls with full context for debugging
@@ -317,19 +317,19 @@ export class GeminiProvider implements LLMProvider {
       const jsonRegex = /```json\s*(\{.*?\})\s*```/gs;
       while ((match = jsonRegex.exec(text)) !== null) {
         try {
-          const data = JSON.parse(match[1]!);
-          if (data.tool && data.arguments) {
+          const data = JSON.parse(match[1]!) as Record<string, unknown>;
+          if (typeof data.tool === 'string' && data.arguments && typeof data.arguments === 'object') {
             toolCalls.push({
               toolCallId: `call_${Math.random().toString(36).slice(2, 9)}`,
               tool: data.tool,
-              arguments: data.arguments,
+              arguments: data.arguments as Record<string, unknown>,
             });
           }
         } catch (e) {
-          // ERR-02: Log malformed JSON tool calls with full context for debugging
+          // ERR-02/TYPE-05: Log malformed JSON tool calls with full context for debugging
           const error = e instanceof Error ? e : new Error(String(e));
           console.error('[GeminiProvider] Failed to parse JSON tool call:', {
-            rawContent: match[1]?.slice(0, 200), // First 200 chars for context
+            rawContent: match[1]?.slice(0, 200),
             error: error.message,
             stack: error.stack,
           });
