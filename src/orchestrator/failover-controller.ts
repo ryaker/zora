@@ -146,16 +146,16 @@ export class FailoverController {
     // 2. Identify candidates for failover
     // We use the router to find the NEXT best provider, excluding the failed one
     const candidates = this._providers.filter(p => p.name !== failedProvider.name);
-    const candidateRouter = new Router({ 
-      providers: candidates, 
+    const candidateRouter = new Router({
+      providers: candidates,
       mode: 'respect_ranking' // Always walk down the ranked list for failover
     });
 
     try {
       const nextProvider = await candidateRouter.selectProvider(task);
-      
+
       // 3. Create HandoffBundle
-      const handoffBundle = this._createHandoffBundle(task, failedProvider, nextProvider, error);
+      const handoffBundle = this._createHandoffBundle(task, failedProvider, nextProvider, classified);
 
       return { nextProvider, handoffBundle };
     } catch (err) {
@@ -171,10 +171,10 @@ export class FailoverController {
     task: TaskContext,
     from: LLMProvider,
     to: LLMProvider,
-    error: Error
+    classified: ClassifiedError
   ): HandoffBundle {
     const history = task.history || [];
-    
+
     // Extract progress/artifacts from history
     const progress: string[] = [];
     const artifacts: string[] = [];
@@ -210,7 +210,7 @@ export class FailoverController {
       createdAt: new Date(),
       task: task.task,
       context: {
-        summary: `Failing over from ${from.name} to ${to.name} due to ${this.classifyError(error).category === 'rate_limit' || this.classifyError(error).category === 'quota' ? 'quota limits' : 'auth failure'}.`,
+        summary: `Failing over from ${from.name} to ${to.name} due to ${classified.category === 'rate_limit' || classified.category === 'quota' ? 'quota limits' : 'auth failure'}.`,
         progress,
         artifacts,
       },

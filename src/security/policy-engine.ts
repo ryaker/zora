@@ -1017,11 +1017,15 @@ export class PolicyEngine {
 
       // Track command substitution: $( ... )
       if (!inQuote && char === '$' && nextChar === '(') {
+        // Enter command substitution and consume both "$("
         parenDepth++;
-        current += char;
+        current += '$(';
+        i++;
         continue;
       }
-      if (!inQuote && char === '(' && i > 0 && command[i - 1] === '$') {
+      if (!inQuote && char === '(' && parenDepth > 0) {
+        // Nested parentheses inside $(...)
+        parenDepth++;
         current += char;
         continue;
       }
