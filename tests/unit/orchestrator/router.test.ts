@@ -60,6 +60,45 @@ describe('Router', () => {
       expect(resourceType).toBe('reasoning');
       expect(complexity).toBe('complex');
     });
+
+    it('routes analytical code tasks to reasoning, not coding (ORCH-05)', () => {
+      // "Analyze how this code performs" should be reasoning, not coding
+      const { resourceType } = router.classifyTask('Analyze how this code performs under load');
+      expect(resourceType).toBe('reasoning');
+    });
+
+    it('routes "explain this code" to reasoning', () => {
+      const { resourceType } = router.classifyTask('Explain what this code does and why');
+      expect(resourceType).toBe('reasoning');
+    });
+
+    it('routes pure coding tasks to coding', () => {
+      const { resourceType } = router.classifyTask('implement a function to sort an array');
+      expect(resourceType).toBe('coding');
+    });
+
+    it('classifies creative tasks correctly', () => {
+      const { resourceType } = router.classifyTask('write a blog post about productivity');
+      expect(resourceType).toBe('creative');
+    });
+
+    it('classifies data tasks correctly', () => {
+      const { resourceType } = router.classifyTask('parse this json and extract the values');
+      expect(resourceType).toBe('data');
+    });
+
+    it('marks multi-domain tasks as complex', () => {
+      // Touches reasoning + coding + search → complex
+      const { complexity } = router.classifyTask(
+        'research best practices, analyze the code, and implement a fix for the bug'
+      );
+      expect(complexity).toBe('complex');
+    });
+
+    it('marks short tasks as simple', () => {
+      const { complexity } = router.classifyTask('hello');
+      expect(complexity).toBe('simple');
+    });
   });
 
   describe('selectProvider', () => {
@@ -105,6 +144,43 @@ describe('Router', () => {
       router = new Router({ providers: [p1] });
 
       await expect(router.selectProvider(task)).rejects.toThrow('No available provider found');
+    });
+  });
+
+  describe('round-robin mode (ORCH-11)', () => {
+    it('cycles through providers deterministically', async () => {
+      const a = new MockProvider({ name: 'a', rank: 1, capabilities: ['reasoning'] });
+      const b = new MockProvider({ name: 'b', rank: 2, capabilities: ['reasoning'] });
+      const c = new MockProvider({ name: 'c', rank: 3, capabilities: ['reasoning'] });
+      const rr = new Router({ providers: [a, b, c], mode: 'round_robin' });
+
+      const task = makeTask({ resourceType: 'reasoning' });
+      const results = [];
+      for (let i = 0; i < 7; i++) {
+        const selected = await rr.selectProvider(task);
+        results.push(selected.name);
+      }
+      // Should cycle: a, b, c, a, b, c, a
+      expect(results).toEqual(['a', 'b', 'c', 'a', 'b', 'c', 'a']);
+    });
+
+    it('does not use random selection', async () => {
+      const a = new MockProvider({ name: 'a', rank: 1, capabilities: ['reasoning'] });
+      const b = new MockProvider({ name: 'b', rank: 2, capabilities: ['reasoning'] });
+      const rr = new Router({ providers: [a, b], mode: 'round_robin' });
+
+      const task = makeTask({ resourceType: 'reasoning' });
+
+      // Run 20 times — with random, we'd almost certainly see non-alternating
+      const results = [];
+      for (let i = 0; i < 20; i++) {
+        const selected = await rr.selectProvider(task);
+        results.push(selected.name);
+      }
+      // Every even index should be 'a', every odd should be 'b'
+      for (let i = 0; i < 20; i++) {
+        expect(results[i]).toBe(i % 2 === 0 ? 'a' : 'b');
+      }
     });
   });
 
