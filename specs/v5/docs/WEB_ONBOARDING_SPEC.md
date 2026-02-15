@@ -1,6 +1,6 @@
 # Zora v0.5 - Web Onboarding Wizard (Local UI Spec)
 
-This document defines a local-only onboarding wizard to make pre-authorization safe and intuitive. It runs at `http://localhost:7070/onboarding`.
+This document defines a local-only onboarding wizard to make pre-authorization safe and intuitive. It runs at `http://localhost:8070/onboarding`.
 
 ## Goals
 

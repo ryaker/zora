@@ -2,14 +2,14 @@ services:
   zora:
     build: .
     ports:
-      - "7070:7070"
+      - "8070:8070"
     volumes:
       - zora-config:/root/.zora
     environment:
       - NODE_ENV=test
       - ZORA_BIND_HOST=0.0.0.0
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7070/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8070/api/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -21,7 +21,7 @@ services:
       zora:
         condition: service_healthy
     environment:
-      - ZORA_URL=http://zora:7070
+      - ZORA_URL=http://zora:8070
     entrypoint: ["node", "--test", "dist/tests/integration/"]
     profiles:
       - test

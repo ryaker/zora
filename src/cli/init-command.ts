@@ -188,7 +188,7 @@ jit_secret_decryption = true
 [steering]
 enabled = true
 poll_interval = "5s"
-dashboard_port = 7070
+dashboard_port = 8070
 notify_on_flag = true
 flag_timeout = "10m"
 auto_approve_low_risk = true
@@ -470,7 +470,7 @@ Try it:
 
 Or start the dashboard:
   zora-agent start
-  Then open http://localhost:7070
+  Then open http://localhost:8070
 
 To expand permissions later:
   Edit ~/.zora/policy.toml or re-run: zora-agent init --force`);

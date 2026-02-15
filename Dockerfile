@@ -42,9 +42,9 @@ COPY docker/config.toml /root/.zora/config.toml
 COPY docker/policy.toml /root/.zora/policy.toml
 
 ENV ZORA_BIND_HOST=0.0.0.0
-EXPOSE 7070
+EXPOSE 8070
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:7070/api/health || exit 1
+  CMD curl -f http://localhost:8070/api/health || exit 1
 
 CMD ["node", "dist/cli/daemon.js"]

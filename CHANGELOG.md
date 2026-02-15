@@ -118,7 +118,7 @@ This release addresses critical security gaps identified in a comprehensive audi
 - Routine manager with TOML-defined tasks and node-cron scheduling
 - Heartbeat system with markdown task parsing and completion marking
 - Event trigger manager with fs.stat polling and glob pattern matching
-- Dashboard server on localhost:7070 with Express, steering API, and health endpoint
+- Dashboard server on localhost:8070 with Express, steering API, and health endpoint
 - Auth middleware with timing-safe Bearer token comparison
 - Skill loader for dynamic ~/.claude/skills/ discovery
 - CLI with `ask`, `status`, `start`, `stop` commands plus memory, audit, edit, team, steer, and skill subcommands

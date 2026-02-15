@@ -51,8 +51,8 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.notifications.on_all_providers_down).toBe(true);
   });
 
-  it('sets dashboard port to 7070', () => {
-    expect(DEFAULT_CONFIG.steering.dashboard_port).toBe(7070);
+  it('sets dashboard port to 8070', () => {
+    expect(DEFAULT_CONFIG.steering.dashboard_port).toBe(8070);
   });
 });
 

@@ -13,8 +13,6 @@ import type {
   TaskContext,
   HandoffBundle,
   FailoverConfig,
-  TextEventContent,
-  ToolCallEventContent,
   ToolResultEventContent,
 } from '../types.js';
 import { isTextEvent, isToolCallEvent } from '../types.js';

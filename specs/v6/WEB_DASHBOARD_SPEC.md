@@ -16,7 +16,7 @@ This spec defines a local web UI for monitoring, onboarding, and async steering.
 ## Local Host Binding
 
 - Bind to `localhost` only
-- Default port: `7070`
+- Default port: `8070`
 - Optional `dashboard_auth` token required for any actions (read + write)
 
 ## Pages / Routes
