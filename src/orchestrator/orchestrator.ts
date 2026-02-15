@@ -423,140 +423,141 @@ export class Orchestrator {
   ): Promise<string> {
     let result = '';
 
-    // Event batching: buffer session writes, flush every 500ms or on done/error
+    // Event batching: buffer session writes, flush every 500ms or on done/error.
+    // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
     const bufferedWriter = new BufferedSessionWriter(this._sessionManager, taskContext.jobId, 500);
 
     try {
-      // Execute via the provider's async generator
-      for await (const event of provider.execute(taskContext)) {
-        // R8: Persist events via buffered writer (batched disk I/O)
-        bufferedWriter.append(event);
+      try {
+        // Execute via the provider's async generator
+        for await (const event of provider.execute(taskContext)) {
+          // R8: Persist events via buffered writer (batched disk I/O)
+          bufferedWriter.append(event);
 
-        // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
-        if (event.type === 'tool_result') {
-          const toolResultContent = event.content as ToolResultEventContent;
-          const resultText = typeof toolResultContent.result === 'string'
-            ? toolResultContent.result
-            : JSON.stringify(toolResultContent.result ?? '');
-          const leaks = this._leakDetector.scan(resultText);
-          if (leaks.length > 0) {
-            log.warn(
-              { jobId: taskContext.jobId, toolCallId: toolResultContent.toolCallId, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
-              'Potential secret leak detected in tool output',
+          // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
+          if (event.type === 'tool_result') {
+            const toolResultContent = event.content as ToolResultEventContent;
+            const resultText = typeof toolResultContent.result === 'string'
+              ? toolResultContent.result
+              : JSON.stringify(toolResultContent.result ?? '');
+            const leaks = this._leakDetector.scan(resultText);
+            if (leaks.length > 0) {
+              log.warn(
+                { jobId: taskContext.jobId, toolCallId: toolResultContent.toolCallId, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+                'Potential secret leak detected in tool output',
+              );
+            }
+          }
+
+          // SEC-03: Scan tool call arguments for leaked secrets
+          if (event.type === 'tool_call') {
+            const toolCallContent = event.content as ToolCallEventContent;
+            const argsText = JSON.stringify(toolCallContent.arguments ?? {});
+            const leaks = this._leakDetector.scan(argsText);
+            if (leaks.length > 0) {
+              log.warn(
+                { jobId: taskContext.jobId, tool: toolCallContent.tool, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
+                'Potential secret leak detected in tool call arguments',
+              );
+            }
+          }
+
+          // R7: Poll SteeringManager with debouncing (max once per 2 seconds)
+          if (event.type === 'text' || event.type === 'tool_result') {
+            const pendingMessages = await this._steeringManager.cachedGetPendingMessages(taskContext.jobId, 2000);
+            for (const msg of pendingMessages) {
+              // Inject steering as an event
+              const steerEvent: AgentEvent = {
+                type: 'steering',
+                timestamp: new Date(),
+                content: { text: msg.type === 'steer' ? msg.message : `[${msg.type}]`, source: msg.source, author: msg.author },
+              };
+              bufferedWriter.append(steerEvent);
+              taskContext.history.push(steerEvent);
+              if (onEvent) onEvent(steerEvent);
+
+              // Archive the processed message and invalidate cache
+              await this._steeringManager.archiveMessage(taskContext.jobId, msg.id);
+              this._steeringManager.invalidatePendingCache(taskContext.jobId);
+            }
+          }
+
+          // Notify caller
+          if (onEvent) onEvent(event);
+
+          // Track history for failover handoff
+          taskContext.history.push(event);
+
+          // Capture result text
+          if (event.type === 'done') {
+            result = (event.content as DoneEventContent).text ?? '';
+          }
+
+          // Handle errors — trigger failover (R3)
+          if (event.type === 'error') {
+            const errorContent = event.content as ErrorEventContent;
+            const error = new Error(errorContent.message ?? 'Unknown provider error');
+
+            // Guard: skip failover if depth exceeded
+            if (failoverDepth >= Orchestrator.MAX_FAILOVER_DEPTH) {
+              throw error;
+            }
+
+            // R3: Connect FailoverController to error path
+            const failoverResult = await this._failoverController.handleFailure(
+              taskContext,
+              provider,
+              error,
             );
-          }
-        }
 
-        // SEC-03: Scan tool call arguments for leaked secrets
-        if (event.type === 'tool_call') {
-          const toolCallContent = event.content as ToolCallEventContent;
-          const argsText = JSON.stringify(toolCallContent.arguments ?? {});
-          const leaks = this._leakDetector.scan(argsText);
-          if (leaks.length > 0) {
-            log.warn(
-              { jobId: taskContext.jobId, tool: toolCallContent.tool, leaks: leaks.map(l => ({ pattern: l.pattern, severity: l.severity })) },
-              'Potential secret leak detected in tool call arguments',
-            );
-          }
-        }
+            if (failoverResult) {
+              // Re-execute with the failover provider (increment depth)
+              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+            }
 
-        // R7: Poll SteeringManager with debouncing (max once per 2 seconds)
-        if (event.type === 'text' || event.type === 'tool_result') {
-          const pendingMessages = await this._steeringManager.cachedGetPendingMessages(taskContext.jobId, 2000);
-          for (const msg of pendingMessages) {
-            // Inject steering as an event
-            const steerEvent: AgentEvent = {
-              type: 'steering',
-              timestamp: new Date(),
-              content: { text: msg.type === 'steer' ? msg.message : `[${msg.type}]`, source: msg.source, author: msg.author },
-            };
-            bufferedWriter.append(steerEvent);
-            taskContext.history.push(steerEvent);
-            if (onEvent) onEvent(steerEvent);
+            // R5: Enqueue for retry if no failover available
+            try {
+              await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+            } catch {
+              // Max retries exceeded or enqueue failed
+            }
 
-            // Archive the processed message and invalidate cache
-            await this._steeringManager.archiveMessage(taskContext.jobId, msg.id);
-            this._steeringManager.invalidatePendingCache(taskContext.jobId);
-          }
-        }
-
-        // Notify caller
-        if (onEvent) onEvent(event);
-
-        // Track history for failover handoff
-        taskContext.history.push(event);
-
-        // Capture result text
-        if (event.type === 'done') {
-          result = (event.content as DoneEventContent).text ?? '';
-        }
-
-        // Handle errors — trigger failover (R3)
-        if (event.type === 'error') {
-          const errorContent = event.content as ErrorEventContent;
-          const error = new Error(errorContent.message ?? 'Unknown provider error');
-
-          // Guard: skip failover if depth exceeded
-          if (failoverDepth >= Orchestrator.MAX_FAILOVER_DEPTH) {
+            // Mark so the outer catch doesn't re-trigger failover
+            Orchestrator._failoverErrors.add(error);
             throw error;
           }
-
-          // R3: Connect FailoverController to error path
+        }
+      } catch (err) {
+        // Skip failover for errors already marked by the failover path
+        const isFailoverError = err instanceof Error && Orchestrator._failoverErrors.has(err);
+        if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
+          // R3: Try failover on execution exceptions
           const failoverResult = await this._failoverController.handleFailure(
             taskContext,
             provider,
-            error,
+            err,
           );
 
           if (failoverResult) {
-            // Re-execute with the failover provider (increment depth)
+            // Mark the error so downstream doesn't re-trigger failover
+            Orchestrator._failoverErrors.add(err);
             return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
           }
 
-          // R5: Enqueue for retry if no failover available
+          // R5: Enqueue for retry
           try {
-            await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+            await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
           } catch {
-            // Max retries exceeded or enqueue failed
+            // Max retries exceeded
           }
-
-          // Mark so the outer catch doesn't re-trigger failover
-          Orchestrator._failoverErrors.add(error);
-          throw error;
         }
+        throw err;
       }
-    } catch (err) {
-      // Flush buffered events before handling error
+    } finally {
+      // Always close the buffered writer — flushes remaining events and stops the timer.
+      // This runs on all exit paths: success, throw, and failover returns.
       await bufferedWriter.close();
-
-      // Skip failover for errors already marked by the failover path
-      const isFailoverError = err instanceof Error && Orchestrator._failoverErrors.has(err);
-      if (!isFailoverError && err instanceof Error && failoverDepth < Orchestrator.MAX_FAILOVER_DEPTH) {
-        // R3: Try failover on execution exceptions
-        const failoverResult = await this._failoverController.handleFailure(
-          taskContext,
-          provider,
-          err,
-        );
-
-        if (failoverResult) {
-          // Mark the error so downstream doesn't re-trigger failover
-          Orchestrator._failoverErrors.add(err);
-          return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
-        }
-
-        // R5: Enqueue for retry
-        try {
-          await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
-        } catch {
-          // Max retries exceeded
-        }
-      }
-      throw err;
     }
-
-    // Flush remaining buffered events on success
-    await bufferedWriter.close();
 
     // Record completion in daily notes
     await this._memoryManager.appendDailyNote(`Completed task: ${taskContext.task}`);
