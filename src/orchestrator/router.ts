@@ -66,8 +66,8 @@ export class Router {
     'write', 'blog', 'creative', 'story', 'poem', 'essay', 'draft',
   ];
 
-  /** Simple token count threshold — tasks below this are "simple" */
-  private static readonly SIMPLE_TOKEN_THRESHOLD = 20;
+  /** Simple character count threshold — tasks below this are "simple" */
+  private static readonly SIMPLE_CHAR_THRESHOLD = 20;
 
   constructor(options: RouterOptions) {
     this._providers = options.providers;
@@ -145,18 +145,18 @@ export class Router {
       mixed: 0,
     };
 
-    const keywordConfig: [TaskResourceType, readonly string[], number][] = [
-      ['reasoning', Router.REASONING_KEYWORDS, 2],
-      ['coding', Router.CODING_KEYWORDS, 1],
-      ['search', Router.SEARCH_KEYWORDS, 1],
-      ['data', Router.DATA_KEYWORDS, 1],
-      ['creative', Router.CREATIVE_KEYWORDS, 1],
+    const CATEGORY_CONFIGS = [
+      { keywords: Router.REASONING_KEYWORDS, key: 'reasoning' as TaskResourceType, weight: 2 },
+      { keywords: Router.CODING_KEYWORDS, key: 'coding' as TaskResourceType, weight: 1 },
+      { keywords: Router.SEARCH_KEYWORDS, key: 'search' as TaskResourceType, weight: 1 },
+      { keywords: Router.DATA_KEYWORDS, key: 'data' as TaskResourceType, weight: 1 },
+      { keywords: Router.CREATIVE_KEYWORDS, key: 'creative' as TaskResourceType, weight: 1 },
     ];
 
-    for (const [type, keywords, weight] of keywordConfig) {
-      for (const kw of keywords) {
+    for (const config of CATEGORY_CONFIGS) {
+      for (const kw of config.keywords) {
         if (text.includes(kw)) {
-          scores[type] += weight;
+          scores[config.key] += config.weight;
         }
       }
     }
@@ -185,9 +185,9 @@ export class Router {
     ) {
       complexity = 'complex';
     } else {
-      // Estimate token count by whitespace splitting (rough approximation)
-      const tokenCount = text.split(/\s+/).length;
-      if (tokenCount < Router.SIMPLE_TOKEN_THRESHOLD && !text.includes('research')) {
+      // Estimate character count by whitespace splitting (rough approximation)
+      const charCount = text.split(/\s+/).length;
+      if (charCount < Router.SIMPLE_CHAR_THRESHOLD && !text.includes('research')) {
         complexity = 'simple';
       }
     }
