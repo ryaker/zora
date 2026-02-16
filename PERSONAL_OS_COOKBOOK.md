@@ -432,7 +432,7 @@ Add MCP servers to your `config.toml`:
 [mcp.servers.notion]
 type = "stdio"
 command = "npx"
-args = ["-y", "@notionhq/mcp-server"]
+args = ["--yes", "@notionhq/mcp-server"]
 env = { NOTION_API_KEY = "${env:NOTION_API_KEY}" }
 
 # Google Calendar
