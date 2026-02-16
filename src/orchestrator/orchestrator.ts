@@ -398,8 +398,8 @@ export class Orchestrator {
       throw new Error(`No provider available: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Execute with the selected provider
-    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent);
+    // Execute with the selected provider (injectionDepth=0 for initial call)
+    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent, 0, 0);
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -407,6 +407,9 @@ export class Orchestrator {
 
   /** Maximum depth of failover recursion to prevent unbounded re-execution */
   private static readonly MAX_FAILOVER_DEPTH = 3;
+
+  /** ORCH-16: Maximum depth of onTaskEnd follow-up injection loops */
+  private static readonly MAX_INJECTION_LOOPS = 3;
 
   /**
    * Executes a task with a specific provider, handling failover and event persistence.
@@ -427,6 +430,7 @@ export class Orchestrator {
     taskContext: TaskContext,
     onEvent?: (event: AgentEvent) => void,
     failoverDepth = 0,
+    injectionDepth = 0,
   ): Promise<string> {
     let result = '';
 
@@ -519,7 +523,7 @@ export class Orchestrator {
 
             if (failoverResult) {
               // Re-execute with the failover provider (increment depth)
-              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
             }
 
             // R5: Enqueue for retry if no failover available
@@ -548,7 +552,7 @@ export class Orchestrator {
           if (failoverResult) {
             // Mark the error so downstream doesn't re-trigger failover
             Orchestrator._failoverErrors.add(err);
-            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
           }
 
           // R5: Enqueue for retry
@@ -577,10 +581,29 @@ export class Orchestrator {
     }
 
     // ORCH-12: Run onTaskEnd hooks (can inspect result, optionally trigger follow-up)
+    // ORCH-16: Guard against infinite follow-up injection loops
     const endResult = await this._hookRunner.runOnTaskEnd(taskContext, result);
     if (endResult.followUp) {
-      log.info({ jobId: taskContext.jobId }, 'onTaskEnd hook triggered follow-up task');
-      return this.submitTask({ prompt: endResult.followUp, onEvent });
+      if (injectionDepth >= Orchestrator.MAX_INJECTION_LOOPS) {
+        log.warn(
+          { jobId: taskContext.jobId, depth: injectionDepth, maxDepth: Orchestrator.MAX_INJECTION_LOOPS },
+          'onTaskEnd follow-up injection loop capped — skipping follow-up',
+        );
+      } else {
+        log.info({ jobId: taskContext.jobId, depth: injectionDepth + 1 }, 'onTaskEnd hook triggered follow-up task');
+        // Route through _executeWithProvider directly to preserve injectionDepth tracking.
+        // Re-route through the full submitTask pipeline except use incremented injectionDepth.
+        const followUpJobId = `${taskContext.jobId}_followup_${injectionDepth + 1}`;
+        const followUpCtx: TaskContext = {
+          ...taskContext,
+          jobId: followUpJobId,
+          task: endResult.followUp,
+          history: [],
+        };
+        const hookedFollowUp = await this._hookRunner.runOnTaskStart(followUpCtx);
+        const followUpProvider = await this._router.selectProvider(hookedFollowUp);
+        return this._executeWithProvider(followUpProvider, hookedFollowUp, onEvent, 0, injectionDepth + 1);
+      }
     }
 
     return result;
