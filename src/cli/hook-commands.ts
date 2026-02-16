@@ -10,7 +10,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { createLogger } from '../utils/logger.js';
-import { HOOK_EVENT_NAMES, type HookConfigEntry, type HookEventName } from '../hooks/hook-types.js';
+import { HOOK_EVENT_NAMES, type HookConfig, type HookEventName } from '../hooks/hook-types.js';
 
 const log = createLogger('hook-commands');
 
@@ -18,7 +18,7 @@ const log = createLogger('hook-commands');
  * Load hook config entries from config.toml (parsed).
  * Reads the raw TOML and extracts [[hooks]] sections.
  */
-async function loadHookConfigs(configDir: string): Promise<HookConfigEntry[]> {
+async function loadHookConfigs(configDir: string): Promise<HookConfig[]> {
   const configPath = path.join(configDir, 'config.toml');
   if (!fs.existsSync(configPath)) {
     return [];
@@ -76,7 +76,7 @@ export function registerHookCommands(program: Command, configDir: string): void 
     .argument('<event>', `Hook event to test (${HOOK_EVENT_NAMES.join(', ')})`)
     .option('--tool <name>', 'Tool name for beforeToolExecute/afterToolExecute events', 'Bash')
     .option('--args <json>', 'JSON arguments for the tool', '{}')
-    .action(async (event: string, options: { tool: string; args: string }) => {
+    .action(async (event: string, _options: { tool: string; args: string }) => {
       if (!HOOK_EVENT_NAMES.includes(event as HookEventName)) {
         console.error(`Invalid hook event: ${event}`);
         console.error(`Valid events: ${HOOK_EVENT_NAMES.join(', ')}`);

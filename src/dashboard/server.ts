@@ -67,11 +67,9 @@ export class DashboardServer {
     // R22: Explicit body size limits
     this._app.use(express.json({ limit: '1mb' }));
 
-    // R21: Rate limiting — 100 requests per 15 minutes per IP
-    // Localhost is exempted so the dashboard's own polling (health, jobs,
-    // system) doesn't consume the rate limit budget. This is intentional:
-    // the frontend is served from localhost and polls ~100 req/15min.
-    this._app.use(this._createRateLimiter());
+    // R21: Rate limiting — 100 requests per 15 minutes per IP (API routes only).
+    // Static assets are not rate-limited since they're served from localhost.
+    this._app.use('/api', this._createRateLimiter());
 
     // SEC-01: Mount Bearer token auth on API routes when a token is configured.
     // When no dashboardToken is set, auth is skipped entirely — this covers
@@ -93,27 +91,17 @@ export class DashboardServer {
 
   /**
    * Simple in-memory rate limiter (no external dependency).
-   * Limits to 100 requests per 15 minutes per IP.
-   * Exempts localhost requests to /api/* so the dashboard's own polling
-   * (health, jobs, system) doesn't consume the rate limit budget.
+   * Limits to 500 API requests per 15 minutes per IP.
    * Prunes expired entries periodically to prevent unbounded memory growth.
    */
   private _createRateLimiter(): express.RequestHandler {
     const windowMs = 15 * 60 * 1000;
-    const maxRequests = 100;
+    const maxRequests = 500;
     const clients = new Map<string, { count: number; resetAt: number }>();
     let lastCleanup = Date.now();
 
     return (req, res, next) => {
-      // Exempt localhost API polling from rate limiting (#104).
-      // The dashboard frontend polls /api/health, /api/jobs, and /api/system
-      // frequently (~100 req/15min), which would hit the limit for its own UI.
       const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-      const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-      if (isLoopback && req.path.startsWith('/api/')) {
-        next();
-        return;
-      }
 
       const now = Date.now();
 
@@ -384,7 +372,7 @@ export class DashboardServer {
       // matches AgentEventType), apply verbosity filtering.
       const eventData = event.data as Record<string, unknown> | undefined;
       if (eventData && typeof eventData === 'object' && 'type' in eventData && 'timestamp' in eventData) {
-        if (!shouldIncludeEvent(eventData as AgentEvent, verbosity)) {
+        if (!shouldIncludeEvent(eventData as unknown as AgentEvent, verbosity)) {
           continue; // Skip this event for this client
         }
       }

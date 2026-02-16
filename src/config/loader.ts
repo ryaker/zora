@@ -7,7 +7,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { parse as parseTOML } from 'smol-toml';
-import type { ZoraConfig, ProviderConfig, McpServerEntry, HookConfigEntry, HookEventName } from '../types.js';
+import type { ZoraConfig, ProviderConfig, McpServerEntry, HookEventName } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('config-loader');

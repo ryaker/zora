@@ -37,7 +37,7 @@ test.describe('Zora Tactical Dashboard', () => {
   });
 
   test.afterAll(async () => {
-    server.stop();
+    await server.stop();
   });
 
   test('loads the tactical interface', async ({ page }) => {
@@ -48,12 +48,12 @@ test.describe('Zora Tactical Dashboard', () => {
 
   test('injects steering message via UI', async ({ page }) => {
     await page.goto(`http://localhost:${port}`);
-    
-    const input = page.locator('[placeholder="INPUT COMMAND..."]');
-    await input.fill('Engage impulse engines');
-    await page.click('text=SEND');
 
-    // Check if logs updated in UI
-    await expect(page.locator('text=Course correction injected: Engage impulse engines')).toBeVisible();
+    const input = page.locator('[placeholder="Inject directive message..."]');
+    await input.fill('Engage impulse engines');
+    await page.click('button:has-text("SEND")');
+
+    // Message appears as a user chat bubble
+    await expect(page.locator('.bubble-user:has-text("Engage impulse engines")')).toBeVisible({ timeout: 5000 });
   });
 });

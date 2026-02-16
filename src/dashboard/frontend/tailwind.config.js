@@ -7,11 +7,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        'zora-obsidian': '#0a0a0a',
-        'zora-amber': '#ff9d00',
-        'zora-cyan': '#00f2ff',
-        'zora-magenta': '#ff00ea',
-        'zora-gray': '#1a1a1a',
+        'zora-obsidian': '#0a0b0f',
+        'zora-teal': '#1fd1b9',
+        'zora-cyan': '#64e9ff',
+        'zora-gold': '#ffb347',
+        'zora-blue': '#8cdff0',
+        'zora-ghost': '#2a3342',
+        'zora-rail': '#161b26',
+        'zora-white': '#eaf7ff',
       },
       fontFamily: {
         'tactical': ['IBM Plex Sans Condensed', 'sans-serif'],

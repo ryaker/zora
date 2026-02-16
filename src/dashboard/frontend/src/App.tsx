@@ -1,7 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Shield, Terminal, Zap, Send, Info, Rocket, AlertTriangle, Copy, Check, Play, WifiOff } from 'lucide-react';
+import { Shield, Send, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+
+const ZORA_VERSION = 'v0.9.5';
+const MAX_MESSAGES = 200;
+let messageIdCounter = 0;
+
+// ─── Types ──────────────────────────────────────────────────────────
+
+interface Message {
+  id: number;
+  type: 'agent' | 'user' | 'system' | 'tool-call' | 'tool-result';
+  content: string;
+  timestamp: Date;
+}
 
 interface ProviderStatus {
   name: string;
@@ -10,187 +23,86 @@ interface ProviderStatus {
   canAutoRefresh: boolean;
 }
 
-interface JobStatus {
-  jobId: string;
-  eventCount: number;
-  lastActivity: string | null;
-  status: string;
+interface ProviderQuota {
+  name: string;
+  auth: { valid: boolean; expiresAt: string | null };
+  quota: { isExhausted: boolean; remainingRequests: number | null; cooldownUntil: string | null; healthScore: number };
+  usage: { totalCostUsd: number; totalInputTokens: number; totalOutputTokens: number; requestCount: number; lastRequestAt: string | null };
+  costTier: string;
 }
 
-interface LogEntry {
-  id: number;
-  message: string;
+// ─── Helpers ────────────────────────────────────────────────────────
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
-interface SystemInfo {
-  uptime: number;
-  memory: { used: number; total: number };
-  activeJobs: number;
-  totalJobs: number;
+function healthColor(score: number): string {
+  if (score >= 0.7) return 'text-green-500';
+  if (score >= 0.3) return 'text-zora-gold';
+  return 'text-red-500';
 }
 
-const ZORA_VERSION = 'v0.9.0';
-const MAX_LOGS = 100;
-let logIdCounter = 0;
-
-/** SSE reconnection constants */
-const SSE_MAX_RETRIES = 10;
-const SSE_BASE_DELAY_MS = 1000;
-const SSE_MAX_DELAY_MS = 30000;
-
-type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
-
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+function healthBarColor(score: number): string {
+  if (score >= 0.7) return 'bg-green-500';
+  if (score >= 0.3) return 'bg-zora-gold';
+  return 'bg-red-500';
 }
 
-const SETUP_PROMPT = `I want to set up Zora, an autonomous AI agent for my computer. Please walk me through the setup step by step:
+// ─── MessageBubble ──────────────────────────────────────────────────
 
-1. Check if I have Node.js 20+ installed
-2. Install Zora: npm install -g zora
-3. Run: zora init
-4. Help me choose a security preset (Safe, Balanced, or Power)
-5. Verify setup with: zora doctor
-
-Ask me one question at a time and wait for my response before moving on.`;
-
-const SetupNeededPanel: React.FC = () => {
-  const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(SETUP_PROMPT);
-      setCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Clipboard write failed:', err);
-    }
-  };
+const MessageBubble: React.FC<{ msg: Message }> = ({ msg }) => {
+  const bubbleClass = {
+    agent: 'bubble bubble-agent',
+    user: 'bubble bubble-user',
+    system: 'bubble bubble-system',
+    'tool-call': 'bubble bubble-agent',
+    'tool-result': 'bubble bubble-agent',
+  }[msg.type];
 
   return (
-    <div className="flex-1 flex items-center justify-center">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-lg text-center"
-      >
-        <AlertTriangle size={48} className="text-zora-amber mx-auto mb-4" />
-        <h2 className="text-2xl font-tactical text-zora-amber mb-4 uppercase tracking-wider">
-          Zora needs setup
-        </h2>
-        <p className="text-white/70 font-data text-sm mb-6">
-          Run <code className="text-zora-cyan bg-black/40 px-2 py-0.5">zora init</code> in your
-          terminal to configure AI providers.
-        </p>
-        <div className="lcars-panel border-zora-cyan text-left mb-6">
-          <p className="text-white/60 font-data text-xs mb-3">
-            Or use our AI Setup Assistant — paste this prompt into ChatGPT, Claude, or Gemini:
-          </p>
-          <div className="bg-black/60 p-3 font-data text-xs text-zora-cyan mb-3 max-h-24 overflow-y-auto">
-            {SETUP_PROMPT}
-          </div>
-          <button
-            onClick={handleCopy}
-            className="bg-zora-cyan text-black px-4 py-2 font-bold text-xs uppercase flex items-center gap-2 hover:bg-white transition-colors"
-          >
-            {copied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy Setup Prompt</>}
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
-const WelcomePanel: React.FC = () => (
-  <div className="flex-1 flex items-center justify-center">
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="max-w-lg text-center"
+      transition={{ duration: 0.2 }}
+      className={bubbleClass}
+      data-testid={`bubble-${msg.type}`}
     >
-      <Rocket size={48} className="text-zora-cyan mx-auto mb-4" />
-      <h2 className="text-2xl font-tactical text-zora-cyan mb-4 uppercase tracking-wider">
-        Welcome to Zora
-      </h2>
-      <p className="text-white/70 font-data text-sm mb-6">
-        Your AI agent is running and ready for tasks.
-      </p>
-      <div className="lcars-panel border-zora-amber text-left mb-6">
-        <p className="text-zora-amber font-bold text-xs uppercase mb-3">Quick start</p>
-        <div className="space-y-2 font-data text-xs text-white/60">
-          <div className="bg-black/40 px-3 py-2">
-            <code className="text-zora-cyan">zora ask "summarize the files in ~/Projects"</code>
-          </div>
-          <div className="bg-black/40 px-3 py-2">
-            <code className="text-zora-cyan">zora ask "review my latest git commit"</code>
-          </div>
-          <div className="bg-black/40 px-3 py-2">
-            <code className="text-zora-cyan">zora ask "find all TODO comments in this repo"</code>
-          </div>
-        </div>
+      {msg.type === 'tool-call' && (
+        <div className="tool-mini mb-1">TOOL_INVOKE</div>
+      )}
+      {msg.type === 'tool-result' && (
+        <div className="tool-mini mb-1">TOOL_RESULT</div>
+      )}
+      <div>{msg.content}</div>
+      <div className="text-[9px] opacity-40 mt-1">
+        {msg.timestamp.toLocaleTimeString()}
       </div>
-      <p className="text-white/40 font-data text-xs">
-        Run a task from your terminal, then come back here to monitor progress.
-      </p>
-    </motion.div>
-  </div>
-);
-
-/** DASH-01: Connection status banner — LCARS-styled indicator for SSE state */
-const ConnectionBanner: React.FC<{ status: ConnectionStatus }> = ({ status }) => {
-  if (status === 'connected') return null;
-
-  const isReconnecting = status === 'reconnecting';
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      className={`flex items-center gap-2 px-4 py-1.5 mb-2 font-data text-xs uppercase tracking-wider border-l-2 ${
-        isReconnecting
-          ? 'bg-zora-amber/10 border-zora-amber text-zora-amber'
-          : 'bg-red-500/10 border-red-500 text-red-400'
-      }`}
-    >
-      <WifiOff size={12} className={isReconnecting ? 'animate-pulse' : ''} />
-      <span>
-        {isReconnecting
-          ? 'Reconnecting to event stream...'
-          : 'Connection lost — reload to retry'}
-      </span>
     </motion.div>
   );
 };
+
+// ─── App ────────────────────────────────────────────────────────────
 
 const App: React.FC = () => {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [jobs, setJobs] = useState<JobStatus[]>([]);
+  const [quotas, setQuotas] = useState<ProviderQuota[]>([]);
   const [steerMsg, setSteerMsg] = useState('');
   const [selectedJob, setSelectedJob] = useState('job_active');
-  const [logs, setLogs] = useState<LogEntry[]>([
-    { id: ++logIdCounter, message: 'Zora is running.' },
-    { id: ++logIdCounter, message: 'Waiting for tasks...' },
+  const [messages, setMessages] = useState<Message[]>([
+    { id: ++messageIdCounter, type: 'system', content: 'Neural link established.', timestamp: new Date() },
+    { id: ++messageIdCounter, type: 'agent', content: 'Neural interface active. All subsystems nominal.', timestamp: new Date() },
   ]);
-  const [healthLoaded, setHealthLoaded] = useState(false);
-  const [jobsLoaded, setJobsLoaded] = useState(false);
-  const [fetchError, setFetchError] = useState(false);
-  const [taskPrompt, setTaskPrompt] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [system, setSystem] = useState<SystemInfo | null>(null);
-  const [sseStatus, setSseStatus] = useState<ConnectionStatus>('disconnected');
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll on new messages
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Fetch health
   useEffect(() => {
     const fetchHealth = async () => {
       try {
@@ -198,421 +110,299 @@ const App: React.FC = () => {
         if (res.data.ok) setProviders(res.data.providers);
       } catch (err) {
         console.error('Health check failed', err);
-        setFetchError(true);
-      } finally {
-        setHealthLoaded(true);
       }
     };
-
     fetchHealth();
     const interval = setInterval(fetchHealth, 30000);
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch quota
   useEffect(() => {
-    const fetchJobs = async () => {
+    const fetchQuota = async () => {
       try {
-        const res = await axios.get('/api/jobs');
-        if (res.data.jobs) {
-          setJobs(res.data.jobs);
-          setSelectedJob(prev => (prev === 'job_active' && res.data.jobs.length > 0) ? res.data.jobs[0].jobId : prev);
-        }
+        const res = await axios.get('/api/quota');
+        if (res.data.ok) setQuotas(res.data.providers);
       } catch (err) {
-        console.error('Jobs fetch failed', err);
-        setFetchError(true);
-      } finally {
-        setJobsLoaded(true);
+        console.error('Quota fetch failed', err);
       }
     };
-
-    fetchJobs();
-    const interval = setInterval(fetchJobs, 15000);
+    fetchQuota();
+    const interval = setInterval(fetchQuota, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  // DASH-01: SSE event stream with exponential backoff reconnection
+  // SSE event stream → chat messages
   useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let retryCount = 0;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let unmounted = false;
-
-    function handleMessage(event: MessageEvent) {
+    const es = new EventSource('/api/events');
+    es.onmessage = (e) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'connected') {
-          // Successful connection — reset retry counter
-          retryCount = 0;
-          setSseStatus('connected');
-          return;
+        const data = JSON.parse(e.data);
+        if (data.type === 'connected') return;
+
+        let msgType: Message['type'] = 'agent';
+        let content = '';
+
+        if (data.type === 'job_update') {
+          msgType = 'system';
+          content = `Job ${data.data?.jobId ?? 'unknown'}: ${data.data?.status ?? 'update'}`;
+        } else if (data.type === 'tool_call') {
+          msgType = 'tool-call';
+          content = data.data?.tool ?? JSON.stringify(data);
+        } else if (data.type === 'tool_result') {
+          msgType = 'tool-result';
+          content = data.data?.result ?? JSON.stringify(data);
+        } else if (data.type === 'text_delta' || data.type === 'text.delta') {
+          msgType = 'agent';
+          content = data.data?.text ?? data.data?.delta ?? JSON.stringify(data);
+        } else {
+          msgType = 'system';
+          content = JSON.stringify(data);
         }
 
-        let message: string;
-        switch (data.type) {
-          case 'thinking':
-            message = 'Agent is thinking...';
-            break;
-          case 'text':
-            message = typeof data.data === 'object' && data.data?.text
-              ? `Agent: ${data.data.text.slice(0, 200)}`
-              : 'Agent response received';
-            break;
-          case 'tool_call':
-            message = typeof data.data === 'object' && data.data?.name
-              ? `Tool call: ${data.data.name}`
-              : 'Tool invoked';
-            break;
-          case 'tool_result':
-            message = 'Tool result received';
-            break;
-          case 'error':
-            message = typeof data.data === 'object' && data.data?.message
-              ? `Error: ${data.data.message}`
-              : 'An error occurred';
-            break;
-          case 'done':
-            message = 'Task completed';
-            break;
-          case 'steering':
-            message = typeof data.data === 'object' && data.data?.message
-              ? `Steering: ${data.data.message}`
-              : 'Steering message received';
-            break;
-          case 'job_failed':
-            message = typeof data.data === 'object' && data.data?.error
-              ? `Job failed: ${data.data.error}`
-              : 'Job failed';
-            break;
-          default:
-            message = `Event: ${data.type}`;
-        }
-
-        setLogs(prev => [
-          { id: ++logIdCounter, message },
+        setMessages(prev => [
           ...prev,
-        ].slice(0, MAX_LOGS));
-
-        // Refresh jobs list on completion/failure
-        if (data.type === 'done' || data.type === 'job_failed') {
-          axios.get('/api/jobs').then(res => {
-            if (res.data.jobs) setJobs(res.data.jobs);
-          }).catch((err) => {
-            console.warn('[Dashboard] Failed to refresh jobs list:', err?.message ?? err);
-          });
-        }
-      } catch (err) {
-        // Malformed SSE data — show a fallback log entry instead of silently
-        // dropping the event so the user knows something happened.
-        const raw = typeof event.data === 'string' ? event.data.slice(0, 120) : '';
-        const fallback = raw
-          ? `[parse error] ${raw}${event.data.length > 120 ? '...' : ''}`
-          : '[parse error] Received unparseable event';
-        console.warn('[SSE] Failed to parse event data:', err, event.data);
-        setLogs(prev => [
-          { id: ++logIdCounter, message: fallback },
-          ...prev,
-        ].slice(0, MAX_LOGS));
-      }
-    }
-
-    function handleError() {
-      if (unmounted) return;
-
-      // Close the failed connection
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-
-      if (retryCount >= SSE_MAX_RETRIES) {
-        setSseStatus('disconnected');
-        console.error(`[SSE] Connection lost after ${SSE_MAX_RETRIES} retries`);
-        setLogs(prev => [
-          { id: ++logIdCounter, message: 'Connection lost — automatic reconnection exhausted' },
-          ...prev,
-        ].slice(0, MAX_LOGS));
-        return;
-      }
-
-      setSseStatus('reconnecting');
-      // Exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
-      const delay = Math.min(SSE_BASE_DELAY_MS * Math.pow(2, retryCount), SSE_MAX_DELAY_MS);
-      retryCount++;
-      console.warn(`[SSE] Connection lost, retry ${retryCount}/${SSE_MAX_RETRIES} in ${delay}ms`);
-
-      retryTimer = setTimeout(() => {
-        if (!unmounted) connect();
-      }, delay);
-    }
-
-    function connect() {
-      if (unmounted) return;
-
-      eventSource = new EventSource('/api/events');
-      eventSource.onmessage = handleMessage;
-      eventSource.onerror = handleError;
-    }
-
-    connect();
-
-    return () => {
-      unmounted = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      if (eventSource) eventSource.close();
-    };
-  }, []);
-
-  // System info from server-side process metrics
-  useEffect(() => {
-    const fetchSystem = async () => {
-      try {
-        const res = await axios.get('/api/system');
-        setSystem({
-          ...res.data,
-          activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
-          totalJobs: jobs.length,
-        });
+          { id: ++messageIdCounter, type: msgType, content, timestamp: new Date() },
+        ].slice(-MAX_MESSAGES));
       } catch {
-        setSystem({
-          uptime: 0,
-          memory: { used: 0, total: 0 },
-          activeJobs: jobs.filter(j => j.status === 'running' || j.status === 'active').length,
-          totalJobs: jobs.length,
-        });
+        // Ignore parse errors from SSE
       }
     };
-    fetchSystem();
-    const interval = setInterval(fetchSystem, 5000);
-    return () => clearInterval(interval);
-  }, [jobs]);
+    return () => es.close();
+  }, []);
 
+  // Steering message handler
   const handleSteer = async () => {
     if (!steerMsg) return;
+    const msgText = steerMsg;
+    setSteerMsg('');
+    // Add user message to chat immediately
+    setMessages(prev => [
+      ...prev,
+      { id: ++messageIdCounter, type: 'user' as const, content: msgText, timestamp: new Date() },
+    ].slice(-MAX_MESSAGES));
+
     try {
       await axios.post('/api/steer', {
         jobId: selectedJob,
-        message: steerMsg,
+        message: msgText,
         author: 'operator',
-        source: 'dashboard'
+        source: 'dashboard',
       });
-      setLogs(prev => [{ id: ++logIdCounter, message: `Message sent: ${steerMsg}` }, ...prev].slice(0, MAX_LOGS));
-      setSteerMsg('');
     } catch (err) {
       console.error('Steering message failed', err);
-      setLogs(prev => [{ id: ++logIdCounter, message: 'Failed to send message' }, ...prev].slice(0, MAX_LOGS));
-    }
-  };
-
-  const handleSubmitTask = async () => {
-    if (!taskPrompt.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      const res = await axios.post('/api/task', { prompt: taskPrompt.trim() });
-      if (res.data.ok) {
-        setLogs(prev => [
-          { id: ++logIdCounter, message: `Task submitted: ${taskPrompt.trim()} (${res.data.jobId})` },
-          ...prev,
-        ].slice(0, MAX_LOGS));
-        setTaskPrompt('');
-      }
-    } catch (err) {
-      console.error('Task submission failed', err);
-      setLogs(prev => [
-        { id: ++logIdCounter, message: 'Failed to submit task' },
+      setMessages(prev => [
         ...prev,
-      ].slice(0, MAX_LOGS));
-    } finally {
-      setSubmitting(false);
+        { id: ++messageIdCounter, type: 'system' as const, content: 'Transmission failed. Check comms.', timestamp: new Date() },
+      ].slice(-MAX_MESSAGES));
     }
   };
 
-  // Wait for initial data load
-  if (!healthLoaded || !jobsLoaded) {
-    return (
-      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
-        <div className="scanline" />
-        <div className="flex items-center gap-4 mb-6">
-          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
-          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-zora-cyan font-data text-sm animate-pulse">Loading...</div>
-        </div>
-      </div>
-    );
-  }
+  const totalCost = quotas.reduce((sum, q) => sum + q.usage.totalCostUsd, 0);
+  const totalRequests = quotas.reduce((sum, q) => sum + q.usage.requestCount, 0);
 
-  // No providers configured — show setup guide
-  if (providers.length === 0) {
-    return (
-      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
-        <div className="scanline" />
-        <div className="flex items-center gap-4 mb-6">
-          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
-          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
-        </div>
-        <SetupNeededPanel />
-        <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
-          <div>Zora {ZORA_VERSION}</div>
-          <div>Dashboard</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Providers configured but no jobs yet — show welcome (only if no fetch errors)
-  if (jobs.length === 0 && !fetchError) {
-    return (
-      <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
-        <div className="scanline" />
-        <div className="flex items-center gap-4 mb-6">
-          <div className="lcars-bar flex-1 bg-zora-amber">{'ZORA // DASHBOARD'}</div>
-          <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
-        </div>
-        <WelcomePanel />
-        <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
-          <div>Zora {ZORA_VERSION}</div>
-          <div>Dashboard</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main dashboard — active jobs exist
   return (
-    <div className="h-screen w-screen flex flex-col p-4 bg-zora-obsidian relative overflow-hidden">
+    <div className="h-screen w-screen flex flex-col bg-zora-obsidian relative overflow-hidden">
       <div className="scanline" />
 
       {/* Header Bar */}
-      <div className="flex items-center gap-4 mb-6">
-        <div className="lcars-bar flex-1 bg-zora-amber">
-          {'ZORA // DASHBOARD'}
+      <div className="flex items-center gap-4 px-4 pt-4 pb-2">
+        <div className="lcars-bar flex-1 bg-zora-gold">
+          ZORA // TACTICAL INTERFACE
         </div>
-        <div className="w-32 bg-zora-cyan h-8 rounded-r-full" />
+        <div className="w-32 bg-zora-teal h-8 rounded-r-full" />
       </div>
 
-      {/* DASH-01: Connection status banner */}
-      <AnimatePresence>
-        <ConnectionBanner status={sseStatus} />
-      </AnimatePresence>
+      {/* Main Content: Sidebar + Chat + Status */}
+      <div className="flex-1 flex min-h-0">
 
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
-
-        {/* Left Column: Health */}
-        <div className="col-span-3 flex flex-col gap-4">
-          <div className="lcars-bar bg-zora-magenta">Provider Status</div>
-          <div className="flex-1 lcars-panel border-zora-magenta bg-zora-magenta/5 overflow-y-auto">
-            <AnimatePresence>
-              {providers.map(p => (
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  key={p.name}
-                  className="mb-4 p-2 bg-black/40 border-l-2 border-zora-cyan"
-                >
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-zora-cyan font-bold uppercase text-xs">{p.name}</span>
-                    <Activity size={14} className={p.valid ? 'text-green-500' : 'text-red-500'} />
-                  </div>
-                  <div className="text-[10px] font-data text-zora-amber uppercase">
-                    {p.valid ? 'Connected' : 'Disconnected'}
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
+        {/* Left Sidebar Rail */}
+        <div className="w-16 flex flex-col items-center py-4 gap-4 bg-zora-rail border-r border-zora-ghost/30">
+          <div className="w-8 h-8 rounded-tl-xl border-t-2 border-l-2 border-zora-teal" />
+          <div className="flex-1" />
+          <div className="w-8 h-8 rounded-bl-xl border-b-2 border-l-2 border-zora-teal" />
         </div>
 
-        {/* Center: Task Input + Activity Feed */}
-        <div className="col-span-6 flex flex-col gap-4">
-          {/* Task Submission */}
-          <div className="lcars-bar bg-zora-amber">Ask Zora</div>
-          <div className="lcars-panel border-zora-amber">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={taskPrompt}
-                onChange={(e) => setTaskPrompt(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSubmitTask()}
-                placeholder="Type your task here..."
-                disabled={submitting}
-                className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:ring-2 focus:ring-zora-cyan focus:outline-none disabled:opacity-50"
-              />
-              <button
-                onClick={handleSubmitTask}
-                disabled={submitting || !taskPrompt.trim()}
-                className="bg-zora-amber text-black px-6 py-2 font-bold hover:bg-white transition-colors flex items-center gap-2 disabled:opacity-50"
-              >
-                <Play size={16} /> {submitting ? '...' : 'RUN'}
-              </button>
-            </div>
-            <div className="mt-2 text-[10px] font-data text-white/40">
-              Examples: "Summarize ~/Projects/readme.md" &middot; "Find all TODO comments" &middot; "Review my last commit"
-            </div>
+        {/* Center: Chat Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="px-4 py-2">
+            <span className="text-[10px] font-data text-zora-teal uppercase tracking-widest">
+              Live Mission Logs
+            </span>
           </div>
 
-          {/* Activity Feed */}
-          <div className="lcars-bar bg-zora-cyan">Task Activity</div>
-          <div className="flex-1 lcars-panel border-zora-cyan flex flex-col gap-4">
-            <div className="flex-1 bg-black/60 p-4 font-data text-sm text-zora-cyan overflow-y-auto">
-              {logs.map((log) => (
-                <div key={log.id} className="mb-1">{`> ${log.message}`}</div>
+          {/* Chat messages */}
+          <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-2 lcars-scrollbar">
+            <AnimatePresence>
+              {messages.map(msg => (
+                <MessageBubble key={msg.id} msg={msg} />
               ))}
-            </div>
+            </AnimatePresence>
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input bar */}
+          <div className="px-4 py-3 border-t border-zora-ghost/30">
             <div className="flex gap-2">
               <input
                 type="text"
                 value={steerMsg}
                 onChange={(e) => setSteerMsg(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSteer()}
-                placeholder="Send a message to the running task..."
-                className="flex-1 bg-zora-gray border-b-2 border-zora-amber px-4 py-2 font-data text-zora-amber focus:ring-2 focus:ring-zora-cyan focus:outline-none"
+                placeholder="Inject directive message..."
+                className="flex-1 bg-zora-rail border border-zora-ghost/50 rounded-lg px-4 py-2 font-data text-zora-gold text-sm focus:ring-2 focus:ring-zora-teal focus:border-transparent focus:outline-none placeholder:text-white/20"
               />
               <button
                 onClick={handleSteer}
-                className="bg-zora-amber text-black px-6 py-2 font-bold hover:bg-white transition-colors flex items-center gap-2"
+                className="bg-zora-teal text-zora-obsidian px-5 py-2 rounded-lg font-bold hover:bg-zora-cyan transition-colors flex items-center gap-2 text-sm"
               >
-                <Send size={16} /> SEND
+                <Send size={14} /> SEND
               </button>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Policy + Session Usage */}
-        <div className="col-span-3 flex flex-col gap-4">
-          <div className="lcars-bar bg-zora-amber">Security Policy</div>
-          <div className="flex-1 lcars-panel border-zora-amber">
-            <div className="flex items-center gap-2 text-zora-amber mb-4">
-              <Shield size={18} />
-              <span className="text-sm font-bold uppercase">Policy: Active</span>
+        {/* Right Status Panel */}
+        <div className="w-80 flex flex-col border-l border-zora-ghost/30 bg-zora-rail/50 overflow-y-auto lcars-scrollbar">
+
+          {/* Neural Subnets (Provider Health) */}
+          <div className="px-4 py-3 border-b border-zora-ghost/30">
+            <span className="text-[10px] font-data text-zora-teal uppercase tracking-widest">
+              Neural Subnets
+            </span>
+          </div>
+          <div className="px-4 py-2 space-y-3">
+            <AnimatePresence>
+              {providers.map(p => {
+                const quota = quotas.find(q => q.name === p.name);
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    key={p.name}
+                    className="p-2 bg-black/40 rounded-lg border-l-2 border-zora-teal"
+                  >
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-zora-cyan font-bold uppercase text-xs">{p.name}</span>
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${p.valid ? 'bg-green-500' : 'bg-red-500'}`}
+                        title={p.valid ? 'Connected' : 'Disconnected'}
+                        data-testid={`provider-dot-${p.name}`}
+                      />
+                    </div>
+                    {quota && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Gauge size={10} className={healthColor(quota.quota.healthScore)} />
+                          <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${healthBarColor(quota.quota.healthScore)}`}
+                              style={{ width: `${quota.quota.healthScore * 100}%` }}
+                            />
+                          </div>
+                          <span className={`text-[9px] font-data ${healthColor(quota.quota.healthScore)}`}>
+                            {Math.round(quota.quota.healthScore * 100)}%
+                          </span>
+                        </div>
+                        <div className="text-[9px] font-data text-white/50 space-y-0.5">
+                          {quota.usage.totalCostUsd > 0 && (
+                            <div className="flex justify-between">
+                              <span>COST</span>
+                              <span className="text-zora-gold">${quota.usage.totalCostUsd.toFixed(4)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between">
+                            <span>REQUESTS</span>
+                            <span className="text-zora-cyan">{quota.usage.requestCount}</span>
+                          </div>
+                          {(quota.usage.totalInputTokens > 0 || quota.usage.totalOutputTokens > 0) && (
+                            <div className="flex justify-between">
+                              <span>TOKENS</span>
+                              <span className="text-zora-cyan">
+                                {formatTokens(quota.usage.totalInputTokens)}in / {formatTokens(quota.usage.totalOutputTokens)}out
+                              </span>
+                            </div>
+                          )}
+                          {quota.quota.isExhausted && (
+                            <div className="text-red-500 font-bold mt-1">QUOTA EXHAUSTED</div>
+                          )}
+                          {quota.quota.cooldownUntil && (
+                            <div className="text-zora-gold">COOLDOWN ACTIVE</div>
+                          )}
+                          <div className="flex justify-between">
+                            <span>TIER</span>
+                            <span className="text-white/40 uppercase">{quota.costTier}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+
+          {/* Safety Protocols */}
+          <div className="px-4 py-3 border-t border-b border-zora-ghost/30">
+            <span className="text-[10px] font-data text-zora-teal uppercase tracking-widest">
+              Safety Protocols
+            </span>
+          </div>
+          <div className="px-4 py-3">
+            <div className="flex items-center gap-2 text-zora-gold mb-3">
+              <Shield size={16} />
+              <span className="text-xs font-bold uppercase">Active Integrity Shield</span>
             </div>
-            <div className="text-[10px] font-data text-white/60 space-y-2">
-              <div className="flex items-start gap-2">
-                <Terminal size={12} className="mt-0.5 text-zora-cyan" />
-                <span>Approved commands only</span>
+            <div className="text-[10px] font-data text-white/50 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                <span>SYSCALL_FILTER: ENABLED</span>
               </div>
-              <div className="flex items-start gap-2">
-                <Zap size={12} className="mt-0.5 text-zora-magenta" />
-                <span>Dangerous actions require approval</span>
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                <span>INTENT_CAPSULE: SIGNED</span>
               </div>
             </div>
           </div>
-          <div className="h-32 lcars-panel border-zora-cyan bg-zora-cyan/5 text-zora-cyan text-[10px] font-data">
-            <div className="flex items-center gap-2 mb-2 font-bold uppercase">
-              <Info size={14} /> System Info
+
+          {/* Mission Telemetry (Session Usage) */}
+          <div className="px-4 py-3 border-t border-b border-zora-ghost/30">
+            <span className="text-[10px] font-data text-zora-teal uppercase tracking-widest">
+              Mission Telemetry
+            </span>
+          </div>
+          <div className="px-4 py-3 lcars-panel border-zora-teal">
+            <div className="text-[10px] font-data text-white/60 space-y-2">
+              <div className="flex justify-between items-center">
+                <span>TOT_COST:</span>
+                <span className="text-zora-gold font-bold">${totalCost.toFixed(4)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span>REQUESTS:</span>
+                <span className="text-zora-cyan font-bold">{totalRequests}</span>
+              </div>
+              {quotas.map(q => (
+                <div key={q.name} className="flex justify-between items-center text-[9px]">
+                  <span className="uppercase text-white/40">{q.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className={healthColor(q.quota.healthScore)}>
+                      {q.quota.isExhausted ? 'EXHAUSTED' : `${Math.round(q.quota.healthScore * 100)}%`}
+                    </span>
+                    {q.usage.totalCostUsd > 0 && (
+                      <span className="text-zora-gold">${q.usage.totalCostUsd.toFixed(3)}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-            UPTIME: {system ? formatUptime(system.uptime) : '--:--:--'}<br/>
-            MEMORY: {system ? `${system.memory.used}MB / ${system.memory.total}MB` : '-- / --'}<br/>
-            TASKS: {system ? `${system.activeJobs} ACTIVE / ${system.totalJobs} TOTAL` : '-- / --'}
           </div>
         </div>
-
       </div>
 
       {/* Footer */}
-      <div className="mt-4 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest">
+      <div className="px-4 py-2 flex justify-between text-[10px] font-data text-white/40 uppercase tracking-widest border-t border-zora-ghost/30">
         <div>Zora {ZORA_VERSION}</div>
-        <div>Dashboard</div>
+        <div>Operational Dashboard</div>
       </div>
     </div>
   );
