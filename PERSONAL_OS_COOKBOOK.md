@@ -234,7 +234,7 @@ Good morning. Create today's daily brief:
 1. Read yesterday's daily brief from ~/.zora/memory/daily/
 2. Check for any unfinished tasks from yesterday
 3. Review my projects in ~/.zora/workspace/projects/ for deadlines
-4. Create a new daily brief at ~/.zora/memory/daily/{today's date}.md with:
+4. Create a new daily brief at ~/.zora/memory/daily/{date}.md with:
    - Top 3 priorities for today
    - Carry-over items from yesterday
    - Any scheduled meetings or deadlines
