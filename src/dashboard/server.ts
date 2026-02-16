@@ -18,6 +18,9 @@ import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
 import { createAuthMiddleware } from './auth-middleware.js';
 import { createLogger } from '../utils/logger.js';
+import { shouldIncludeEvent } from '../utils/event-filter.js';
+import type { VerbosityLevel } from '../utils/event-filter.js';
+import type { AgentEvent } from '../types.js';
 
 const log = createLogger('dashboard');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +57,8 @@ export class DashboardServer {
   private readonly _app: express.Application;
   private readonly _options: DashboardOptions;
   private _server: Server | undefined;
-  private readonly _sseClients: Set<ExpressResponse> = new Set();
+  /** TYPE-12: Map SSE clients to their verbosity level */
+  private readonly _sseClients: Map<ExpressResponse, VerbosityLevel> = new Map();
 
   constructor(options: DashboardOptions) {
     this._options = options;
@@ -322,8 +326,13 @@ export class DashboardServer {
 
     // --- R17: SSE endpoint for real-time job updates ---
 
-    /** GET /api/events — Server-Sent Events stream for live job status */
+    /** GET /api/events — Server-Sent Events stream for live job status
+     *  TYPE-12: Accepts ?verbosity=terse|normal|verbose (default: normal) */
     this._app.get('/api/events', (req, res) => {
+      const verbosity = (['terse', 'normal', 'verbose'].includes(req.query.verbosity as string)
+        ? req.query.verbosity
+        : 'normal') as VerbosityLevel;
+
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -332,7 +341,7 @@ export class DashboardServer {
       });
 
       res.write('data: {"type":"connected"}\n\n');
-      this._sseClients.add(res);
+      this._sseClients.set(res, verbosity);
 
       // Keep-alive comment every 30s to prevent proxy/firewall timeouts
       const keepAlive = setInterval(() => {
@@ -369,7 +378,17 @@ export class DashboardServer {
     const lines = json.split(/\r?\n/);
     const payload = lines.map(l => `data: ${l}`).join('\n') + '\n\n';
 
-    for (const client of this._sseClients) {
+    for (const [client, verbosity] of this._sseClients) {
+      // TYPE-12: Filter events based on client's verbosity level.
+      // If the event data looks like an AgentEvent (has a type field that
+      // matches AgentEventType), apply verbosity filtering.
+      const eventData = event.data as Record<string, unknown> | undefined;
+      if (eventData && typeof eventData === 'object' && 'type' in eventData && 'timestamp' in eventData) {
+        if (!shouldIncludeEvent(eventData as AgentEvent, verbosity)) {
+          continue; // Skip this event for this client
+        }
+      }
+
       try {
         client.write(payload);
       } catch {
@@ -399,7 +418,7 @@ export class DashboardServer {
    */
   async stop(): Promise<void> {
     // Close all SSE connections
-    for (const client of this._sseClients) {
+    for (const [client] of this._sseClients) {
       client.end();
     }
     this._sseClients.clear();
