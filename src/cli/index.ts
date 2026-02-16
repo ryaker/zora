@@ -29,6 +29,7 @@ import { registerEditCommands } from './edit-commands.js';
 import { registerTeamCommands } from './team-commands.js';
 import { registerSteerCommands } from './steer-commands.js';
 import { registerSkillCommands } from './skill-commands.js';
+import { registerHookCommands } from './hook-commands.js';
 import { registerInitCommand } from './init-command.js';
 import { runDoctorChecks } from './doctor.js';
 import { createLogger } from '../utils/logger.js';
@@ -419,6 +420,7 @@ registerEditCommands(program, configDir);
 registerTeamCommands(program, configDir);
 registerSteerCommands(program, configDir);
 registerSkillCommands(program);
+registerHookCommands(program, configDir);
 registerInitCommand(program);
 
 program.parse();
