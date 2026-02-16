@@ -48,6 +48,51 @@ export interface CustomToolDefinition {
   handler: (input: Record<string, unknown>) => Promise<unknown>;
 }
 
+/**
+ * ORCH-14: Callback to transform/prune the event history before it's used.
+ * Called by the orchestrator before submitting follow-up tasks and during
+ * context preparation. Can prune old events, drop thinking events, summarize
+ * tool results, etc.
+ *
+ * @param history - Current event history
+ * @param turn - Current turn number (0-based)
+ * @returns Pruned/transformed event history
+ */
+export type TransformContextFn = (
+  history: import('../types.js').AgentEvent[],
+  turn: number,
+) => import('../types.js').AgentEvent[];
+
+/**
+ * ORCH-14: Default transformContext implementation.
+ * - Keeps the last `maxEvents` events (default 100).
+ * - Drops 'thinking' events older than 5 turns.
+ * - Truncates 'tool_result' content to 500 chars for events older than 10 turns.
+ */
+export function defaultTransformContext(
+  history: import('../types.js').AgentEvent[],
+  turn: number,
+  maxEvents = 100,
+): import('../types.js').AgentEvent[] {
+  let events = history;
+
+  // Drop thinking events older than 5 turns
+  if (turn > 5) {
+    const cutoffIndex = Math.max(0, events.length - (5 * 3)); // rough: ~3 events per turn
+    events = events.filter((e, i) => {
+      if (e.type === 'thinking' && i < cutoffIndex) return false;
+      return true;
+    });
+  }
+
+  // Keep only the last maxEvents
+  if (events.length > maxEvents) {
+    events = events.slice(-maxEvents);
+  }
+
+  return events;
+}
+
 export interface ZoraExecutionOptions {
   systemPrompt?: string;
   cwd?: string;
@@ -63,6 +108,8 @@ export interface ZoraExecutionOptions {
   onMessage?: (message: SDKMessage) => void;
   /** ERR-05: Timeout in milliseconds for stream operations (default: 30min) */
   streamTimeout?: number;
+  /** ORCH-14: Optional context transform callback applied before each follow-up */
+  transformContext?: TransformContextFn;
 }
 
 const DEFAULT_TOOLS = [

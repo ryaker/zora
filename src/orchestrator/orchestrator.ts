@@ -33,7 +33,7 @@ import { FailoverController } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
 import { SessionManager, BufferedSessionWriter } from './session-manager.js';
-import { ExecutionLoop, type CustomToolDefinition } from './execution-loop.js';
+import { ExecutionLoop, type CustomToolDefinition, defaultTransformContext, type TransformContextFn } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
@@ -64,6 +64,8 @@ export interface SubmitTaskOptions {
   maxTurns?: number;
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
+  /** ORCH-14: Optional context transform callback applied to history before follow-ups */
+  transformContext?: TransformContextFn;
 }
 
 export class Orchestrator {
@@ -96,6 +98,9 @@ export class Orchestrator {
 
   // ORCH-12: Lifecycle hooks
   private _hookRunner: HookRunner = new HookRunner();
+
+  // ORCH-14: Context transform callback
+  private _transformContext: TransformContextFn = defaultTransformContext;
 
   // Background intervals
   private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -594,11 +599,13 @@ export class Orchestrator {
         // Route through _executeWithProvider directly to preserve injectionDepth tracking.
         // Re-route through the full submitTask pipeline except use incremented injectionDepth.
         const followUpJobId = `${taskContext.jobId}_followup_${injectionDepth + 1}`;
+        // ORCH-14: Apply transformContext to prune history before follow-up
+        const transformedHistory = this._transformContext(taskContext.history, injectionDepth + 1);
         const followUpCtx: TaskContext = {
           ...taskContext,
           jobId: followUpJobId,
           task: endResult.followUp,
-          history: [],
+          history: transformedHistory,
         };
         const hookedFollowUp = await this._hookRunner.runOnTaskStart(followUpCtx);
         const followUpProvider = await this._router.selectProvider(hookedFollowUp);
@@ -855,6 +862,16 @@ export class Orchestrator {
   /** ORCH-12: Access the hook runner for registering lifecycle hooks */
   get hookRunner(): HookRunner {
     return this._hookRunner;
+  }
+
+  /** ORCH-14: Set a custom context transform function */
+  set transformContext(fn: TransformContextFn) {
+    this._transformContext = fn;
+  }
+
+  /** ORCH-14: Get the current context transform function */
+  get transformContext(): TransformContextFn {
+    return this._transformContext;
   }
 
   get config(): ZoraConfig {
