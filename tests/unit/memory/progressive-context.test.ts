@@ -240,7 +240,7 @@ describe('Progressive Context — MemoryManager', () => {
       await manager.consolidateDailyNotes(7);
 
       const ltContent = await fs.readFile(path.join(baseDir, 'memory', 'MEMORY.md'), 'utf8');
-      expect(ltContent).toContain('Consolidated');
+      expect(ltContent).toContain('Archived');
     });
   });
 
