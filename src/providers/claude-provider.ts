@@ -26,7 +26,9 @@ import type {
   CostTier,
   ProviderConfig,
 } from '../types.js';
-import { isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent } from '../types.js';
+import {
+  isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent,
+} from '../types.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
@@ -294,6 +296,19 @@ export class ClaudeProvider implements LLMProvider {
     // Build the prompt from task context
     const prompt = this._buildPrompt(task);
 
+    // TYPE-11: Track turn count and tool timing for lifecycle events
+    let turnCount = 0;
+    const taskStartTime = Date.now();
+    const pendingTools = new Map<string, number>(); // toolCallId → start timestamp
+
+    // TYPE-11: Emit task.start before any SDK interaction
+    yield {
+      type: 'task.start' as AgentEventType,
+      timestamp: new Date(),
+      source: this.name,
+      content: { jobId: task.jobId, task: task.task },
+    };
+
     try {
       // Create the SDK query
       const sdkQuery = queryFn({ prompt, options: sdkOptions });
@@ -304,22 +319,85 @@ export class ClaudeProvider implements LLMProvider {
       let emittedResult = false;
 
       for await (const message of sdkQuery) {
+        // TYPE-11: Emit turn.start on each new assistant message
+        if (message.type === 'assistant') {
+          turnCount++;
+          yield {
+            type: 'turn.start' as AgentEventType,
+            timestamp: new Date(),
+            source: this.name,
+            content: { turn: turnCount },
+          };
+        }
+
         const events = this._mapSDKMessage(message);
         for (const event of events) {
+          // TYPE-11: Emit tool.start before tool_call, tool.end after tool_result
+          if (event.type === 'tool_call') {
+            const tc = event.content as { toolCallId: string; tool: string };
+            pendingTools.set(tc.toolCallId, Date.now());
+            yield {
+              type: 'tool.start' as AgentEventType,
+              timestamp: new Date(),
+              source: this.name,
+              content: { toolCallId: tc.toolCallId, tool: tc.tool },
+            };
+          }
+
           if (event.type === 'done' || (event.type === 'error' && message.type === 'result')) {
             emittedResult = true;
           }
           yield event;
+
+          // TYPE-11: Emit tool.end after tool_result
+          if (event.type === 'tool_result') {
+            const tr = event.content as { toolCallId: string; result?: unknown; error?: string };
+            const startTime = pendingTools.get(tr.toolCallId);
+            pendingTools.delete(tr.toolCallId);
+            yield {
+              type: 'tool.end' as AgentEventType,
+              timestamp: new Date(),
+              source: this.name,
+              content: {
+                toolCallId: tr.toolCallId,
+                tool: '', // tool name not available on result
+                duration_ms: startTime ? Date.now() - startTime : undefined,
+                error: tr.error,
+              },
+            };
+          }
 
           // If we got a result message, update internal state
           if (message.type === 'result') {
             this._handleResultMessage(message as SDKResultMessage);
           }
         }
+
+        // TYPE-11: Emit turn.end after processing an assistant message
+        if (message.type === 'assistant') {
+          yield {
+            type: 'turn.end' as AgentEventType,
+            timestamp: new Date(),
+            source: this.name,
+            content: { turn: turnCount },
+          };
+        }
       }
 
       // PROV-02: Record success on the circuit breaker
       this._circuitBreaker.recordSuccess();
+
+      // TYPE-11: Emit task.end
+      yield {
+        type: 'task.end' as AgentEventType,
+        timestamp: new Date(),
+        source: this.name,
+        content: {
+          jobId: task.jobId,
+          duration_ms: Date.now() - taskStartTime,
+          success: true,
+        },
+      };
 
       // Only yield fallback if the SDK never emitted a result message
       if (!emittedResult) {
@@ -354,6 +432,18 @@ export class ClaudeProvider implements LLMProvider {
           message: errorMessage,
           isAuthError: this._isAuthError(errorMessage),
           isQuotaError: this._isQuotaError(errorMessage),
+        },
+      };
+
+      // TYPE-11: Emit task.end on error
+      yield {
+        type: 'task.end' as AgentEventType,
+        timestamp: new Date(),
+        source: this.name,
+        content: {
+          jobId: task.jobId,
+          duration_ms: Date.now() - taskStartTime,
+          success: false,
         },
       };
     } finally {

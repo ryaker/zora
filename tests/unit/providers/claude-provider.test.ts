@@ -159,28 +159,41 @@ describe('ClaudeProvider', () => {
 
       const events = await collectEvents(provider.execute(makeTask()));
 
-      // Events: thinking, text, tool_call, done (from result)
-      // Fallback done is suppressed since the SDK emitted a result message
-      expect(events).toHaveLength(4);
-      expect(events[0]!.type).toBe('thinking');
-      expect(events[0]!.content).toEqual({ text: 'I should write a test.' });
+      // TYPE-11: Lifecycle events are now interleaved with content events
+      // task.start, turn.start, thinking, text, turn.end,
+      // turn.start, tool.start, tool_call, turn.end, done, task.end
+      expect(events).toHaveLength(11);
 
-      expect(events[1]!.type).toBe('text');
-      expect(events[1]!.content).toEqual({ text: 'Here is your test.' });
+      expect(events[0]!.type).toBe('task.start');
+      expect(events[1]!.type).toBe('turn.start');
 
-      expect(events[2]!.type).toBe('tool_call');
-      expect(events[2]!.content).toEqual({
+      expect(events[2]!.type).toBe('thinking');
+      expect(events[2]!.content).toEqual({ text: 'I should write a test.' });
+
+      expect(events[3]!.type).toBe('text');
+      expect(events[3]!.content).toEqual({ text: 'Here is your test.' });
+
+      expect(events[4]!.type).toBe('turn.end');
+      expect(events[5]!.type).toBe('turn.start');
+
+      expect(events[6]!.type).toBe('tool.start');
+      expect(events[7]!.type).toBe('tool_call');
+      expect(events[7]!.content).toEqual({
         toolCallId: 't1',
         tool: 'write_file',
         arguments: { path: 'test.ts', content: '...' },
       });
 
-      expect(events[3]!.type).toBe('done');
-      expect(events[3]!.content).toMatchObject({
+      expect(events[8]!.type).toBe('turn.end');
+
+      expect(events[9]!.type).toBe('done');
+      expect(events[9]!.content).toMatchObject({
         text: 'Success!',
         num_turns: 5,
         total_cost_usd: 0.05,
       });
+
+      expect(events[10]!.type).toBe('task.end');
 
       expect(provider.totalCostUsd).toBe(0.05);
     });
@@ -205,11 +218,14 @@ describe('ClaudeProvider', () => {
 
       const events = await collectEvents(provider.execute(makeTask()));
 
-      expect(events[0]!.type).toBe('error');
-      expect(events[0]!.content).toMatchObject({
+      // TYPE-11: task.start is emitted before the error, task.end after
+      expect(events[0]!.type).toBe('task.start');
+      expect(events[1]!.type).toBe('error');
+      expect(events[1]!.content).toMatchObject({
         message: 'Maximum turns reached',
         subtype: 'error_max_turns',
       });
+      expect(events[2]!.type).toBe('task.end');
       expect(provider.totalCostUsd).toBe(0.1);
     });
 
@@ -221,8 +237,11 @@ describe('ClaudeProvider', () => {
 
       const events = await collectEvents(provider.execute(makeTask()));
 
-      expect(events[0]!.type).toBe('error');
-      expect((events[0]!.content as any).isAuthError).toBe(true);
+      // TYPE-11: task.start emitted before error, task.end after
+      expect(events[0]!.type).toBe('task.start');
+      expect(events[1]!.type).toBe('error');
+      expect((events[1]!.content as any).isAuthError).toBe(true);
+      expect(events[2]!.type).toBe('task.end');
       expect((await provider.checkAuth()).valid).toBe(false);
     });
 
@@ -234,8 +253,10 @@ describe('ClaudeProvider', () => {
 
       const events = await collectEvents(provider.execute(makeTask()));
 
-      expect(events[0]!.type).toBe('error');
-      expect((events[0]!.content as any).isQuotaError).toBe(true);
+      // TYPE-11: task.start emitted before error, task.end after
+      expect(events[0]!.type).toBe('task.start');
+      expect(events[1]!.type).toBe('error');
+      expect((events[1]!.content as any).isQuotaError).toBe(true);
 
       // PROV-02: Single failure does not trip circuit breaker (threshold = 3)
       expect((await provider.getQuotaStatus()).isExhausted).toBe(false);
