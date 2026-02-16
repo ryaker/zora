@@ -27,6 +27,7 @@ import type {
   ToolResultEventContent,
   ToolCallEventContent,
 } from '../types.js';
+import { HookRunner } from '../hooks/hook-runner.js';
 import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
@@ -92,6 +93,9 @@ export class Orchestrator {
 
   // Memory tools
   private _validationPipeline!: ValidationPipeline;
+
+  // ORCH-12: Lifecycle hooks
+  private _hookRunner: HookRunner = new HookRunner();
 
   // Background intervals
   private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -383,16 +387,19 @@ export class Orchestrator {
       canUseTool: this._policyEngine.createCanUseTool(),
     };
 
+    // ORCH-12: Run onTaskStart hooks (can modify context before routing)
+    const hookedContext = await this._hookRunner.runOnTaskStart(taskContext);
+
     // R2: Route to provider
     let selectedProvider: LLMProvider;
     try {
-      selectedProvider = await this._router.selectProvider(taskContext);
+      selectedProvider = await this._router.selectProvider(hookedContext);
     } catch (err) {
       throw new Error(`No provider available: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Execute with the selected provider
-    return this._executeWithProvider(selectedProvider, taskContext, options.onEvent);
+    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent);
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -567,6 +574,13 @@ export class Orchestrator {
       this._runExtractionAsync(taskContext).catch(err => {
         log.warn({ err, jobId: taskContext.jobId }, 'Post-job memory extraction failed');
       });
+    }
+
+    // ORCH-12: Run onTaskEnd hooks (can inspect result, optionally trigger follow-up)
+    const endResult = await this._hookRunner.runOnTaskEnd(taskContext, result);
+    if (endResult.followUp) {
+      log.info({ jobId: taskContext.jobId }, 'onTaskEnd hook triggered follow-up task');
+      return this.submitTask({ prompt: endResult.followUp, onEvent });
     }
 
     return result;
@@ -813,6 +827,11 @@ export class Orchestrator {
   get policyEngine(): PolicyEngine {
     this._assertBooted();
     return this._policyEngine;
+  }
+
+  /** ORCH-12: Access the hook runner for registering lifecycle hooks */
+  get hookRunner(): HookRunner {
+    return this._hookRunner;
   }
 
   get config(): ZoraConfig {

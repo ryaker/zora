@@ -439,6 +439,16 @@ export interface NotificationsConfig {
 /**
  * Complete Zora configuration matching config.toml structure.
  */
+/** ORCH-12: Hook event names for lifecycle hooks */
+export type HookEventName = 'onTaskStart' | 'beforeToolExecute' | 'afterToolExecute' | 'onTaskEnd';
+
+/** ORCH-12: Configuration for a hook defined in config.toml [[hooks]] section */
+export interface HookConfigEntry {
+  event: HookEventName;
+  match?: string;
+  script?: string;
+}
+
 export interface ZoraConfig {
   agent: AgentConfig;
   providers: ProviderConfig[];
@@ -449,6 +459,8 @@ export interface ZoraConfig {
   steering: SteeringConfig;
   notifications: NotificationsConfig;
   mcp?: McpConfig;
+  /** ORCH-12: Lifecycle hook definitions from [[hooks]] config sections */
+  hooks?: HookConfigEntry[];
 }
 
 // ─── MCP Configuration ──────────────────────────────────────────────

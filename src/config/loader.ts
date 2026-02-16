@@ -7,7 +7,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { parse as parseTOML } from 'smol-toml';
-import type { ZoraConfig, ProviderConfig, McpServerEntry } from '../types.js';
+import type { ZoraConfig, ProviderConfig, McpServerEntry, HookConfigEntry, HookEventName } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('config-loader');
@@ -90,6 +90,25 @@ export function parseConfig(raw: Record<string, unknown>): ZoraConfig {
         servers: mcpRaw['servers'] as Record<string, McpServerEntry>,
       };
     }
+  }
+
+  // ORCH-12: Handle [[hooks]] config
+  const VALID_HOOK_EVENTS = new Set<string>(['onTaskStart', 'beforeToolExecute', 'afterToolExecute', 'onTaskEnd']);
+  if (Array.isArray(raw['hooks'])) {
+    config.hooks = (raw['hooks'] as Record<string, unknown>[])
+      .filter((h) => {
+        const event = h['event'] as string | undefined;
+        if (!event || !VALID_HOOK_EVENTS.has(event)) {
+          log.warn({ event }, 'Skipping hook with invalid event name');
+          return false;
+        }
+        return true;
+      })
+      .map((h) => ({
+        event: h['event'] as HookEventName,
+        match: h['match'] as string | undefined,
+        script: h['script'] as string | undefined,
+      }));
   }
 
   return config;
