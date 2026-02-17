@@ -58,6 +58,14 @@ export const DEFAULT_MEMORY: MemoryConfig = {
   max_category_summaries: 5,
   auto_extract_interval: 10,
   auto_extract: true,
+  compression: {
+    enabled: true,
+    working_tier_max_tokens: 30_000,
+    session_tier_max_tokens: 10_000,
+    cross_session_tier_max_tokens: 5_000,
+    chunk_size: 20,
+    async_buffer: true,
+  },
 };
 
 export const DEFAULT_SECURITY: SecurityConfig = {

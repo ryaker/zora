@@ -261,13 +261,18 @@ export class MemoryManager {
    * Archived notes remain on disk in the archive/ subdirectory for manual
    * review but are excluded from the active daily notes directory.
    *
-   * Note: This does NOT consolidate note content into structured memory items.
-   * It is a housekeeping operation that moves old files out of the active path.
+   * If a reflectFn is provided, it will be called with the combined content
+   * of notes being archived. This enables extracting structured memory items
+   * from daily notes before they are moved to the archive.
    *
    * @param thresholdDays Notes older than this are archived (default: 7)
+   * @param reflectFn Optional function to extract memory from notes before archiving
    * @returns Number of notes archived
    */
-  async consolidateDailyNotes(thresholdDays: number = 7): Promise<number> {
+  async consolidateDailyNotes(
+    thresholdDays: number = 7,
+    reflectFn?: (notesContent: string) => Promise<void>,
+  ): Promise<number> {
     const dir = this._getDailyNotesPath();
     let files: string[];
     try {
@@ -287,6 +292,26 @@ export class MemoryManager {
       .sort();
 
     if (oldFiles.length === 0) return 0;
+
+    // Run reflector on note content before archiving (extract structured memory)
+    if (reflectFn) {
+      try {
+        const noteContents: string[] = [];
+        for (const file of oldFiles) {
+          try {
+            const content = await fs.readFile(path.join(dir, file), 'utf8');
+            noteContents.push(`--- ${file} ---\n${content}`);
+          } catch {
+            // Skip unreadable files
+          }
+        }
+        if (noteContents.length > 0) {
+          await reflectFn(noteContents.join('\n\n'));
+        }
+      } catch (err) {
+        log.warn({ err }, 'Reflector pass on daily notes failed, continuing with archive');
+      }
+    }
 
     // Archive old files (moved, not deleted — still accessible for manual review)
     const archiveDir = path.join(dir, 'archive');
