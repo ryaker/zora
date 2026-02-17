@@ -361,7 +361,7 @@ export class Orchestrator {
 
     // Create per-task context compressor if compression is enabled
     let compressor: ContextCompressor | null = null;
-    if (this._config.memory.compression.enabled) {
+    if (this._config.memory?.compression?.enabled) {
       const compressFn = async (prompt: string): Promise<string> => {
         const compressLoop = new ExecutionLoop({
           systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
