@@ -34,14 +34,18 @@ import { registerHookCommands } from './hook-commands.js';
 import { registerInitCommand } from './init-command.js';
 import { runDoctorChecks } from './doctor.js';
 import { createLogger } from '../utils/logger.js';
+import { createRequire } from 'node:module';
 
 const log = createLogger('cli');
 const program = new Command();
 
+const require = createRequire(import.meta.url);
+const pkg = require('../../package.json') as { version: string };
+
 program
   .name('zora-agent')
   .description('Long-running autonomous personal AI agent')
-  .version('0.9.4');
+  .version(pkg.version);
 
 /**
  * Creates LLMProvider instances from config.

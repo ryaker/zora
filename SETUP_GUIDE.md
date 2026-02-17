@@ -8,7 +8,7 @@
 
 - **A Mac** (Linux works too — Windows support is coming)
 - **About 10 minutes** of your time
-- **A Claude Code or Gemini account** — This is how Zora accesses AI. No API keys or credit cards needed — it uses your existing subscription.
+- **Claude Code or the Gemini CLI, signed in** — This is how Zora accesses AI. Install [Claude Code](https://claude.ai/claude-code) or the [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli) and sign in. No API keys or credit cards needed — Zora uses your existing CLI session.
 
 ---
 
@@ -80,7 +80,7 @@ Verify it worked:
 zora-agent --version
 ```
 
-You should see a version number like `0.9.5`.
+You should see a version number (like `0.9.4` or higher).
 
 ---
 
@@ -94,48 +94,48 @@ zora-agent init
 
 The wizard walks you through a few questions. Here's what they mean and what to pick:
 
-### Question 1: "Choose a security preset"
+### Question 1: "Which directories should be off-limits?"
 
-This controls how much Zora can do on your computer.
-
-- **Safe** — Zora can only *look at* files, never change anything. Good if you're cautious and want to test the waters.
-- **Balanced** (pick this one) — Zora can read and write files in your work folders, and run safe commands. Dangerous commands are blocked. This is the sweet spot for most people.
-- **Power** — Broader access for experienced users. Still blocks truly dangerous commands.
-
-**Our recommendation:** Start with **Balanced**. You can always change it later.
-
-### Question 2: "Where do you code / do your work?"
-
-Zora auto-detects common folders like `~/Projects`, `~/Dev`, or `~/Code`. Pick the one where your important files live.
-
-If you're not a developer, you might want to point this at `~/Documents` instead.
-
-### Question 3: "Which directories should be off-limits?"
-
-The defaults protect your sensitive credentials:
+The defaults protect your sensitive credentials (pre-selected):
 
 - `~/.ssh` — Your SSH keys (for connecting to servers)
 - `~/.gnupg` — Your encryption keys
 - `~/.aws` — Your Amazon Web Services credentials
 
-**Accept the defaults** unless you have a specific reason to change them.
+You can also add `~/Documents`, `~/Desktop`, `~/Downloads`, or `~/Library`. **Accept the defaults** unless you have a specific reason to change them.
 
-### Question 4: "Which tools do you use?"
+### Question 2: "Pick your first folder"
 
-If you're a developer, pick your languages (Node.js, Python, Rust, Go). This tells Zora which commands it's allowed to run.
+This is where Zora can read and work. Zora auto-detects common folders like `~/Projects`, `~/Dev`, or `~/Code`. Pick the one where your important files live.
+
+If you're not a developer, you might want to point this at `~/Documents` instead.
+
+### Question 3: "Want to go further?"
+
+This controls how much Zora can do on your computer:
+
+- **"I'm good for now"** — Read-only access to your folder, no shell commands. Good if you're cautious.
+- **"Add shell commands too"** (recommended) — git, npm, ls — the standard dev toolkit.
+- **"Full dev setup"** — Expanded tools: python, find, sed, awk. For experienced users.
+
+**Our recommendation:** Start with **"Add shell commands too."** You can always expand later.
+
+### Question 4: "Which tool stacks do you use?"
+
+Only shown if you chose shell access. Pick your languages (Node.js, Python, Rust, Go). This tells Zora which commands it's allowed to run.
 
 If you're not a developer, pick **"General CLI"** — this gives Zora access to basic commands like listing files, reading file contents, and searching text.
 
 ### Authentication
 
-During or after setup, Zora will open your browser to sign into your AI provider:
+Zora connects to AI providers through your existing CLI sessions:
 
-- **For Claude:** You'll sign into your Claude Code account. The same one you already use and pay for.
-- **For Gemini:** You'll sign into your Google account.
+- **For Claude:** Install and sign into [Claude Code](https://claude.ai/claude-code). Zora uses that authenticated session automatically.
+- **For Gemini:** Install and sign into the [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli). Zora uses your Google account session.
 
-This is a one-time setup. After you authenticate, Zora remembers the session and reconnects automatically.
+That's it. No API keys, no credit card, no per-token charges. You're using the subscription you already pay for.
 
-**Important:** This is NOT an API key. There are no per-token charges. You're using your existing subscription. No surprise bills.
+Run `zora-agent doctor` to verify your providers are connected.
 
 ### Quick Mode (skip the questions)
 
@@ -287,7 +287,7 @@ If that works, use `npx zora-agent` instead of `zora-agent` for all commands.
 
 ### "No providers detected"
 
-Zora can't find Claude or Gemini. Run `zora-agent doctor` to see what's missing. Usually you need to re-authenticate — Zora will open your browser.
+Zora can't find Claude or Gemini. Run `zora-agent doctor` to see what's missing. Usually it means you need to install and sign into Claude Code or the Gemini CLI.
 
 ### "Permission denied" when running a task
 

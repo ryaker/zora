@@ -20,6 +20,8 @@ zora-agent ask "summarize files in ~/Projects"
 
 That's it. Three commands and Zora is working for you.
 
+> **Note:** The npm package may lag behind the latest release. To install from source: `git clone https://github.com/ryaker/zora && cd zora && npm install && npm link`
+
 **New to the terminal?** See our [step-by-step Setup Guide](SETUP_GUIDE.md) — it assumes zero technical experience.
 
 ---
@@ -32,7 +34,7 @@ You type a request. Zora figures out what needs to happen, does it, and shows yo
 
 Behind the scenes, Zora uses AI (Claude or Gemini) to understand your request, then uses tools on your computer — reading files, running safe commands, searching the web — to complete the task. Everything stays within safety rules you set up during installation.
 
-**No API keys. No surprise bills.** Zora authenticates through your existing Claude Code or Gemini subscription. You're never charged per-token or billed to a credit card. It uses the same account you already pay for.
+**No API keys. No surprise bills.** Zora authenticates through your existing Claude Code or Gemini CLI session. No per-token charges — it uses the subscription you already pay for.
 
 ---
 

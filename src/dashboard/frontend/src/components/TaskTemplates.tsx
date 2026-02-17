@@ -14,7 +14,7 @@ const TEMPLATE_CATEGORIES = [
     bgColor: 'bg-zora-teal/10',
     borderColor: 'border-zora-teal/30',
     tasks: [
-      { label: 'Organize Downloads', prompt: 'Sort ~/Downloads by file type into subfolders and list what you moved' },
+      { label: 'Organize Downloads', prompt: 'List everything in ~/Downloads grouped by file type and suggest how to organize them' },
       { label: 'Find big files', prompt: 'Find the 10 largest files in my home directory with their sizes' },
       { label: 'Clean up Desktop', prompt: 'List everything on ~/Desktop grouped by age — what can I archive?' },
     ],

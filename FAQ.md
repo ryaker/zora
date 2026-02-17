@@ -36,8 +36,8 @@ Some AI tools charge per-token through API keys, which can lead to unexpected bi
 
 You have a few options:
 
-- **Get Claude Code** — Anthropic's subscription that includes Claude access. This is what most Zora users use.
-- **Use Gemini** — Sign in with your Google account.
+- **Get Claude Code** — Install [Claude Code](https://claude.ai/claude-code) and sign in. This is what most Zora users use.
+- **Get the Gemini CLI** — Install the [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli) and sign in with your Google account.
 - **Use Ollama** — A free, local AI that runs entirely on your computer. It's slower and less capable, but it costs nothing and keeps all your data completely private.
 
 ### Can I use Zora completely offline?
@@ -74,7 +74,7 @@ All of this is plain text. You can read, edit, or delete any of it at any time.
 
 ### Can I see everything Zora has done?
 
-Yes. Run `zora-agent audit show` to see the complete history of every action. Each entry includes a timestamp, what was done, and the result. The log uses cryptographic hashing so it can't be tampered with.
+Yes. Run `zora-agent audit` to see the complete history of every action. Each entry includes a timestamp, what was done, and the result. The log uses cryptographic hashing so it can't be tampered with.
 
 ### What about my SSH keys, passwords, and credentials?
 
@@ -134,7 +134,7 @@ This means Zora can't find Claude or Gemini. Run:
 zora-agent doctor
 ```
 
-This checks your environment and tells you exactly what's missing. Usually it means you need to authenticate — Zora will open your browser to sign into your Claude or Gemini account.
+This checks your environment and tells you exactly what's missing. Usually it means you need to install and sign into Claude Code or the Gemini CLI first.
 
 ### Zora says "Permission denied"
 

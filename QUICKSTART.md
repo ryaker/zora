@@ -10,7 +10,7 @@ You need two things:
 
 1. **Node.js 20 or higher** — Check by opening Terminal and typing `node --version`. If you see `v20.x.x` or higher, you're good. If not, download it from [nodejs.org](https://nodejs.org) (click the big green "LTS" button).
 
-2. **A Claude Code or Gemini account** — Zora uses your existing subscription. No API keys, no extra charges.
+2. **Claude Code or the Gemini CLI, signed in** — Zora uses your existing CLI session. No API keys, no extra charges. Install [Claude Code](https://claude.ai/claude-code) or the [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli) and sign in before running Zora.
 
 ---
 
@@ -38,11 +38,11 @@ zora-agent init
 
 The setup wizard asks you a few questions:
 
-- **How much access should Zora have?** Pick "Balanced" (recommended). It lets Zora read and write in your work folders while blocking anything dangerous.
-- **Where do you do your work?** Point it at your main project folder (like `~/Projects` or `~/Documents`).
-- **Anything off-limits?** The defaults protect your SSH keys, GPG keys, and AWS credentials. Accept them.
+- **What's off-limits?** The defaults protect your SSH keys, GPG keys, and AWS credentials. Accept them.
+- **Where do you work?** Point it at your main project folder (like `~/Projects` or `~/Documents`).
+- **How much access?** Pick "Add shell commands too" (recommended). It lets Zora read and write in your work folders while blocking anything dangerous.
 
-When prompted, your browser will open so you can sign into your Claude or Gemini account. This connects Zora to your existing subscription — no API keys or credit cards involved.
+Setup creates a local config that connects to your existing Claude Code or Gemini CLI session. As long as you're signed into Claude Code or the Gemini CLI, Zora uses that session — no API keys, no extra sign-in, no per-token charges.
 
 Want to skip the questions and accept all defaults? Run:
 

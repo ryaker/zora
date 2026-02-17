@@ -30,14 +30,14 @@ This is one of the best parts: **there are no API keys and no surprise bills.**
 
 Many AI tools require you to create a developer account, generate an API key, attach a credit card, and pay per-token. One careless automation loop and you get a $500 bill.
 
-Zora doesn't work that way. Instead, it authenticates through your existing subscriptions:
+Zora avoids this entirely. It authenticates through your existing CLI subscriptions:
 
 - If you have **Claude Code** (Anthropic's coding tool), Zora uses that same authenticated session
 - If you have **Google Gemini**, Zora can authenticate through your Google account
 
 You're using the AI you already pay for, through the subscription you already have. No extra charges, no per-token billing, no credit card surprises.
 
-The first time you run Zora, it will open your browser so you can sign into your existing account. After that, the session stays active and Zora handles reconnection automatically.
+When you run `zora-agent init`, Zora detects your existing Claude Code or Gemini CLI session and connects automatically. No extra sign-in step — if you're already authenticated in your CLI tools, Zora just works.
 
 ---
 
@@ -82,7 +82,7 @@ Zora was designed with safety as a primary feature. Here's how it works:
 - **Balanced** (recommended) — Zora can read and write in your work folders, and run safe commands like `git` and `ls`. Destructive commands like `sudo` and `rm` are always blocked.
 - **Power** — Broader access for experienced users who want maximum autonomy. Still blocks truly dangerous commands.
 
-**Everything is logged.** Every single action Zora takes — every file it reads, every command it runs — goes into a tamper-proof audit log. You can review it anytime with `zora-agent audit show`.
+**Everything is logged.** Every single action Zora takes — every file it reads, every command it runs — goes into a tamper-proof audit log. You can review it anytime with `zora-agent audit`.
 
 **Sensitive areas are always off-limits.** Your SSH keys, AWS credentials, and other sensitive directories are blocked by default, regardless of which trust level you choose.
 
