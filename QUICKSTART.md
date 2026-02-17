@@ -26,7 +26,7 @@ Verify it worked:
 zora-agent --version
 ```
 
-You should see `0.9.5` (or similar).
+You should see a version number, confirming Zora is installed.
 
 ---
 

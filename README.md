@@ -10,7 +10,7 @@ Unlike chatbots that just talk, Zora runs on your computer and takes action. It 
 
 ![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
-## Get Started in 3 Minutes
+## Get Started in 5 Minutes
 
 ```bash
 npm i -g zora-agent
@@ -44,7 +44,7 @@ Here are real things you can ask Zora right now:
 
 - **"Sort my Downloads folder by type and archive anything older than 30 days"** — File organization on autopilot
 - **"Find all TODO comments in my project and create a summary"** — Code analysis in seconds
-- **"Draft replies to unread emails about the product launch"** — Content generation with context
+- **"Draft a changelog from my last 10 commits"** — Content generation with context
 - **"What changed in my repos this week? Give me a summary"** — Stay on top of your work
 - **"Find and summarize the latest React 19 migration guides"** — Research without tab-hopping
 
@@ -104,7 +104,7 @@ If one provider is unavailable, Zora automatically fails over to the next one. Y
 
 Set up recurring tasks that run automatically:
 
-- "Every morning at 8am, summarize my unread emails"
+- "Every morning at 8am, check for new issues assigned to me"
 - "Every Friday, generate a weekly project report"
 - "Every night, check for outdated dependencies"
 

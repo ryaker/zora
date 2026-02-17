@@ -237,7 +237,7 @@ open -e ~/.zora/SOUL.md
 
 This opens in TextEdit. Write your preferences in plain English:
 
-```
+```markdown
 ## About Me
 - I'm a project manager, not a developer
 - I work with documents, spreadsheets, and presentations

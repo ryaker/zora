@@ -32,7 +32,7 @@ const PRESET_INFO: Record<string, { label: string; description: string; color: s
 const SecuritySettings: React.FC = () => {
   const [policy, setPolicy] = useState<SecurityPolicy | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
   const [expandedSection, setExpandedSection] = useState<string | null>('folders');
 
   useEffect(() => {
@@ -43,7 +43,8 @@ const SecuritySettings: React.FC = () => {
           setPolicy(res.data.policy);
         }
       } catch {
-        // If the API doesn't exist yet, show placeholder data
+        // If the API doesn't exist yet, show placeholder data with warning
+        setIsFallback(true);
         setPolicy({
           preset: 'balanced',
           allowedPaths: ['~/Projects', '~/Documents', '~/Desktop'],
@@ -88,6 +89,11 @@ const SecuritySettings: React.FC = () => {
 
   return (
     <div className="space-y-0">
+      {isFallback && (
+        <div className="px-4 py-2 text-[9px] font-data text-zora-gold/70 bg-zora-gold/5 border-b border-zora-ghost/30">
+          Showing default policy. Run <code className="text-zora-cyan">zora-agent doctor</code> to verify your actual settings.
+        </div>
+      )}
       {/* Current Preset */}
       <div className="px-4 py-3 border-b border-zora-ghost/30">
         <div className="flex items-center gap-2 mb-2">

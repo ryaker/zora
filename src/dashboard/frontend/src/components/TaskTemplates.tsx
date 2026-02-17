@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FolderOpen, FileText, Search, Brain, Clock, Wrench } from 'lucide-react';
 
 interface TaskTemplatesProps {
@@ -116,25 +116,28 @@ const TaskTemplates: React.FC<TaskTemplatesProps> = ({ onSubmitTask }) => {
                 </span>
               </button>
 
-              {isExpanded && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="pl-7 pb-2 space-y-1"
-                >
-                  {cat.tasks.map((task, i) => (
-                    <button
-                      key={i}
-                      onClick={() => onSubmitTask(task.prompt)}
-                      className="w-full text-left px-3 py-1.5 rounded-md text-[11px] text-white/50 hover:text-zora-white hover:bg-black/30 transition-all"
-                      title={task.prompt}
-                    >
-                      {task.label}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
+              <AnimatePresence>
+                {isExpanded && (
+                  <motion.div
+                    key={cat.label}
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="pl-7 pb-2 space-y-1"
+                  >
+                    {cat.tasks.map((task, i) => (
+                      <button
+                        key={i}
+                        onClick={() => onSubmitTask(task.prompt)}
+                        className="w-full text-left px-3 py-1.5 rounded-md text-[11px] text-white/50 hover:text-zora-white hover:bg-black/30 transition-all"
+                        title={task.prompt}
+                      >
+                        {task.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           );
         })}

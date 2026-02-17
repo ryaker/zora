@@ -131,6 +131,8 @@ const App: React.FC = () => {
   };
 
   const handleSubmitTask = async (prompt: string) => {
+    if (taskRunning) return;
+
     // Add user message
     setMessages(prev => [
       ...prev,
@@ -289,7 +291,7 @@ const App: React.FC = () => {
       {/* Header Bar */}
       <div className="flex items-center gap-4 px-4 pt-4 pb-2">
         <div className="lcars-bar flex-1 bg-zora-gold">
-          ZORA // DASHBOARD
+          ZORA {'/'} DASHBOARD
         </div>
         <div className="flex items-center gap-2">
           {providers.length > 0 && (
@@ -466,7 +468,7 @@ const App: React.FC = () => {
                                   <div className="flex justify-between">
                                     <span>TOKENS</span>
                                     <span className="text-zora-cyan">
-                                      {formatTokens(quota.usage.totalInputTokens)}in / {formatTokens(quota.usage.totalOutputTokens)}out
+                                      {formatTokens(quota.usage.totalInputTokens)} in / {formatTokens(quota.usage.totalOutputTokens)} out
                                     </span>
                                   </div>
                                 )}

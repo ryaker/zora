@@ -160,7 +160,8 @@ const TaskSummary: React.FC<TaskSummaryProps> = ({ steps, isRunning, taskPrompt 
                 <div className="flex items-center gap-2 text-[10px] font-data text-green-400/70">
                   <CheckCircle size={12} />
                   <span>
-                    Task complete — {readCount > 0 ? `read ${readCount} file${readCount > 1 ? 's' : ''}` : ''}
+                    Task complete{readCount + writeCount + shellCount > 0 ? ' — ' : ''}
+                    {readCount > 0 ? `read ${readCount} file${readCount > 1 ? 's' : ''}` : ''}
                     {readCount > 0 && writeCount > 0 ? ', ' : ''}
                     {writeCount > 0 ? `created ${writeCount} file${writeCount > 1 ? 's' : ''}` : ''}
                     {(readCount > 0 || writeCount > 0) && shellCount > 0 ? ', ' : ''}
