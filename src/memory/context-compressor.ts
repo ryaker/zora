@@ -198,13 +198,16 @@ export class ContextCompressor {
       }
     }
 
+    // Wait for pending compressions (including activation persists) before final compress
+    await Promise.allSettled(this._pendingCompressions.map(t => t.promise));
+
     // Compress any remaining working messages that exceed a minimum
     if (this._workingMessages.length > 5) {
       await this._compressChunk();
     }
 
-    // Wait for all pending compressions
-    await Promise.allSettled(this._pendingCompressions.map(t => t.promise));
+    // Final wait for any compression just triggered above
+    await Promise.allSettled(this._pendingCompressions.filter(t => !t.settled).map(t => t.promise));
     this._pendingCompressions = [];
 
     log.info(
@@ -266,13 +269,12 @@ export class ContextCompressor {
     try {
       const block = await this._observer.compress(chunk, startIndex, existingObs, this._sessionId);
 
-      // Append to session tier
-      this._sessionObservations.push(block.observations);
-      this._sessionTokens += block.estimatedTokens;
-
-      // Persist
+      // Persist first, then update in-memory state
       await this._store.append(block);
 
+      // Only update in-memory state after successful persist
+      this._sessionObservations.push(block.observations);
+      this._sessionTokens += block.estimatedTokens;
       this._totalCompressions++;
 
       log.info(
@@ -376,6 +378,16 @@ export class ContextCompressor {
         this._sessionObservations.push(block.observations);
         this._sessionTokens += block.estimatedTokens;
         this._totalCompressions++;
+
+        log.info(
+          {
+            chunkSize,
+            observationTokens: block.estimatedTokens,
+            sessionTokens: this._sessionTokens,
+            workingTokens: this._workingTokens,
+          },
+          'Pre-computed block activated',
+        );
       }).catch(err => {
         // Persist failed — roll back the working tier splice so messages aren't lost
         log.error({ err }, 'Failed to persist pre-computed observation block, rolling back');
@@ -388,15 +400,5 @@ export class ContextCompressor {
     );
 
     this._precomputedBlock = null;
-
-    log.info(
-      {
-        chunkSize,
-        observationTokens: block.estimatedTokens,
-        sessionTokens: this._sessionTokens,
-        workingTokens: this._workingTokens,
-      },
-      'Pre-computed block activated',
-    );
   }
 }
