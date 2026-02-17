@@ -467,6 +467,25 @@ export interface FailoverConfig {
   notify_on_failover: boolean;
 }
 
+export interface CompressionConfig {
+  /** Enable rolling context compression (default: true) */
+  enabled: boolean;
+  /** Token budget for recent raw messages (default: 30000) */
+  working_tier_max_tokens: number;
+  /** Token budget for compressed session observations (default: 10000) */
+  session_tier_max_tokens: number;
+  /** Token budget for cross-session context (default: 5000) */
+  cross_session_tier_max_tokens: number;
+  /** Number of messages per compression batch (default: 20) */
+  chunk_size: number;
+  /** Provider name for compression (default: cheapest available) */
+  model?: string;
+  /** Pre-compute observations before threshold (default: true) */
+  async_buffer: boolean;
+  /** Force sync compression at this token count (default: 2x working tier) */
+  block_after_tokens?: number;
+}
+
 export interface MemoryConfig {
   long_term_file: string;
   daily_notes_dir: string;
@@ -478,6 +497,8 @@ export interface MemoryConfig {
   auto_extract_interval: number;
   /** Enable automatic memory extraction after job completion (default: true) */
   auto_extract: boolean;
+  /** Rolling context compression configuration */
+  compression: CompressionConfig;
 }
 
 export interface SecurityConfig {

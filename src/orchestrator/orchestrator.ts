@@ -39,6 +39,8 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
+import { ContextCompressor } from '../memory/context-compressor.js';
+import { ObservationStore } from '../memory/observation-store.js';
 import { HeartbeatSystem } from '../routines/heartbeat.js';
 import { RoutineManager } from '../routines/routine-manager.js';
 import { NotificationTools } from '../tools/notifications.js';
@@ -102,6 +104,9 @@ export class Orchestrator {
   // ORCH-14: Context transform callback
   private _transformContext: TransformContextFn = defaultTransformContext;
 
+  // Context compression
+  private _observationStore!: ObservationStore;
+
   // Background intervals
   private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
   private _retryPollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -158,6 +163,12 @@ export class Orchestrator {
     this._memoryManager = new MemoryManager(this._config.memory, this._baseDir);
     await this._memoryManager.init();
     this._validationPipeline = new ValidationPipeline();
+
+    // Initialize observation store for context compression
+    this._observationStore = new ObservationStore(
+      path.join(this._baseDir, 'memory', 'observations'),
+    );
+    await this._observationStore.init();
 
     // R2: Wire Router
     this._router = new Router({
@@ -348,15 +359,49 @@ export class Orchestrator {
       // SOUL.md missing or unreadable — use default identity
     }
 
+    // Create per-task context compressor if compression is enabled
+    let compressor: ContextCompressor | null = null;
+    if (this._config.memory.compression.enabled) {
+      const compressFn = async (prompt: string): Promise<string> => {
+        const compressLoop = new ExecutionLoop({
+          systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
+          permissionMode: 'default',
+          cwd: process.cwd(),
+          maxTurns: 1,
+          model: this._config.memory.compression.model,
+        });
+        return compressLoop.run(prompt);
+      };
+      compressor = new ContextCompressor(
+        this._config.memory.compression,
+        this._observationStore,
+        compressFn,
+        jobId,
+      );
+      await compressor.loadExisting();
+    }
+
+    // Build cross-session context from observations
+    const crossSessionContext = compressor
+      ? compressor.buildContext().crossSessionContext
+      : '';
+
     // Build system prompt with policy awareness
-    const systemPrompt = [
+    const systemPromptParts = [
       soulContent || 'You are Zora, a helpful autonomous agent.',
       '[SECURITY] You operate under a permission policy. Before planning any task,',
       'use the check_permissions tool to verify you have access to the paths and',
       'commands you need. If access is denied, tell the user what you need and why.',
       'Do NOT attempt actions without checking first.',
       ...memoryContext,
-    ].join('\n\n');
+    ];
+
+    // Append cross-session observations if available
+    if (crossSessionContext) {
+      systemPromptParts.push(`[PRIOR SESSION CONTEXT]:\n${crossSessionContext}`);
+    }
+
+    const systemPrompt = systemPromptParts.join('\n\n');
 
     // SEC-03: Scan user prompt for injection patterns (warn but don't block by default)
     const sanitizedPrompt = sanitizeInput(options.prompt);
@@ -404,7 +449,7 @@ export class Orchestrator {
     }
 
     // Execute with the selected provider (injectionDepth=0 for initial call)
-    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent, 0, 0);
+    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent, 0, 0, compressor);
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -436,8 +481,11 @@ export class Orchestrator {
     onEvent?: (event: AgentEvent) => void,
     failoverDepth = 0,
     injectionDepth = 0,
+    compressor?: ContextCompressor | null,
   ): Promise<string> {
     let result = '';
+    let eventsSinceLastTick = 0;
+    const TICK_INTERVAL = 10; // Check compression thresholds every N events
 
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
@@ -449,6 +497,19 @@ export class Orchestrator {
         for await (const event of provider.execute(taskContext)) {
           // R8: Persist events via buffered writer (batched disk I/O)
           bufferedWriter.append(event);
+
+          // Feed events to context compressor for rolling compression
+          if (compressor) {
+            compressor.ingest(event);
+            eventsSinceLastTick++;
+            if (eventsSinceLastTick >= TICK_INTERVAL) {
+              eventsSinceLastTick = 0;
+              // tick() is async but we don't await — compression runs in background
+              compressor.tick().catch(err => {
+                log.warn({ err, jobId: taskContext.jobId }, 'Context compressor tick failed');
+              });
+            }
+          }
 
           // SEC-03: Scan tool outputs for leaked secrets (warn, don't strip)
           if (event.type === 'tool_result') {
@@ -528,7 +589,7 @@ export class Orchestrator {
 
             if (failoverResult) {
               // Re-execute with the failover provider (increment depth)
-              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
+              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth, compressor);
             }
 
             // R5: Enqueue for retry if no failover available
@@ -557,7 +618,7 @@ export class Orchestrator {
           if (failoverResult) {
             // Mark the error so downstream doesn't re-trigger failover
             Orchestrator._failoverErrors.add(err);
-            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
+            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth, compressor);
           }
 
           // R5: Enqueue for retry
@@ -573,6 +634,13 @@ export class Orchestrator {
       // Always close the buffered writer — flushes remaining events and stops the timer.
       // This runs on all exit paths: success, throw, and failover returns.
       await bufferedWriter.close();
+
+      // Flush context compressor — persist any remaining observations
+      if (compressor) {
+        await compressor.flush().catch(err => {
+          log.warn({ err, jobId: taskContext.jobId }, 'Context compressor flush failed');
+        });
+      }
     }
 
     // Record completion in daily notes
