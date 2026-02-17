@@ -78,7 +78,15 @@ export type AgentEventType =
   | 'text'
   | 'error'
   | 'done'
-  | 'steering';
+  | 'steering'
+  // TYPE-11: Lifecycle markers for fine-grained streaming
+  | 'task.start'
+  | 'task.end'
+  | 'turn.start'
+  | 'turn.end'
+  | 'text.delta'
+  | 'tool.start'
+  | 'tool.end';
 
 /** TYPE-06: Typed event payload interfaces for each event type */
 export interface TextEventContent {
@@ -127,6 +135,44 @@ export interface SteeringEventContent {
   author: string;
 }
 
+// TYPE-11: Lifecycle event content interfaces
+
+export interface TaskStartContent {
+  jobId: string;
+  task: string;
+}
+
+export interface TaskEndContent {
+  jobId: string;
+  duration_ms: number;
+  success: boolean;
+}
+
+export interface TurnStartContent {
+  turn: number;
+}
+
+export interface TurnEndContent {
+  turn: number;
+  usage?: { input_tokens: number; output_tokens: number; cost_usd: number };
+}
+
+export interface TextDeltaContent {
+  delta: string;
+}
+
+export interface ToolStartContent {
+  toolCallId: string;
+  tool: string;
+}
+
+export interface ToolEndContent {
+  toolCallId: string;
+  tool: string;
+  duration_ms?: number;
+  error?: string;
+}
+
 /** Discriminated union of all typed event payloads */
 export type AgentEventContent =
   | TextEventContent
@@ -135,7 +181,14 @@ export type AgentEventContent =
   | ToolResultEventContent
   | ErrorEventContent
   | DoneEventContent
-  | SteeringEventContent;
+  | SteeringEventContent
+  | TaskStartContent
+  | TaskEndContent
+  | TurnStartContent
+  | TurnEndContent
+  | TextDeltaContent
+  | ToolStartContent
+  | ToolEndContent;
 
 export interface AgentEvent {
   type: AgentEventType;
@@ -175,6 +228,36 @@ export function isSteeringEvent(event: AgentEvent): event is AgentEvent & { cont
 
 export function isThinkingEvent(event: AgentEvent): event is AgentEvent & { content: ThinkingEventContent } {
   return event.type === 'thinking';
+}
+
+// TYPE-11: Lifecycle event type guards
+
+export function isTaskStartEvent(event: AgentEvent): event is AgentEvent & { content: TaskStartContent } {
+  return event.type === 'task.start';
+}
+
+export function isTaskEndEvent(event: AgentEvent): event is AgentEvent & { content: TaskEndContent } {
+  return event.type === 'task.end';
+}
+
+export function isTurnStartEvent(event: AgentEvent): event is AgentEvent & { content: TurnStartContent } {
+  return event.type === 'turn.start';
+}
+
+export function isTurnEndEvent(event: AgentEvent): event is AgentEvent & { content: TurnEndContent } {
+  return event.type === 'turn.end';
+}
+
+export function isTextDeltaEvent(event: AgentEvent): event is AgentEvent & { content: TextDeltaContent } {
+  return event.type === 'text.delta';
+}
+
+export function isToolStartEvent(event: AgentEvent): event is AgentEvent & { content: ToolStartContent } {
+  return event.type === 'tool.start';
+}
+
+export function isToolEndEvent(event: AgentEvent): event is AgentEvent & { content: ToolEndContent } {
+  return event.type === 'tool.end';
 }
 
 // ─── Task Context ────────────────────────────────────────────────────
@@ -439,6 +522,16 @@ export interface NotificationsConfig {
 /**
  * Complete Zora configuration matching config.toml structure.
  */
+/** ORCH-12: Hook event names for lifecycle hooks */
+export type HookEventName = 'onTaskStart' | 'beforeToolExecute' | 'afterToolExecute' | 'onTaskEnd';
+
+/** ORCH-12: Configuration for a hook defined in config.toml [[hooks]] section */
+export interface HookConfigEntry {
+  event: HookEventName;
+  match?: string;
+  script?: string;
+}
+
 export interface ZoraConfig {
   agent: AgentConfig;
   providers: ProviderConfig[];
@@ -449,6 +542,8 @@ export interface ZoraConfig {
   steering: SteeringConfig;
   notifications: NotificationsConfig;
   mcp?: McpConfig;
+  /** ORCH-12: Lifecycle hook definitions from [[hooks]] config sections */
+  hooks?: HookConfigEntry[];
 }
 
 // ─── MCP Configuration ──────────────────────────────────────────────

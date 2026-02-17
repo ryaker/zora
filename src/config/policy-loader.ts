@@ -6,7 +6,10 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { ZoraPolicy } from '../types.js';
+import { deepMerge } from './loader.js';
 
 /**
  * Load and parse a ZoraPolicy from a TOML file.
@@ -74,4 +77,48 @@ export function parsePolicy(raw: Record<string, unknown>): ZoraPolicy {
       },
     } : {}),
   };
+}
+
+/**
+ * Resolve policy via two-layer merge: global → project.
+ *
+ * Resolution order:
+ *   1. ~/.zora/policy.toml (global, required)
+ *   2. <projectDir>/.zora/policy.toml (project overrides, optional)
+ *
+ * Deep-merges policy sections so a project only needs to override
+ * the specific fields it cares about (e.g. filesystem.allowed_paths).
+ */
+export async function resolvePolicy(options?: {
+  cwd?: string;
+  projectDir?: string;
+}): Promise<ZoraPolicy> {
+  const globalPath = path.join(os.homedir(), '.zora', 'policy.toml');
+  const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
+  const projectPath = path.join(projectBase, '.zora', 'policy.toml');
+
+  // Global policy is the base (required)
+  const policy = await loadPolicy(globalPath);
+
+  // Overlay project policy if it exists and is different from global.
+  // Merge RAW project data (not parsed) over the parsed global policy
+  // so that only fields explicitly set in the project file override global values.
+  // If we parsed both and merged, the project's safe defaults would clobber
+  // the global's real values (e.g. empty denied_paths replacing real ones).
+  if (
+    fs.existsSync(projectPath) &&
+    path.resolve(projectPath) !== path.resolve(globalPath)
+  ) {
+    const { parse: parseTOML } = await import('smol-toml');
+    const projectRaw = parseTOML(fs.readFileSync(projectPath, 'utf-8')) as Record<string, unknown>;
+
+    const merged = deepMerge(
+      policy as unknown as Record<string, unknown>,
+      projectRaw,
+    ) as unknown as ZoraPolicy;
+
+    return merged;
+  }
+
+  return policy;
 }

@@ -76,35 +76,33 @@ test.describe('Page Load Journey', () => {
 
   test('header bar renders with ZORA branding', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=ZORA // DASHBOARD')).toBeVisible();
+    await expect(page.locator('text=ZORA // TACTICAL INTERFACE')).toBeVisible();
   });
 
-  test('all three column panels render', async ({ page }) => {
+  test('main panels render', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=Provider Status')).toBeVisible();
-    await expect(page.locator('text=Task Activity')).toBeVisible();
-    await expect(page.locator('text=Security Policy')).toBeVisible();
+    await expect(page.locator('text=Live Mission Logs')).toBeVisible();
+    await expect(page.locator('text=Safety Protocols')).toBeVisible();
+    await expect(page.locator('text=Neural Subnets')).toBeVisible();
   });
 
-  test('footer displays version info', async ({ page }) => {
+  test('footer displays version and dashboard label', async ({ page }) => {
     await page.goto(baseUrl);
-    // Scope to footer container to avoid matching header "ZORA // DASHBOARD"
-    const footer = page.locator('.tracking-widest');
-    await expect(footer).toContainText('Zora v0.6.0');
-    await expect(footer).toContainText('Dashboard');
+    await expect(page.locator('text=Operational Dashboard')).toBeVisible();
+    await expect(page.locator('text=Zora v0.9.5')).toBeVisible();
   });
 
-  test('initial log entries are visible', async ({ page }) => {
+  test('initial chat messages are visible', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=Zora is running.')).toBeVisible();
-    await expect(page.locator('text=Waiting for tasks...')).toBeVisible();
+    await expect(page.locator('text=Neural link established.')).toBeVisible();
+    await expect(page.locator('text=Neural interface active')).toBeVisible();
   });
 
-  test('LCARS theme elements are present', async ({ page }) => {
+  test('LCARS header bar is present', async ({ page }) => {
     await page.goto(baseUrl);
-    // LCARS bars exist for each section
     const lcarsBars = page.locator('.lcars-bar');
-    await expect(lcarsBars).toHaveCount(5); // Header, Provider Status, Task Activity, Security Policy, Session Usage
+    // Only the header bar uses lcars-bar class now
+    await expect(lcarsBars.first()).toBeVisible();
   });
 });
 
@@ -128,11 +126,12 @@ test.describe('Provider Health Monitoring', () => {
     await expect(page.locator('text=openai').first()).toBeVisible({ timeout: 5000 });
   });
 
-  test('connected status shown for healthy providers', async ({ page }) => {
+  test('provider dot indicators show connection status', async ({ page }) => {
     await page.goto(baseUrl);
-    // Both providers have valid auth, so "Connected" should appear
-    const connected = page.locator('text=Connected');
-    await expect(connected.first()).toBeVisible({ timeout: 5000 });
+    // Both providers have valid auth, so green dots should appear
+    const claudeDot = page.locator('[data-testid="provider-dot-claude"]');
+    await expect(claudeDot).toBeVisible({ timeout: 5000 });
+    await expect(claudeDot).toHaveClass(/bg-green-500/);
   });
 
   test('health API handles provider auth failure gracefully', async ({ request }) => {
@@ -173,12 +172,12 @@ test.describe('Quota & Usage Display', () => {
     await expect(page.locator('text=50%').first()).toBeVisible({ timeout: 5000 });
   });
 
-  test('session usage panel shows total cost and requests', async ({ page }) => {
+  test('mission telemetry panel shows total cost and requests', async ({ page }) => {
     await page.goto(baseUrl);
-    // Scope to Session Usage panel to avoid matching provider-level "REQUESTS"
-    const usagePanel = page.locator('.lcars-panel.border-zora-cyan.bg-zora-cyan\\/5');
-    await expect(usagePanel.locator('text=Total Cost')).toBeVisible({ timeout: 5000 });
-    await expect(usagePanel.locator('text=Requests')).toBeVisible({ timeout: 5000 });
+    // Scope to Mission Telemetry panel
+    const telemetryPanel = page.locator('.lcars-panel.border-zora-teal');
+    await expect(telemetryPanel.locator('text=TOT_COST:')).toBeVisible({ timeout: 5000 });
+    await expect(telemetryPanel.locator('text=REQUESTS:')).toBeVisible({ timeout: 5000 });
   });
 
   test('cost tier is displayed per provider', async ({ page }) => {
@@ -217,32 +216,33 @@ test.describe('Quota & Usage Display', () => {
 test.describe('Steering Message Flow', () => {
   test('steering input and send button are present', async ({ page }) => {
     await page.goto(baseUrl);
-    const input = page.locator('input[placeholder="Send a message to the running task..."]');
+    const input = page.locator('input[placeholder="Inject directive message..."]');
     await expect(input).toBeVisible();
     await expect(page.locator('button:has-text("SEND")')).toBeVisible();
   });
 
   test('user types message and submits via button click', async ({ page }) => {
     await page.goto(baseUrl);
-    const input = page.locator('input[placeholder="Send a message to the running task..."]');
+    const input = page.locator('input[placeholder="Inject directive message..."]');
     await input.fill('Increase output verbosity');
     await page.click('button:has-text("SEND")');
 
-    await expect(page.locator('text=Message sent: Increase output verbosity')).toBeVisible({ timeout: 5000 });
+    // Message appears as a user chat bubble
+    await expect(page.locator('.bubble-user:has-text("Increase output verbosity")')).toBeVisible({ timeout: 5000 });
   });
 
   test('user submits message via Enter key', async ({ page }) => {
     await page.goto(baseUrl);
-    const input = page.locator('input[placeholder="Send a message to the running task..."]');
+    const input = page.locator('input[placeholder="Inject directive message..."]');
     await input.fill('Switch to defensive mode');
     await input.press('Enter');
 
-    await expect(page.locator('text=Message sent: Switch to defensive mode')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.bubble-user:has-text("Switch to defensive mode")')).toBeVisible({ timeout: 5000 });
   });
 
   test('input clears after successful submission', async ({ page }) => {
     await page.goto(baseUrl);
-    const input = page.locator('input[placeholder="Send a message to the running task..."]');
+    const input = page.locator('input[placeholder="Inject directive message..."]');
     await input.fill('Run diagnostics');
     await page.click('button:has-text("SEND")');
 
@@ -251,11 +251,13 @@ test.describe('Steering Message Flow', () => {
 
   test('empty message does not submit', async ({ page }) => {
     await page.goto(baseUrl);
-    const initialLogCount = await page.locator('.font-data div').count();
+    // Count existing user bubbles
+    const initialCount = await page.locator('.bubble-user').count();
     await page.click('button:has-text("SEND")');
-    // Log count should not change (no "Message sent:" added)
-    const afterLogCount = await page.locator('.font-data div').count();
-    expect(afterLogCount).toBe(initialLogCount);
+    await page.waitForTimeout(500);
+    // No new user bubble should have been added
+    const newCount = await page.locator('.bubble-user').count();
+    expect(newCount).toBe(initialCount);
   });
 
   test('steer API validates required fields', async ({ request }) => {
@@ -374,35 +376,10 @@ test.describe('SSE Connection', () => {
   });
 });
 
-// ─── 6. Rate Limiting ───────────────────────────────────────────────
-
-test.describe('Rate Limiting', () => {
-  test('rapid requests eventually trigger 429', async ({ request }) => {
-    // The rate limiter allows 100 requests per 15 min window per IP.
-    // Fire requests rapidly and check that 429 is returned after the limit.
-    // Note: other tests in this file also consume quota from the same IP,
-    // so we just blast enough to hit the threshold.
-    let got429 = false;
-
-    for (let i = 0; i < 120; i++) {
-      const res = await request.get(`${baseUrl}/api/health`);
-      if (res.status() === 429) {
-        got429 = true;
-        const data = await res.json();
-        expect(data.ok).toBe(false);
-        expect(data.error).toContain('Too many requests');
-        break;
-      }
-    }
-
-    expect(got429).toBe(true);
-  });
-});
-
-// ─── 7. Error Handling ──────────────────────────────────────────────
+// ─── 6. Error Handling ──────────────────────────────────────────────
 
 test.describe('Error Handling', () => {
-  test('health API returns 500 on unexpected provider error', async ({ request }) => {
+  test('health API reports CRITICAL when all providers fail auth', async ({ request }) => {
     const originalCheckAuth = provider.checkAuth.bind(provider);
     const originalCheckAuth2 = secondProvider.checkAuth.bind(secondProvider);
     (provider as any).checkAuth = async () => { throw new Error('Provider unavailable'); };
@@ -410,11 +387,14 @@ test.describe('Error Handling', () => {
 
     try {
       const res = await request.get(`${baseUrl}/api/health`);
-      // AuthMonitor.checkAll() propagates the error, route handler returns 500
-      expect(res.status()).toBe(500);
+      // AuthMonitor.checkAll() catches per-provider errors gracefully.
+      // When all providers fail, the health endpoint returns CRITICAL status.
+      expect(res.status()).toBe(200);
       const data = await res.json();
       expect(data.ok).toBe(false);
-      expect(data.error).toContain('Provider unavailable');
+      expect(data.status).toBe('CRITICAL');
+      // All providers should be reported as DOWN
+      expect(data.providers.every((p: { status: string }) => p.status === 'DOWN')).toBe(true);
     } finally {
       provider.checkAuth = originalCheckAuth;
       secondProvider.checkAuth = originalCheckAuth2;
@@ -438,9 +418,7 @@ test.describe('Error Handling', () => {
     expect(body).toContain('Zora');
   });
 
-  test('dashboard shows failure log on steer error', async ({ page }) => {
-    // Navigate to dashboard, then make it fail by submitting to a broken endpoint.
-    // We'll intercept the /api/steer route to simulate a server error.
+  test('dashboard shows error on steer failure', async ({ page }) => {
     await page.goto(baseUrl);
 
     await page.route('**/api/steer', (route) => {
@@ -451,43 +429,35 @@ test.describe('Error Handling', () => {
       });
     });
 
-    const input = page.locator('input[placeholder="Send a message to the running task..."]');
+    const input = page.locator('input[placeholder="Inject directive message..."]');
     await input.fill('This will fail');
     await page.click('button:has-text("SEND")');
 
-    await expect(page.locator('text=Failed to send message')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=Transmission failed. Check comms.')).toBeVisible({ timeout: 5000 });
   });
 });
 
-// ─── 8. Responsive Layout ───────────────────────────────────────────
+// ─── 7. Responsive Layout ───────────────────────────────────────────
 
 test.describe('Responsive Layout', () => {
-  test('three-column grid renders at desktop width', async ({ page }) => {
+  test('flex layout renders at desktop width', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(baseUrl);
 
-    // The grid uses col-span-3, col-span-6, col-span-3
-    const grid = page.locator('.grid-cols-12');
-    await expect(grid).toBeVisible();
+    // Sidebar rail (w-16)
+    const sidebar = page.locator('.w-16').first();
+    await expect(sidebar).toBeVisible();
 
-    // Left column (Provider Status)
-    const leftCol = page.locator('.col-span-3').first();
-    await expect(leftCol).toBeVisible();
-
-    // Center column (Task Activity)
-    const centerCol = page.locator('.col-span-6');
-    await expect(centerCol).toBeVisible();
-
-    // Right column (Security Policy)
-    const rightCol = page.locator('.col-span-3').last();
-    await expect(rightCol).toBeVisible();
+    // Right status panel (w-80)
+    const statusPanel = page.locator('.w-80').first();
+    await expect(statusPanel).toBeVisible();
   });
 
-  test('security policy panel displays active state', async ({ page }) => {
+  test('safety protocols panel displays active state', async ({ page }) => {
     await page.goto(baseUrl);
-    await expect(page.locator('text=Policy: Active')).toBeVisible();
-    await expect(page.locator('text=Approved commands only')).toBeVisible();
-    await expect(page.locator('text=Dangerous actions require approval')).toBeVisible();
+    await expect(page.locator('text=Active Integrity Shield')).toBeVisible();
+    await expect(page.locator('text=SYSCALL_FILTER: ENABLED')).toBeVisible();
+    await expect(page.locator('text=INTENT_CAPSULE: SIGNED')).toBeVisible();
   });
 
   test('scanline overlay is present', async ({ page }) => {
@@ -510,7 +480,7 @@ test.describe('Responsive Layout', () => {
   });
 });
 
-// ─── 9. Jobs API ────────────────────────────────────────────────────
+// ─── 8. Jobs API ────────────────────────────────────────────────────
 
 test.describe('Jobs API', () => {
   test('jobs endpoint returns session list', async ({ request }) => {
@@ -519,5 +489,31 @@ test.describe('Jobs API', () => {
     const data = await res.json();
     expect(data).toHaveProperty('jobs');
     expect(Array.isArray(data.jobs)).toBe(true);
+  });
+});
+
+// ─── 10. Rate Limiting (must be last — exhausts the rate budget) ────
+
+test.describe('Rate Limiting', () => {
+  test('rapid requests eventually trigger 429', async ({ request }) => {
+    // The rate limiter allows 500 requests per 15 min window per IP on API routes.
+    // Fire requests rapidly and check that 429 is returned after the limit.
+    // Note: other tests in this file also consume quota from the same IP,
+    // so we blast enough to hit the threshold.
+    // This test MUST run last because it exhausts the rate limit budget.
+    let got429 = false;
+
+    for (let i = 0; i < 520; i++) {
+      const res = await request.get(`${baseUrl}/api/health`);
+      if (res.status() === 429) {
+        got429 = true;
+        const data = await res.json();
+        expect(data.ok).toBe(false);
+        expect(data.error).toContain('Too many requests');
+        break;
+      }
+    }
+
+    expect(got429).toBe(true);
   });
 });

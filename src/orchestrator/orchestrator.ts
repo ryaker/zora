@@ -27,12 +27,13 @@ import type {
   ToolResultEventContent,
   ToolCallEventContent,
 } from '../types.js';
+import { HookRunner } from '../hooks/hook-runner.js';
 import { Router } from './router.js';
 import { FailoverController } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
 import { SessionManager, BufferedSessionWriter } from './session-manager.js';
-import { ExecutionLoop, type CustomToolDefinition } from './execution-loop.js';
+import { ExecutionLoop, type CustomToolDefinition, defaultTransformContext, type TransformContextFn } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
@@ -63,6 +64,8 @@ export interface SubmitTaskOptions {
   maxTurns?: number;
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
+  /** ORCH-14: Optional context transform callback applied to history before follow-ups */
+  transformContext?: TransformContextFn;
 }
 
 export class Orchestrator {
@@ -92,6 +95,12 @@ export class Orchestrator {
 
   // Memory tools
   private _validationPipeline!: ValidationPipeline;
+
+  // ORCH-12: Lifecycle hooks
+  private _hookRunner: HookRunner = new HookRunner();
+
+  // ORCH-14: Context transform callback
+  private _transformContext: TransformContextFn = defaultTransformContext;
 
   // Background intervals
   private _authCheckTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -383,16 +392,19 @@ export class Orchestrator {
       canUseTool: this._policyEngine.createCanUseTool(),
     };
 
+    // ORCH-12: Run onTaskStart hooks (can modify context before routing)
+    const hookedContext = await this._hookRunner.runOnTaskStart(taskContext);
+
     // R2: Route to provider
     let selectedProvider: LLMProvider;
     try {
-      selectedProvider = await this._router.selectProvider(taskContext);
+      selectedProvider = await this._router.selectProvider(hookedContext);
     } catch (err) {
       throw new Error(`No provider available: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Execute with the selected provider
-    return this._executeWithProvider(selectedProvider, taskContext, options.onEvent);
+    // Execute with the selected provider (injectionDepth=0 for initial call)
+    return this._executeWithProvider(selectedProvider, hookedContext, options.onEvent, 0, 0);
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -400,6 +412,9 @@ export class Orchestrator {
 
   /** Maximum depth of failover recursion to prevent unbounded re-execution */
   private static readonly MAX_FAILOVER_DEPTH = 3;
+
+  /** ORCH-16: Maximum depth of onTaskEnd follow-up injection loops */
+  private static readonly MAX_INJECTION_LOOPS = 3;
 
   /**
    * Executes a task with a specific provider, handling failover and event persistence.
@@ -420,6 +435,7 @@ export class Orchestrator {
     taskContext: TaskContext,
     onEvent?: (event: AgentEvent) => void,
     failoverDepth = 0,
+    injectionDepth = 0,
   ): Promise<string> {
     let result = '';
 
@@ -512,7 +528,7 @@ export class Orchestrator {
 
             if (failoverResult) {
               // Re-execute with the failover provider (increment depth)
-              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+              return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
             }
 
             // R5: Enqueue for retry if no failover available
@@ -541,7 +557,7 @@ export class Orchestrator {
           if (failoverResult) {
             // Mark the error so downstream doesn't re-trigger failover
             Orchestrator._failoverErrors.add(err);
-            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1);
+            return this._executeWithProvider(failoverResult.nextProvider, taskContext, onEvent, failoverDepth + 1, injectionDepth);
           }
 
           // R5: Enqueue for retry
@@ -567,6 +583,34 @@ export class Orchestrator {
       this._runExtractionAsync(taskContext).catch(err => {
         log.warn({ err, jobId: taskContext.jobId }, 'Post-job memory extraction failed');
       });
+    }
+
+    // ORCH-12: Run onTaskEnd hooks (can inspect result, optionally trigger follow-up)
+    // ORCH-16: Guard against infinite follow-up injection loops
+    const endResult = await this._hookRunner.runOnTaskEnd(taskContext, result);
+    if (endResult.followUp) {
+      if (injectionDepth >= Orchestrator.MAX_INJECTION_LOOPS) {
+        log.warn(
+          { jobId: taskContext.jobId, depth: injectionDepth, maxDepth: Orchestrator.MAX_INJECTION_LOOPS },
+          'onTaskEnd follow-up injection loop capped — skipping follow-up',
+        );
+      } else {
+        log.info({ jobId: taskContext.jobId, depth: injectionDepth + 1 }, 'onTaskEnd hook triggered follow-up task');
+        // Route through _executeWithProvider directly to preserve injectionDepth tracking.
+        // Re-route through the full submitTask pipeline except use incremented injectionDepth.
+        const followUpJobId = `${taskContext.jobId}_followup_${injectionDepth + 1}`;
+        // ORCH-14: Apply transformContext to prune history before follow-up
+        const transformedHistory = this._transformContext(taskContext.history, injectionDepth + 1);
+        const followUpCtx: TaskContext = {
+          ...taskContext,
+          jobId: followUpJobId,
+          task: endResult.followUp,
+          history: transformedHistory,
+        };
+        const hookedFollowUp = await this._hookRunner.runOnTaskStart(followUpCtx);
+        const followUpProvider = await this._router.selectProvider(hookedFollowUp);
+        return this._executeWithProvider(followUpProvider, hookedFollowUp, onEvent, 0, injectionDepth + 1);
+      }
     }
 
     return result;
@@ -813,6 +857,21 @@ export class Orchestrator {
   get policyEngine(): PolicyEngine {
     this._assertBooted();
     return this._policyEngine;
+  }
+
+  /** ORCH-12: Access the hook runner for registering lifecycle hooks */
+  get hookRunner(): HookRunner {
+    return this._hookRunner;
+  }
+
+  /** ORCH-14: Set a custom context transform function */
+  set transformContext(fn: TransformContextFn) {
+    this._transformContext = fn;
+  }
+
+  /** ORCH-14: Get the current context transform function */
+  get transformContext(): TransformContextFn {
+    return this._transformContext;
   }
 
   get config(): ZoraConfig {

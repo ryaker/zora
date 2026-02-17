@@ -18,6 +18,9 @@ import type { AuthMonitor } from '../orchestrator/auth-monitor.js';
 import type { LLMProvider, ProviderQuotaSnapshot } from '../types.js';
 import { createAuthMiddleware } from './auth-middleware.js';
 import { createLogger } from '../utils/logger.js';
+import { shouldIncludeEvent } from '../utils/event-filter.js';
+import type { VerbosityLevel } from '../utils/event-filter.js';
+import type { AgentEvent } from '../types.js';
 
 const log = createLogger('dashboard');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +57,8 @@ export class DashboardServer {
   private readonly _app: express.Application;
   private readonly _options: DashboardOptions;
   private _server: Server | undefined;
-  private readonly _sseClients: Set<ExpressResponse> = new Set();
+  /** TYPE-12: Map SSE clients to their verbosity level */
+  private readonly _sseClients: Map<ExpressResponse, VerbosityLevel> = new Map();
 
   constructor(options: DashboardOptions) {
     this._options = options;
@@ -63,11 +67,9 @@ export class DashboardServer {
     // R22: Explicit body size limits
     this._app.use(express.json({ limit: '1mb' }));
 
-    // R21: Rate limiting — 100 requests per 15 minutes per IP
-    // Localhost is exempted so the dashboard's own polling (health, jobs,
-    // system) doesn't consume the rate limit budget. This is intentional:
-    // the frontend is served from localhost and polls ~100 req/15min.
-    this._app.use(this._createRateLimiter());
+    // R21: Rate limiting — 100 requests per 15 minutes per IP (API routes only).
+    // Static assets are not rate-limited since they're served from localhost.
+    this._app.use('/api', this._createRateLimiter());
 
     // SEC-01: Mount Bearer token auth on API routes when a token is configured.
     // When no dashboardToken is set, auth is skipped entirely — this covers
@@ -89,27 +91,17 @@ export class DashboardServer {
 
   /**
    * Simple in-memory rate limiter (no external dependency).
-   * Limits to 100 requests per 15 minutes per IP.
-   * Exempts localhost requests to /api/* so the dashboard's own polling
-   * (health, jobs, system) doesn't consume the rate limit budget.
+   * Limits to 500 API requests per 15 minutes per IP.
    * Prunes expired entries periodically to prevent unbounded memory growth.
    */
   private _createRateLimiter(): express.RequestHandler {
     const windowMs = 15 * 60 * 1000;
-    const maxRequests = 100;
+    const maxRequests = 500;
     const clients = new Map<string, { count: number; resetAt: number }>();
     let lastCleanup = Date.now();
 
     return (req, res, next) => {
-      // Exempt localhost API polling from rate limiting (#104).
-      // The dashboard frontend polls /api/health, /api/jobs, and /api/system
-      // frequently (~100 req/15min), which would hit the limit for its own UI.
       const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-      const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-      if (isLoopback && req.path.startsWith('/api/')) {
-        next();
-        return;
-      }
 
       const now = Date.now();
 
@@ -322,8 +314,13 @@ export class DashboardServer {
 
     // --- R17: SSE endpoint for real-time job updates ---
 
-    /** GET /api/events — Server-Sent Events stream for live job status */
+    /** GET /api/events — Server-Sent Events stream for live job status
+     *  TYPE-12: Accepts ?verbosity=terse|normal|verbose (default: normal) */
     this._app.get('/api/events', (req, res) => {
+      const verbosity = (['terse', 'normal', 'verbose'].includes(req.query.verbosity as string)
+        ? req.query.verbosity
+        : 'normal') as VerbosityLevel;
+
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -332,7 +329,7 @@ export class DashboardServer {
       });
 
       res.write('data: {"type":"connected"}\n\n');
-      this._sseClients.add(res);
+      this._sseClients.set(res, verbosity);
 
       // Keep-alive comment every 30s to prevent proxy/firewall timeouts
       const keepAlive = setInterval(() => {
@@ -369,7 +366,17 @@ export class DashboardServer {
     const lines = json.split(/\r?\n/);
     const payload = lines.map(l => `data: ${l}`).join('\n') + '\n\n';
 
-    for (const client of this._sseClients) {
+    for (const [client, verbosity] of this._sseClients) {
+      // TYPE-12: Filter events based on client's verbosity level.
+      // If the event data looks like an AgentEvent (has a type field that
+      // matches AgentEventType), apply verbosity filtering.
+      const eventData = event.data as Record<string, unknown> | undefined;
+      if (eventData && typeof eventData === 'object' && 'type' in eventData && 'timestamp' in eventData) {
+        if (!shouldIncludeEvent(eventData as unknown as AgentEvent, verbosity)) {
+          continue; // Skip this event for this client
+        }
+      }
+
       try {
         client.write(payload);
       } catch {
@@ -399,7 +406,7 @@ export class DashboardServer {
    */
   async stop(): Promise<void> {
     // Close all SSE connections
-    for (const client of this._sseClients) {
+    for (const [client] of this._sseClients) {
       client.end();
     }
     this._sseClients.clear();

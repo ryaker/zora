@@ -10,7 +10,8 @@
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
-import { loadConfig } from '../config/loader.js';
+import { resolveConfig } from '../config/loader.js';
+import { resolvePolicy } from '../config/policy-loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
 import { SessionManager } from '../orchestrator/session-manager.js';
 import { SteeringManager } from '../steering/steering-manager.js';
@@ -29,6 +30,7 @@ import { registerEditCommands } from './edit-commands.js';
 import { registerTeamCommands } from './team-commands.js';
 import { registerSteerCommands } from './steer-commands.js';
 import { registerSkillCommands } from './skill-commands.js';
+import { registerHookCommands } from './hook-commands.js';
 import { registerInitCommand } from './init-command.js';
 import { runDoctorChecks } from './doctor.js';
 import { createLogger } from '../utils/logger.js';
@@ -80,36 +82,55 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 
 /**
  * Returns the path to the daemon PID file.
+ * Uses project .zora/ if it exists in the given dir, else global.
  */
-function getPidFilePath(): string {
+function getPidFilePath(projectDir?: string): string {
+  if (projectDir) {
+    const projectZora = path.join(projectDir, '.zora');
+    if (fs.existsSync(projectZora)) {
+      return path.join(projectZora, 'state', 'daemon.pid');
+    }
+  }
   return path.join(os.homedir(), '.zora', 'state', 'daemon.pid');
 }
 
 /**
  * Common setup for commands that need config and services.
+ * Uses three-layer config resolution: defaults → global → project.
  */
-async function setupContext() {
-  const configDir = path.join(os.homedir(), '.zora');
-  const configPath = path.join(configDir, 'config.toml');
-  const policyPath = path.join(configDir, 'policy.toml');
+async function setupContext(projectDir?: string) {
+  const cwd = projectDir ?? process.cwd();
 
-  // Ensure config exists
-  if (!fs.existsSync(configPath)) {
-    log.error("Zora isn't configured yet. Run 'zora-agent init' to set up in 2 minutes.");
+  // Three-layer config resolution
+  let config: ZoraConfig;
+  let sources: string[];
+  try {
+    const resolved = await resolveConfig({ projectDir: cwd });
+    config = resolved.config;
+    sources = resolved.sources;
+  } catch (err) {
+    // If no config at all, give a friendly message
+    const globalPath = path.join(os.homedir(), '.zora', 'config.toml');
+    if (!fs.existsSync(globalPath)) {
+      log.error("Zora isn't configured yet. Run 'zora-agent init' to set up in 2 minutes.");
+    } else {
+      log.error({ err }, 'Config resolution failed.');
+    }
     process.exit(1);
   }
 
-  const config = await loadConfig(configPath);
-
-  // Load policy from TOML using centralized loader
-  const { loadPolicy } = await import('../config/policy-loader.js');
+  // Two-layer policy resolution
   let policy: ZoraPolicy;
   try {
-    policy = await loadPolicy(policyPath);
+    policy = await resolvePolicy({ projectDir: cwd });
   } catch {
     log.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
+
+  // Determine baseDir: project .zora/ if it exists, else global
+  const projectZora = path.join(cwd, '.zora');
+  const configDir = fs.existsSync(projectZora) ? projectZora : path.join(os.homedir(), '.zora');
 
   const engine = new PolicyEngine(policy);
   const sessionManager = new SessionManager(configDir);
@@ -119,7 +140,7 @@ async function setupContext() {
   const memoryManager = new MemoryManager(config.memory, configDir);
   await memoryManager.init();
 
-  return { config, policy, engine, sessionManager, steeringManager, memoryManager };
+  return { config, policy, engine, sessionManager, steeringManager, memoryManager, configDir, sources };
 }
 
 // R10: Refactored `ask` command to use Orchestrator
@@ -233,8 +254,9 @@ program
 /**
  * Shared daemon start logic — used by both `zora-agent start` and `zora-agent daemon start`.
  */
-async function startDaemon(opts: { open?: boolean }): Promise<void> {
-  const pidFile = getPidFilePath();
+async function startDaemon(opts: { open?: boolean; project?: string }): Promise<void> {
+  const projectDir = opts.project ?? process.cwd();
+  const pidFile = getPidFilePath(projectDir);
 
   // Check if already running
   if (fs.existsSync(pidFile)) {
@@ -263,6 +285,7 @@ async function startDaemon(opts: { open?: boolean }): Promise<void> {
   const child = fork(daemonScript, [], {
     detached: true,
     stdio: 'ignore',
+    env: { ...process.env, ZORA_PROJECT_DIR: projectDir },
   });
 
   if (child.pid) {
@@ -270,18 +293,11 @@ async function startDaemon(opts: { open?: boolean }): Promise<void> {
     child.unref();
     console.log(`Zora daemon started (PID: ${child.pid}).`);
 
-    // Read dashboard port from config, falling back to 8070
+    // Read dashboard port from resolved config, falling back to 8070
     let dashboardPort = 8070;
     try {
-      const configPath = path.join(os.homedir(), '.zora', 'config.toml');
-      if (fs.existsSync(configPath)) {
-        const { parse: parseTOML } = await import('smol-toml');
-        const raw = parseTOML(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
-        const steering = raw['steering'] as Record<string, unknown> | undefined;
-        if (steering?.['dashboard_port']) {
-          dashboardPort = steering['dashboard_port'] as number;
-        }
-      }
+      const { config: resolvedConfig } = await resolveConfig({ projectDir });
+      dashboardPort = resolvedConfig.steering.dashboard_port ?? 8070;
     } catch {
       // Use default port if config can't be read
     }
@@ -357,6 +373,7 @@ async function stopDaemon(): Promise<void> {
 program
   .command('start')
   .description('Start the agent daemon')
+  .option('--project <dir>', 'Project directory with .zora/ config')
   .option('--no-open', 'Do not auto-open the dashboard in browser')
   .action(async (opts) => startDaemon(opts));
 
@@ -374,6 +391,7 @@ const daemonCmd = program
 daemonCmd
   .command('start')
   .description('Start the agent daemon')
+  .option('--project <dir>', 'Project directory with .zora/ config')
   .option('--no-open', 'Do not auto-open the dashboard in browser')
   .action(async (opts) => startDaemon(opts));
 
@@ -393,13 +411,30 @@ daemonCmd
 program
   .command('doctor')
   .description('Check system dependencies and configuration')
-  .action(async () => {
+  .option('--project <dir>', 'Project directory to check')
+  .action(async (opts) => {
     const result = await runDoctorChecks();
 
     console.log('Zora Doctor Report:');
+    console.log('');
+    console.log('Dependencies:');
     console.log(`  Node.js: ${result.node.found ? '✓' : '✗'} ${result.node.version}`);
     console.log(`  Claude CLI: ${result.claude.found ? '✓' : '✗'}${result.claude.path ? ` (${result.claude.path})` : ''}`);
     console.log(`  Gemini CLI: ${result.gemini.found ? '✓' : '✗'}${result.gemini.path ? ` (${result.gemini.path})` : ''}`);
+
+    // Config resolution — show which files are loaded
+    console.log('');
+    console.log('Config sources:');
+    try {
+      const projectDir = opts.project ?? process.cwd();
+      const { sources } = await resolveConfig({ projectDir });
+      sources.forEach((src, i) => {
+        const label = src === 'defaults' ? 'defaults (built-in)' : src;
+        console.log(`  ${i + 1}. ${label}`);
+      });
+    } catch {
+      console.log('  (unable to resolve config — run `zora-agent init` first)');
+    }
 
     if (!result.node.found) {
       console.log('\n⚠️  Node.js 20+ is required. Please upgrade.');
@@ -419,6 +454,7 @@ registerEditCommands(program, configDir);
 registerTeamCommands(program, configDir);
 registerSteerCommands(program, configDir);
 registerSkillCommands(program);
+registerHookCommands(program, configDir);
 registerInitCommand(program);
 
 program.parse();
