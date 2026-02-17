@@ -58,8 +58,8 @@ export class ContextCompressor {
   private _crossSessionContext = '';
   private _crossSessionTokens = 0;
 
-  /** Pending background compressions */
-  private _pendingCompressions: Promise<void>[] = [];
+  /** Pending background compressions (tracked for synchronous settlement check) */
+  private _pendingCompressions: { promise: Promise<void>; settled: boolean }[] = [];
   private _totalCompressions = 0;
 
   /** Session ID for this compressor instance */
@@ -127,21 +127,8 @@ export class ContextCompressor {
    * If async_buffer is enabled, also manages pre-computation.
    */
   async tick(): Promise<void> {
-    // Clean up completed compressions using a Set to track settled promises
-    const stillPending = new Set<Promise<void>>();
-    for (const p of this._pendingCompressions) {
-      let settled = false;
-      Promise.resolve(p).then(
-        () => { settled = true; },
-        () => { settled = true; }
-      );
-      // Give microtask queue a chance to process settled promises
-      await Promise.resolve();
-      if (!settled) {
-        stillPending.add(p);
-      }
-    }
-    this._pendingCompressions = Array.from(stillPending);
+    // Clean up completed compressions
+    this._pendingCompressions = this._pendingCompressions.filter(t => !t.settled);
 
     // Safety valve: if working tier exceeds blockAfter, do synchronous compression
     const blockAfter = this._config.block_after_tokens ?? (this._config.working_tier_max_tokens * 2);
@@ -161,8 +148,7 @@ export class ContextCompressor {
         this._activatePrecomputed();
       } else {
         // Fire and forget background compression
-        const compressionPromise = this._compressChunk();
-        this._pendingCompressions.push(compressionPromise);
+        this._trackPromise(this._compressChunk());
       }
       return;
     }
@@ -192,7 +178,7 @@ export class ContextCompressor {
         workingTokens: this._workingTokens,
         sessionTokens: this._sessionTokens,
         crossSessionTokens: this._crossSessionTokens,
-        compressionsPending: this._pendingCompressions.length,
+        compressionsPending: this._pendingCompressions.filter(t => !t.settled).length,
         totalMessagesIngested: this._messageIndex,
         totalCompressions: this._totalCompressions,
       },
@@ -218,7 +204,7 @@ export class ContextCompressor {
     }
 
     // Wait for all pending compressions
-    await Promise.allSettled(this._pendingCompressions);
+    await Promise.allSettled(this._pendingCompressions.map(t => t.promise));
     this._pendingCompressions = [];
 
     log.info(
@@ -243,13 +229,20 @@ export class ContextCompressor {
       workingTokens: this._workingTokens,
       sessionTokens: this._sessionTokens,
       crossSessionTokens: this._crossSessionTokens,
-      compressionsPending: this._pendingCompressions.length,
+      compressionsPending: this._pendingCompressions.filter(t => !t.settled).length,
       totalMessagesIngested: this._messageIndex,
       totalCompressions: this._totalCompressions,
     };
   }
 
   // ── Private helpers ──────────────────────────────────────────────
+
+  /** Track a promise for settlement so tick() can clean it up synchronously. */
+  private _trackPromise(p: Promise<void>): void {
+    const tracked = { promise: p, settled: false };
+    p.finally(() => { tracked.settled = true; });
+    this._pendingCompressions.push(tracked);
+  }
 
   /**
    * Compress the oldest chunk of working messages into a session observation.
@@ -380,10 +373,12 @@ export class ContextCompressor {
     this._sessionObservations.push(block.observations);
     this._sessionTokens += block.estimatedTokens;
 
-    // Persist (fire and forget)
-    void this._store.append(block).catch(err => {
-      log.error({ err }, 'Failed to persist pre-computed observation block');
-    });
+    // Persist (tracked so flush() awaits it)
+    this._trackPromise(
+      this._store.append(block).catch(err => {
+        log.error({ err }, 'Failed to persist pre-computed observation block');
+      }) as Promise<void>,
+    );
 
     this._precomputedBlock = null;
     this._totalCompressions++;

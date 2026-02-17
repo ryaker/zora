@@ -156,7 +156,7 @@ export class ObservationStore {
    */
   static generateId(): string {
     const ts = Date.now();
-    const rand = Math.random().toString(36).substring(2, 8);
+    const rand = Math.random().toString(36).substring(2, 8).padEnd(6, '0');
     return `obs_${ts}_${rand}`;
   }
 
