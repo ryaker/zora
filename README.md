@@ -8,6 +8,8 @@ Unlike chatbots that just talk, Zora runs on your computer and takes action. It 
 
 ---
 
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
 ## Get Started in 3 Minutes
 
 ```bash
@@ -22,6 +24,8 @@ That's it. Three commands and Zora is working for you.
 
 ---
 
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
 ## How Does It Work?
 
 You type a request. Zora figures out what needs to happen, does it, and shows you the result.
@@ -31,6 +35,8 @@ Behind the scenes, Zora uses AI (Claude or Gemini) to understand your request, t
 **No API keys. No surprise bills.** Zora authenticates through your existing Claude Code or Gemini subscription. You're never charged per-token or billed to a credit card. It uses the same account you already pay for.
 
 ---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## What Can Zora Do?
 
@@ -45,6 +51,8 @@ Here are real things you can ask Zora right now:
 Zora remembers your preferences across sessions. Tell it once that you prefer TypeScript over JavaScript, and it remembers forever.
 
 ---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Is It Safe?
 
@@ -62,6 +70,8 @@ For the security-minded: Zora is hardened against the [OWASP LLM Top 10](https:/
 
 ---
 
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
 ## The Dashboard
 
 Zora includes a local web dashboard where you can watch tasks happen in real time, check on your AI providers, and send course-corrections to running jobs.
@@ -73,6 +83,8 @@ zora-agent start
 Your browser opens automatically to `http://localhost:8070`. First-time users see a guided welcome screen with ready-to-go task templates.
 
 ---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Multiple AI Brains, One Interface
 
@@ -86,6 +98,8 @@ If one provider is unavailable, Zora automatically fails over to the next one. Y
 
 ---
 
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
 ## Scheduled Tasks
 
 Set up recurring tasks that run automatically:
@@ -97,6 +111,16 @@ Set up recurring tasks that run automatically:
 See the [Routines Cookbook](ROUTINES_COOKBOOK.md) for templates.
 
 ---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
+## Architecture
+
+![Zora Architecture Diagram](docs/architecture.svg)
+
+---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Documentation
 
@@ -111,6 +135,8 @@ See the [Routines Cookbook](ROUTINES_COOKBOOK.md) for templates.
 | **[Routines Cookbook](ROUTINES_COOKBOOK.md)** | Templates for scheduled tasks |
 
 ---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
 ## Project Status
 
