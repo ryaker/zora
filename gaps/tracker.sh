@@ -5,6 +5,7 @@
 # Commands:
 #   board              Show full board (WSJF-ranked, dependency-aware)
 #   next               Show next actionable gaps (unblocked, highest WSJF)
+#   remaining          Show open gaps left to close
 #   status             Summary counts by status
 #   category [cat]     Show gaps for category (orchestration, error_handling, etc.)
 #   detail [ID]        Show full detail for a gap
@@ -318,57 +319,43 @@ for stream_name, ids in streams.items():
 "
     ;;
 
-  release)
+  remaining|release)
     python3 -c "
 import json
 with open('$JSON') as f: data = json.load(f)
 gaps = data['gaps']
-gate = [g for g in gaps if g.get('release_gate')]
-done = [g for g in gate if g.get('status') == 'completed']
-remaining = [g for g in gate if g.get('status') != 'completed']
+completed = [g for g in gaps if g.get('status') == 'completed']
+remaining = [g for g in gaps if g.get('status') != 'completed']
+completed_ids = {g['id'] for g in completed}
 
-total = len(gate)
-done_n = len(done)
-bar = '█' * done_n + '░' * (total - done_n)
+total = len(gaps)
+done_n = len(completed)
+remaining_n = len(remaining)
+bar = '█' * done_n + '░' * remaining_n
 
-print(f'RELEASE GATE: {done_n}/{total} [{bar}]')
+print(f'PROGRESS: {done_n}/{total} [{bar}]')
+print(f'{remaining_n} gaps remaining (improvements & polish)')
 print()
 
 if remaining:
-    # Sort by dependency order: unblocked first, then WSJF
-    completed_ids = {g['id'] for g in gaps if g.get('status') == 'completed'}
-    unblocked = []
-    blocked = []
+    # Group by category
+    by_cat = {}
     for g in remaining:
-        blockers = [b for b in g.get('blocked_by', []) if b not in completed_ids]
-        if blockers:
-            blocked.append((g, blockers))
-        else:
-            unblocked.append(g)
+        cat = g.get('category', 'unknown')
+        by_cat.setdefault(cat, []).append(g)
 
-    unblocked.sort(key=lambda g: g['wsjf']['score'], reverse=True)
-
-    if unblocked:
-        print('ACTIONABLE NOW:')
-        for g in unblocked:
+    for cat in sorted(by_cat):
+        print(f'{cat.upper()}:')
+        for g in sorted(by_cat[cat], key=lambda x: x['wsjf']['score'], reverse=True):
+            blockers = [b for b in g.get('blocked_by', []) if b not in completed_ids]
             st = g.get('status', 'open')
             marker = '→' if st == 'in_progress' else '○'
             claimed = f' [{g[\"claimed_by\"]}]' if g.get('claimed_by') else ''
-            print(f'  {marker} {g[\"id\"]:>10} WSJF={g[\"wsjf\"][\"score\"]:5.2f}  {g[\"title\"][:45]}{claimed}')
-
-    if blocked:
-        print(f'\nWAITING ON DEPENDENCIES:')
-        for g, blockers in blocked:
-            print(f'  ⏳ {g[\"id\"]:>10} WSJF={g[\"wsjf\"][\"score\"]:5.2f}  waiting: {\", \".join(blockers)}')
-
-if done:
-    print(f'\nCOMPLETED:')
-    for g in done:
-        print(f'  ✓ {g[\"id\"]:>10}  {g[\"title\"][:50]}')
-
-if not remaining:
-    print()
-    print('🚀 ALL RELEASE GATE GAPS CLOSED — READY TO SHIP')
+            suffix = f' (waiting: {\", \".join(blockers)})' if blockers else ''
+            print(f'  {marker} {g[\"id\"]:>10} WSJF={g[\"wsjf\"][\"score\"]:5.2f}  {g[\"title\"][:45]}{claimed}{suffix}')
+        print()
+else:
+    print('All gaps closed!')
 "
     ;;
 
@@ -380,7 +367,7 @@ if not remaining:
     echo "Commands:"
     echo "  board              Full board (WSJF-ranked)"
     echo "  next               Next actionable gaps (unblocked, highest WSJF)"
-    echo "  release            Release gate progress (12 must-close gaps)"
+    echo "  remaining          Open gaps left to close"
     echo "  status             Summary counts"
     echo "  category [cat]     Gaps for a category"
     echo "  detail [ID]        Full detail for a gap"

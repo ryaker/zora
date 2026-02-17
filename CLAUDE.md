@@ -8,9 +8,7 @@ Competitors: OpenClaw, memU. We're more secure, security-first approach.
 
 ## Current State
 
-**Health Score: 4/10.** Strong foundational components but critical orchestration gaps prevent production use. Core providers, storage, and utilities are robust. The orchestration layer that wires them together is incomplete.
-
-**46 gaps identified.** 12 must close before release. 34 improve quality post-release.
+**Health Score: 8/10.** All critical orchestration, error handling, type safety, and testing gaps are closed. Core system boots, providers fail over, events stream, dashboard renders chat UI. 10 remaining gaps are improvements (logging, docs, polish).
 
 ## The Tracker
 
@@ -18,7 +16,7 @@ Every implementation agent MUST use the tracker before and after work:
 
 ```bash
 # See what needs doing
-./gaps/tracker.sh release        # Release gate progress
+./gaps/tracker.sh remaining      # Open gaps left to close
 ./gaps/tracker.sh next           # Next actionable by WSJF score
 ./gaps/tracker.sh stream         # All streams with progress bars
 
@@ -51,26 +49,19 @@ Each gap has detailed remediation in modular files:
 
 **Appendices**: `gaps/APPENDIX_A.md` through `gaps/APPENDIX_E.md` (file impact index, dependency DAG, severity defs, type patterns, test roadmap)
 
-## Release Gate (12 gaps)
+## Remaining Gaps (10 improvements)
 
-These must ALL be completed before Zora is usable:
+All critical gaps closed. Remaining work is polish:
 
-| Gap | Why |
-|-----|-----|
-| ORCH-10 | System won't boot |
-| ORCH-01 | First provider error = dead |
-| ORCH-02 | No retry = fragile |
-| ORCH-03 | Tasks don't route |
-| ORCH-04 | Auth tokens expire silently |
-| ORCH-06 | Events lost on restart |
-| ORCH-07 | No context injection |
-| ORCH-09 | No heartbeat/liveness |
-| OPS-01 | `zora daemon start` is a stub |
-| ERR-01 | Audit logger silently fails |
-| ERR-02 | Gemini JSON parse silently fails |
-| ERR-05 | Event streams hang forever |
+| Category | Open | Examples |
+|----------|------|----------|
+| Documentation | 5 | ADRs, provider guide, config reference, troubleshooting |
+| Logging | 1 | Replace console.log with structured logger |
+| Operations | 1 | Structured logging format |
+| Security | 1 | TBD |
+| Memory | 2 | TBD |
 
-Run `./gaps/tracker.sh release` to see current progress.
+Run `./gaps/tracker.sh remaining` to see what's left.
 
 ## Implementation Workflow
 
@@ -144,6 +135,6 @@ Each implementation agent works in its own git worktree. One worktree per agent,
 - **Don't read the full gap analysis monolith.** Use the modular files in `gaps/`.
 - **Check the tracker** before starting work. Someone else may already be on it.
 - **Update the tracker** when you finish. Other agents depend on seeing what unblocked.
-- **Release gate first.** Don't work on TYPE/LOG/DOC gaps until the 12 release gate gaps are closed (unless you're a parallel stream with no overlap).
+- **Prioritize by WSJF.** Use `./gaps/tracker.sh next` to find the highest-value remaining work.
 - **Context management**: No file in `gaps/` exceeds 1000 lines. Read structure-first, then targeted sections.
 - **One worktree per agent.** Don't work in the main repo directory during parallel implementation.

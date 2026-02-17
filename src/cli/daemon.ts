@@ -10,7 +10,8 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { loadConfig } from '../config/loader.js';
+import { resolveConfig } from '../config/loader.js';
+import { resolvePolicy } from '../config/policy-loader.js';
 import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { DashboardServer } from '../dashboard/server.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
@@ -43,29 +44,37 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 }
 
 async function main() {
-  const configDir = path.join(os.homedir(), '.zora');
-  const configPath = path.join(configDir, 'config.toml');
-  const policyPath = path.join(configDir, 'policy.toml');
+  // Resolve project directory from env (set by CLI start command) or cwd
+  const projectDir = process.env.ZORA_PROJECT_DIR ?? process.cwd();
 
-  if (!fs.existsSync(configPath)) {
-    log.error('Config not found. Run `zora-agent init` first.');
+  // Three-layer config resolution: defaults → global → project
+  let config: ZoraConfig;
+  let sources: string[];
+  try {
+    const resolved = await resolveConfig({ projectDir });
+    config = resolved.config;
+    sources = resolved.sources;
+  } catch (err) {
+    log.error({ err }, 'Config resolution failed. Run `zora-agent init` first.');
     process.exit(1);
   }
+  log.info({ sources }, 'Config resolved');
 
-  const config = await loadConfig(configPath);
-
-  // Load policy from TOML using centralized loader
-  const { loadPolicy } = await import('../config/policy-loader.js');
+  // Two-layer policy resolution: global → project
   let policy: ZoraPolicy;
   try {
-    policy = await loadPolicy(policyPath);
+    policy = await resolvePolicy({ projectDir });
   } catch {
     log.error('Policy not found at ~/.zora/policy.toml. Run `zora-agent init` first.');
     process.exit(1);
   }
 
+  // Determine baseDir: project .zora/ if it exists, else global
+  const projectZora = path.join(projectDir, '.zora');
+  const configDir = fs.existsSync(projectZora) ? projectZora : path.join(os.homedir(), '.zora');
+
   const providers = createProviders(config);
-  const orchestrator = new Orchestrator({ config, policy, providers });
+  const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });
   await orchestrator.boot();
 
   // Start dashboard server

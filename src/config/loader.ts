@@ -6,6 +6,9 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { parse as parseTOML } from 'smol-toml';
 import type { ZoraConfig, ProviderConfig, McpServerEntry, HookEventName } from '../types.js';
 import { createLogger } from '../utils/logger.js';
@@ -27,7 +30,7 @@ export class ConfigError extends Error {
  * Deep merge two objects. Arrays are replaced, not merged.
  * Source values override target values.
  */
-function deepMerge<T extends Record<string, unknown>>(
+export function deepMerge<T extends Record<string, unknown>>(
   target: T,
   source: Record<string, unknown>,
 ): T {
@@ -150,6 +153,58 @@ export function loadConfigFromString(toml: string): ZoraConfig {
   }
 
   return config;
+}
+
+/**
+ * Resolve config via three-layer merge: defaults → global → project.
+ *
+ * Resolution order:
+ *   1. Built-in defaults (DEFAULT_CONFIG)
+ *   2. ~/.zora/config.toml (global user config)
+ *   3. <projectDir>/.zora/config.toml (project-local overrides)
+ *
+ * Arrays (providers, hooks) are replaced, not merged — a project that
+ * defines [[providers]] gets ONLY those providers.
+ */
+export async function resolveConfig(options?: {
+  cwd?: string;
+  projectDir?: string;
+}): Promise<{ config: ZoraConfig; sources: string[] }> {
+  const globalPath = path.join(os.homedir(), '.zora', 'config.toml');
+  const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
+  const projectPath = path.join(projectBase, '.zora', 'config.toml');
+
+  // Layer 1: defaults
+  let merged = { ...DEFAULT_CONFIG } as unknown as Record<string, unknown>;
+  const sources: string[] = ['defaults'];
+
+  // Layer 2: global
+  if (fs.existsSync(globalPath)) {
+    const globalRaw = parseTOML(await readFile(globalPath, 'utf-8')) as Record<string, unknown>;
+    merged = deepMerge(merged, globalRaw);
+    sources.push(globalPath);
+  }
+
+  // Layer 3: project (if exists and different from global)
+  if (
+    fs.existsSync(projectPath) &&
+    path.resolve(projectPath) !== path.resolve(globalPath)
+  ) {
+    const projectRaw = parseTOML(await readFile(projectPath, 'utf-8')) as Record<string, unknown>;
+    merged = deepMerge(merged, projectRaw);
+    sources.push(projectPath);
+  }
+
+  const config = parseConfig(merged);
+  const errors = validateConfig(config);
+  if (errors.length > 0) {
+    throw new ConfigError(
+      `Invalid configuration (${errors.length} error${errors.length > 1 ? 's' : ''})`,
+      errors,
+    );
+  }
+
+  return { config, sources };
 }
 
 /**

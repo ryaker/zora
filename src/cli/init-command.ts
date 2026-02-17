@@ -480,17 +480,126 @@ To expand permissions later:
 }
 
 /**
+ * Generate a minimal project config.toml.
+ * Only includes agent.name (from dir name) and dashboard_port.
+ */
+function generateProjectConfigToml(dirName: string, dashboardPort: number): string {
+  return `# Zora Project Configuration — overrides ~/.zora/config.toml
+# Only specify what differs from global. Everything else inherits.
+
+[agent]
+name = "${dirName}"
+
+[steering]
+dashboard_port = ${dashboardPort}
+`;
+}
+
+/**
+ * Generate a minimal project policy.toml.
+ * Scopes filesystem to the project directory.
+ */
+function generateProjectPolicyToml(projectDir: string): string {
+  const tildeDir = projectDir.replace(os.homedir(), '~');
+  return `# Zora Project Policy — overrides ~/.zora/policy.toml
+# Only specify what differs from global. Everything else inherits.
+
+[filesystem]
+allowed_paths = ["${tildeDir}"]
+`;
+}
+
+/**
+ * Run project-level init: creates .zora/ in the current directory
+ * with minimal overrides.
+ */
+async function initProject(opts: { force?: boolean }): Promise<void> {
+  const projectDir = process.cwd();
+  const zoraDir = path.join(projectDir, '.zora');
+  const configPath = path.join(zoraDir, 'config.toml');
+  const policyPath = path.join(zoraDir, 'policy.toml');
+
+  // Check for existing global config (project init requires global init first)
+  const globalConfig = path.join(os.homedir(), '.zora', 'config.toml');
+  if (!fs.existsSync(globalConfig)) {
+    log.error('Global config not found. Run `zora-agent init` first, then `zora-agent init --project`.');
+    process.exit(1);
+  }
+
+  // Guard: refuse to overwrite unless --force
+  if (!opts.force && fs.existsSync(configPath)) {
+    log.error({ dir: zoraDir }, 'Project .zora/ already exists. Use --force to overwrite.');
+    process.exit(1);
+  }
+
+  const dirName = path.basename(projectDir);
+
+  // Auto-assign a dashboard port offset from the global default (8070)
+  // Use a simple hash of the dir name to pick a port in 8071-8099 range
+  let portOffset = 1;
+  for (const ch of dirName) {
+    portOffset = ((portOffset * 31) + ch.charCodeAt(0)) % 29; // 0-28
+  }
+  const dashboardPort = 8071 + portOffset;
+
+  const configToml = generateProjectConfigToml(dirName, dashboardPort);
+  const policyToml = generateProjectPolicyToml(projectDir);
+
+  // Validate generated TOML
+  try {
+    parseTOML(configToml);
+    parseTOML(policyToml);
+  } catch (e) {
+    log.error({ err: e }, 'Generated TOML is invalid');
+    process.exit(1);
+  }
+
+  // Create .zora/ directory structure
+  if (!fs.existsSync(zoraDir)) {
+    fs.mkdirSync(zoraDir, { recursive: true });
+  }
+  for (const sub of ['state', 'sessions', 'memory', 'memory/daily', 'memory/items', 'memory/categories']) {
+    const dir = path.join(zoraDir, sub);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  fs.writeFileSync(configPath, configToml, 'utf-8');
+  fs.writeFileSync(policyPath, policyToml, 'utf-8');
+
+  clack.intro('Project initialized');
+  clack.note(
+    [
+      `Created: ${zoraDir}/`,
+      `  config.toml  (agent: ${dirName}, port: ${dashboardPort})`,
+      `  policy.toml  (filesystem scoped to ${projectDir})`,
+      '',
+      'Edit these to override global ~/.zora/ settings.',
+      'Start with: zora-agent start',
+    ].join('\n'),
+    'Project .zora/',
+  );
+  clack.outro('Project config ready. Global settings inherited for everything else.');
+}
+
+/**
  * Register the `zora-agent init` command on the commander program.
  */
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
     .description('Set up Zora — generate config, policy, and directory structure')
+    .option('--project', 'Initialize project-level .zora/ in the current directory')
     .option('--preset <preset>', 'Security preset: locked, safe, balanced, or power')
     .option('--dev-path <path>', 'Path to your code directory')
     .option('-y, --yes', 'Accept all defaults (non-interactive)')
     .option('--force', 'Overwrite existing config files')
     .action(async (opts) => {
-      await runWizard(opts);
+      if (opts.project) {
+        await initProject(opts);
+      } else {
+        await runWizard(opts);
+      }
     });
 }
