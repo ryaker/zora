@@ -121,12 +121,22 @@ export class ObservationStore {
     }
 
     const sessionFiles = files
-      .filter(f => f.endsWith('.jsonl') && f !== CROSS_SESSION_FILE)
-      .sort();
+      .filter(f => f.endsWith('.jsonl') && f !== CROSS_SESSION_FILE);
 
-    if (sessionFiles.length <= keepLast) return 0;
+    // Sort by file modification time (newest last) to avoid lexicographic ordering issues
+    const fileStats = await Promise.all(
+      sessionFiles.map(async f => ({
+        name: f,
+        mtime: (await fs.stat(path.join(this._baseDir, f))).mtime
+      }))
+    );
+    const sortedFiles = fileStats
+      .sort((a, b) => a.mtime.getTime() - b.mtime.getTime())
+      .map(f => f.name);
 
-    const toRemove = sessionFiles.slice(0, sessionFiles.length - keepLast);
+    if (sortedFiles.length <= keepLast) return 0;
+
+    const toRemove = sortedFiles.slice(0, sortedFiles.length - keepLast);
     let removed = 0;
     for (const file of toRemove) {
       try {

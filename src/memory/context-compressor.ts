@@ -69,6 +69,8 @@ export class ContextCompressor {
   private _precomputedBlock: ObservationBlock | null = null;
   private _precomputePromise: Promise<void> | null = null;
   private _precomputeThreshold: number;
+  /** Track session tier size when precompute started to detect staleness */
+  private _precomputeSessionObsCount = 0;
 
   constructor(
     config: CompressionConfig,
@@ -125,15 +127,21 @@ export class ContextCompressor {
    * If async_buffer is enabled, also manages pre-computation.
    */
   async tick(): Promise<void> {
-    // Clean up completed compressions
-    this._pendingCompressions = this._pendingCompressions.filter(
-      p => {
-        // Check if the promise is still pending by racing with a resolved promise
-        let settled = false;
-        void p.then(() => { settled = true; }, () => { settled = true; });
-        return !settled;
-      },
-    );
+    // Clean up completed compressions using a Set to track settled promises
+    const stillPending = new Set<Promise<void>>();
+    for (const p of this._pendingCompressions) {
+      let settled = false;
+      Promise.resolve(p).then(
+        () => { settled = true; },
+        () => { settled = true; }
+      );
+      // Give microtask queue a chance to process settled promises
+      await Promise.resolve();
+      if (!settled) {
+        stillPending.add(p);
+      }
+    }
+    this._pendingCompressions = Array.from(stillPending);
 
     // Safety valve: if working tier exceeds blockAfter, do synchronous compression
     const blockAfter = this._config.block_after_tokens ?? (this._config.working_tier_max_tokens * 2);
@@ -316,6 +324,9 @@ export class ContextCompressor {
     const startIndex = this._messageIndex - this._workingMessages.length;
     const existingObs = this._sessionObservations.join('\n\n');
 
+    // Snapshot session tier size to detect race condition with _compressChunk
+    this._precomputeSessionObsCount = this._sessionObservations.length;
+
     this._precomputePromise = (async () => {
       try {
         this._precomputedBlock = await this._observer.compress(
@@ -341,6 +352,19 @@ export class ContextCompressor {
   private _activatePrecomputed(): void {
     const block = this._precomputedBlock;
     if (!block) return;
+
+    // Check for staleness: if session tier changed since precompute started, discard
+    if (this._sessionObservations.length !== this._precomputeSessionObsCount) {
+      log.warn(
+        {
+          expectedCount: this._precomputeSessionObsCount,
+          actualCount: this._sessionObservations.length,
+        },
+        'Pre-computed block is stale (session tier changed), discarding',
+      );
+      this._precomputedBlock = null;
+      return;
+    }
 
     const [start, end] = block.sourceMessageRange;
     const chunkSize = end - start;

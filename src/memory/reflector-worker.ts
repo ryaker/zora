@@ -210,9 +210,16 @@ export class ReflectorWorker {
       condensed = condensedMatch[1].trim();
     } else {
       // Fallback: if no CONDENSED marker, use the part after FACTS
-      const afterFacts = response.replace(/FACTS:.*?\]/s, '').trim();
-      if (afterFacts) {
-        condensed = afterFacts;
+      // Use proper bracket matching to avoid cutting off inside JSON arrays
+      const factsMatch = response.match(/FACTS:\s*(\[[\s\S]*?\](?:\s*,\s*\[[\s\S]*?\])*)/);
+      if (factsMatch) {
+        const afterFacts = response.substring(factsMatch.index! + factsMatch[0].length).trim();
+        if (afterFacts) {
+          condensed = afterFacts;
+        }
+      } else {
+        // No FACTS found at all, use entire response as condensed
+        condensed = response.trim();
       }
     }
 

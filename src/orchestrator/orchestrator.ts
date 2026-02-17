@@ -634,13 +634,13 @@ export class Orchestrator {
       // Always close the buffered writer — flushes remaining events and stops the timer.
       // This runs on all exit paths: success, throw, and failover returns.
       await bufferedWriter.close();
-    }
 
-    // Flush context compressor — persist any remaining observations
-    if (compressor) {
-      await compressor.flush().catch(err => {
-        log.warn({ err, jobId: taskContext.jobId }, 'Context compressor flush failed');
-      });
+      // Flush context compressor — persist any remaining observations
+      if (compressor) {
+        await compressor.flush().catch(err => {
+          log.warn({ err, jobId: taskContext.jobId }, 'Context compressor flush failed');
+        });
+      }
     }
 
     // Record completion in daily notes
