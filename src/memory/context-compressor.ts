@@ -295,7 +295,7 @@ export class ContextCompressor {
       }
     } catch (err) {
       // On failure, put the chunk back at the front of working messages
-      this._workingMessages.unshift(...chunk);
+      this._workingMessages = chunk.concat(this._workingMessages);
       this._workingTokens = 0;
       for (const msg of this._workingMessages) {
         this._workingTokens += estimateEventTokens(msg);
@@ -362,26 +362,32 @@ export class ContextCompressor {
     const [start, end] = block.sourceMessageRange;
     const chunkSize = end - start;
 
-    // Remove the pre-computed messages from working tier
-    this._workingMessages.splice(0, Math.min(chunkSize, this._workingMessages.length));
+    // Remove the pre-computed messages from working tier (capture for rollback)
+    const splicedMessages = this._workingMessages.splice(0, Math.min(chunkSize, this._workingMessages.length));
     this._workingTokens = 0;
     for (const msg of this._workingMessages) {
       this._workingTokens += estimateEventTokens(msg);
     }
 
-    // Append to session tier
-    this._sessionObservations.push(block.observations);
-    this._sessionTokens += block.estimatedTokens;
-
-    // Persist (tracked so flush() awaits it)
+    // Persist first, then update in-memory state (keeps disk and memory consistent)
     this._trackPromise(
-      this._store.append(block).catch(err => {
-        log.error({ err }, 'Failed to persist pre-computed observation block');
-      }) as Promise<void>,
+      this._store.append(block).then(() => {
+        // Only update in-memory state after successful persist
+        this._sessionObservations.push(block.observations);
+        this._sessionTokens += block.estimatedTokens;
+        this._totalCompressions++;
+      }).catch(err => {
+        // Persist failed — roll back the working tier splice so messages aren't lost
+        log.error({ err }, 'Failed to persist pre-computed observation block, rolling back');
+        this._workingMessages = splicedMessages.concat(this._workingMessages);
+        this._workingTokens = 0;
+        for (const msg of this._workingMessages) {
+          this._workingTokens += estimateEventTokens(msg);
+        }
+      }),
     );
 
     this._precomputedBlock = null;
-    this._totalCompressions++;
 
     log.info(
       {
