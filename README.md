@@ -142,7 +142,7 @@ See the [Routines Cookbook](ROUTINES_COOKBOOK.md) for templates.
 
 ## Project Status
 
-Zora is in active development (v0.9.5). The core features work reliably today.
+Zora is in active development (v0.9.6). The core features work reliably today.
 
 | Feature | Status |
 |---------|--------|

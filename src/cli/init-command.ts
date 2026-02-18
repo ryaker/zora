@@ -103,7 +103,7 @@ capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
 auth_method = "mac_session"
-model = "claude-sonnet-4-5"
+model = "claude-sonnet-4-6"
 max_turns = 200`);
     rank++;
   }

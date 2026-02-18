@@ -267,7 +267,7 @@ export class ClaudeProvider implements LLMProvider {
     // Build SDK options
     const sdkOptions: Record<string, unknown> = {
       abortController,
-      model: this._config.model ?? 'claude-sonnet-4-5',
+      model: this._config.model ?? 'claude-sonnet-4-6',
       cwd: this._cwd,
       permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,

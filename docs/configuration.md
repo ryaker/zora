@@ -50,7 +50,7 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
 | `enabled` | boolean | yes | Whether this provider is active. |
-| `model` | string | no | Model identifier (e.g. `"claude-sonnet-4-5"`, `"gemini-2.5-flash"`). Provider-specific default if omitted. |
+| `model` | string | no | Model identifier (e.g. `"claude-sonnet-4-6"`, `"gemini-2.5-flash"`). Provider-specific default if omitted. |
 | `max_turns` | integer | no | Maximum conversation turns per task. Default: `200`. |
 | `max_concurrent_jobs` | integer | no | Concurrency limit for this provider. |
 
@@ -85,7 +85,7 @@ rank = 1
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
-model = "claude-sonnet-4-5"
+model = "claude-sonnet-4-6"
 auth_method = "mac_session"
 
 [[providers]]
