@@ -9,6 +9,7 @@
  */
 
 import pino from 'pino';
+import { createRequire } from 'node:module';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -41,16 +42,23 @@ export function initLogger(options: LoggerOptions = {}, force = false): pino.Log
   const level = options.level ?? (process.env.ZORA_LOG_LEVEL as LogLevel) ?? 'info';
   const pretty = options.pretty ?? shouldPrettyPrint();
 
-  const transport = pretty
-    ? {
-        target: 'pino-pretty',
+  let transport: { target: string; options: Record<string, unknown> } | undefined;
+  if (pretty) {
+    try {
+      const _require = createRequire(import.meta.url);
+      const prettyPath = _require.resolve('pino-pretty');
+      transport = {
+        target: prettyPath,
         options: {
           colorize: true,
           translateTime: 'SYS:HH:MM:ss.l',
           ignore: 'pid,hostname',
         },
-      }
-    : undefined;
+      };
+    } catch {
+      // pino-pretty not available — fall back to JSON
+    }
+  }
 
   _rootLogger = pino({
     level,
