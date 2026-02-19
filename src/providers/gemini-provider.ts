@@ -39,6 +39,8 @@ export class GeminiProvider implements LLMProvider {
   private readonly _config: ProviderConfig;
   private readonly _cliPath: string;
   private _lastAuthStatus: AuthStatus | null = null;
+  private _lastAuthCheckAt: number = 0;
+  private static readonly AUTH_CACHE_TTL_MS = 60_000; // re-check every 60s
   private _requestCount = 0;
   private _lastRequestAt: Date | null = null;
 
@@ -74,7 +76,10 @@ export class GeminiProvider implements LLMProvider {
    * the user is authenticated, not just that the CLI binary exists.
    */
   async checkAuth(): Promise<AuthStatus> {
-    if (this._lastAuthStatus?.valid) return this._lastAuthStatus;
+    const now = Date.now();
+    if (this._lastAuthStatus?.valid && (now - this._lastAuthCheckAt) < GeminiProvider.AUTH_CACHE_TTL_MS) {
+      return this._lastAuthStatus;
+    }
 
     return new Promise((resolve) => {
       let resolved = false;
@@ -97,6 +102,7 @@ export class GeminiProvider implements LLMProvider {
           resolved = true;
           const status = { valid: false, expiresAt: null, canAutoRefresh: false, requiresInteraction: true };
           this._lastAuthStatus = status;
+          this._lastAuthCheckAt = Date.now();
           resolve(status);
         });
         fallback.on('close', (code) => {
@@ -105,6 +111,7 @@ export class GeminiProvider implements LLMProvider {
           const valid = code === 0;
           const status = { valid, expiresAt: null, canAutoRefresh: true, requiresInteraction: !valid };
           this._lastAuthStatus = status;
+          this._lastAuthCheckAt = Date.now();
           resolve(status);
         });
       });
@@ -121,6 +128,7 @@ export class GeminiProvider implements LLMProvider {
           requiresInteraction: !isAuthenticated
         };
         this._lastAuthStatus = status;
+        this._lastAuthCheckAt = Date.now();
         resolve(status);
       });
     });

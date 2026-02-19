@@ -188,19 +188,39 @@ describe('GeminiProvider checkAuth()', () => {
   });
 
   describe('caching behavior', () => {
-    it('caches valid auth status and does not re-check', async () => {
+    it('caches valid auth status and does not re-check within TTL', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
       mockSpawn('Authenticated', 0);
       const provider = new GeminiProvider({ config: makeConfig() });
 
       const auth1 = await provider.checkAuth();
       expect(auth1.valid).toBe(true);
 
-      // Clear mock to verify no second spawn call
+      // Within TTL: second call should use cache
       vi.mocked(spawn).mockClear();
-
       const auth2 = await provider.checkAuth();
       expect(auth2.valid).toBe(true);
-      expect(spawn).not.toHaveBeenCalled(); // Should use cached result
+      expect(spawn).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    it('re-checks auth after TTL expires', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      mockSpawn('Authenticated', 0);
+      const provider = new GeminiProvider({ config: makeConfig() });
+
+      await provider.checkAuth();
+
+      // Advance past the 60s TTL
+      vi.advanceTimersByTime(61_000);
+      vi.mocked(spawn).mockClear();
+      mockSpawn('Authenticated', 0);
+
+      await provider.checkAuth();
+      expect(spawn).toHaveBeenCalledTimes(1); // Should re-check
+
+      vi.useRealTimers();
     });
   });
 

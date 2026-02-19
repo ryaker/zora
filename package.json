@@ -1,6 +1,6 @@
 {
   "name": "zora-agent",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "description": "Long-running autonomous personal AI agent — multi-provider, capability-routed, memory-enriched",
   "type": "module",
   "main": "dist/index.js",
