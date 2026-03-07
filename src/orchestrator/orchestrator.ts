@@ -337,6 +337,10 @@ export class Orchestrator {
     ]));
     this._toolHookRunner.register(SecretRedactHook);
 
+    // Eagerly initialize TLCI so CostTracker is available immediately after boot()
+    // (daemon.ts reads getTLCICostTracker() synchronously when constructing DashboardServer)
+    await this._ensureTLCI();
+
     this._booted = true;
   }
 
@@ -1057,7 +1061,9 @@ export class Orchestrator {
       this._planCache,
       { autonomyLevel: 'full' },
 
-      // Tier 1: real code tools — no LLM call, no token cost
+      // Tier 1: real code tools — no LLM call, no token cost.
+      // Pass a policy validator derived from ZoraPolicy so fileOp respects the same
+      // allowed_paths/denied_paths as the main execution surface.
       async (step) => {
         const classifiedStep = step as WorkflowStep & { suggestedCodeTool?: string };
         const result = await runCodeToolStep({
@@ -1065,6 +1071,15 @@ export class Orchestrator {
           suggestedCodeTool: classifiedStep.suggestedCodeTool,
           context: step.context,
           description: step.description,
+          policyValidator: (normalizedPath) => {
+            const fs = this._policy.filesystem;
+            const denied = fs.denied_paths?.some(p => normalizedPath.startsWith(p));
+            if (denied) return { allowed: false, reason: 'in denied_paths' };
+            const allowed = !fs.allowed_paths?.length ||
+              fs.allowed_paths.some(p => normalizedPath.startsWith(p.replace(/^~/, os.homedir())));
+            if (!allowed) return { allowed: false, reason: 'not in allowed_paths' };
+            return { allowed: true };
+          },
         });
         if (!result.success) {
           log.warn({ stepId: step.id, tool: result.tool, error: result.error }, 'code-tool step failed');

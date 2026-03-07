@@ -84,6 +84,7 @@ async function main() {
     steeringManager: orchestrator.steeringManager,
     authMonitor: orchestrator.authMonitor,
     costTracker: orchestrator.getTLCICostTracker?.(),
+    policy,
     submitTask: async (prompt: string) => {
       // Generate jobId immediately and kick off task in background (don't await)
       const jobId = `job_${crypto.randomUUID()}`;

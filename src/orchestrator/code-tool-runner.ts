@@ -194,43 +194,51 @@ function runCollectionOp(ctx: StepContext): CodeToolResult {
   }
 }
 
-async function runFileOp(ctx: StepContext): Promise<CodeToolResult> {
+/** Path validator injected from PolicyEngine — undefined means use built-in defaults. */
+export type PathValidator = (normalizedPath: string) => { allowed: boolean; reason?: string };
+
+async function runFileOp(ctx: StepContext, policyValidator?: PathValidator): Promise<CodeToolResult> {
   const filePath = ctx['path'] as string | undefined;
   if (!filePath) return { tool: 'fileOp', success: false, error: 'context.path required' };
 
-  const expanded = filePath.replace(/^~/, os.homedir() ??'');
+  const expanded = filePath.replace(/^~/, os.homedir());
   const normalized = path.resolve(expanded);
 
   if (normalized.includes('\0')) {
     return { tool: 'fileOp', success: false, error: 'Path traversal attempt blocked' };
   }
 
-  // Restrict to safe directories — block sensitive paths first, then require an allowed prefix
-  const home = os.homedir() ??os.tmpdir();
-  const ALLOWED_PREFIXES = [
-    path.join(home, '.zora'),
-    path.join(home, 'Dev'),
-    path.join(home, 'Documents'),
-    '/tmp',
-    '/private/tmp',   // macOS resolves /tmp → /private/tmp
-    os.tmpdir(),      // macOS: /var/folders/... or /tmp on Linux
-    process.cwd(),
-  ];
-  const BLOCKED_PREFIXES = [
-    path.join(home, '.ssh'),
-    path.join(home, '.gnupg'),
-    path.join(home, '.aws'),
-    path.join(home, '.env'),
-    '/etc',
-    '/sys',
-    '/proc',
-  ];
-
-  if (BLOCKED_PREFIXES.some(p => normalized.startsWith(p))) {
-    return { tool: 'fileOp', success: false, error: `Path "${normalized}" is outside allowed workspace` };
-  }
-  if (!ALLOWED_PREFIXES.some(p => normalized.startsWith(p))) {
-    return { tool: 'fileOp', success: false, error: `Path "${normalized}" is outside allowed workspace` };
+  // If a PolicyEngine validator was injected, use it — it reflects the user's actual policy.
+  if (policyValidator) {
+    const check = policyValidator(normalized);
+    if (!check.allowed) {
+      return { tool: 'fileOp', success: false, error: `Path "${normalized}" denied by policy${check.reason ? ': ' + check.reason : ''}` };
+    }
+  } else {
+    // Fallback built-in defaults when no policy is injected
+    const home = os.homedir();
+    const ALLOWED_PREFIXES = [
+      path.join(home, '.zora'),
+      path.join(home, 'Dev'),
+      path.join(home, 'Documents'),
+      '/tmp',
+      '/private/tmp',
+      os.tmpdir(),
+      process.cwd(),
+    ];
+    const BLOCKED_PREFIXES = [
+      path.join(home, '.ssh'),
+      path.join(home, '.gnupg'),
+      path.join(home, '.aws'),
+      path.join(home, '.env'),
+      '/etc', '/sys', '/proc',
+    ];
+    if (BLOCKED_PREFIXES.some(p => normalized.startsWith(p))) {
+      return { tool: 'fileOp', success: false, error: `Path "${normalized}" is in a blocked directory` };
+    }
+    if (!ALLOWED_PREFIXES.some(p => normalized.startsWith(p))) {
+      return { tool: 'fileOp', success: false, error: `Path "${normalized}" is outside the allowed workspace` };
+    }
   }
 
   const operation = (ctx['operation'] as string | undefined) ?? 'read';
@@ -323,8 +331,15 @@ async function runDbQuery(ctx: StepContext): Promise<CodeToolResult> {
       return { tool: 'dbQuery', success: false, error: String(err) };
     }
   }
-  log.info({ query }, 'tlci dbQuery step (stub — provide context.execute for real queries)');
-  return { tool: 'dbQuery', success: true, data: { rows: [], stub: true } };
+  // No executor injected — fail loudly rather than silently faking database work.
+  // The classifier routes "query database" steps here; without an executor they must not
+  // pretend to succeed. Callers must provide context.execute to use this tool.
+  log.warn({ query }, 'dbQuery step has no executor — returning error (not silently stubbing)');
+  return {
+    tool: 'dbQuery',
+    success: false,
+    error: 'dbQuery requires context.execute (a function returning Promise<unknown>) — no stub execution. Provide an executor or reclassify this step.',
+  };
 }
 
 // ─── Dispatch table ───────────────────────────────────────────────────────────
@@ -352,8 +367,11 @@ const ASYNC_TOOLS: Record<string, (ctx: StepContext) => Promise<CodeToolResult>>
  */
 export async function runCodeTool(
   tool: string,
-  context: StepContext = {}
+  context: StepContext = {},
+  policyValidator?: PathValidator,
 ): Promise<CodeToolResult> {
+  // fileOp is the only tool that needs path policy checks — pass validator through
+  if (tool === 'fileOp') return runFileOp(context, policyValidator);
   const asyncFn = ASYNC_TOOLS[tool];
   if (asyncFn) return asyncFn(context);
 
@@ -374,9 +392,10 @@ export async function runCodeToolStep(step: {
   suggestedCodeTool?: string;
   context?: Record<string, unknown>;
   description: string;
+  policyValidator?: PathValidator;
 }): Promise<CodeToolResult> {
   const tool = step.suggestedCodeTool ?? 'pass-through';
   const ctx = step.context ?? {};
   log.debug({ stepId: step.id, tool }, 'running code tool');
-  return runCodeTool(tool, ctx);
+  return runCodeTool(tool, ctx, step.policyValidator);
 }

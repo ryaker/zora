@@ -13,6 +13,13 @@ import SecuritySettings from './components/SecuritySettings';
 const ZORA_VERSION = 'v0.9.5';
 const MAX_MESSAGES = 200;
 const ONBOARDING_KEY = 'zora_onboarding_complete';
+
+// Authenticate all axios calls and EventSource using the token injected by the server.
+// window.__ZORA_TOKEN__ is set by server.ts in <script> when ZORA_DASHBOARD_TOKEN is configured.
+const _zoraToken = (window as { __ZORA_TOKEN__?: string }).__ZORA_TOKEN__;
+if (_zoraToken) {
+  axios.defaults.headers.common['Authorization'] = `Bearer ${_zoraToken}`;
+}
 let messageIdCounter = 0;
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -321,7 +328,11 @@ const App: React.FC = () => {
       }
     };
 
-    const es = new EventSource('/api/events');
+    // EventSource cannot set headers — pass token as query param; server promotes it to header
+    const sseUrl = _zoraToken
+      ? `/api/events?token=${encodeURIComponent(_zoraToken)}`
+      : '/api/events';
+    const es = new EventSource(sseUrl);
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
