@@ -89,9 +89,11 @@ export class DashboardServer {
     // When no dashboardToken is set, auth is skipped entirely — this covers
     // the localhost-only use case where the dashboard is not exposed externally.
     if (this._authToken) {
-      // Accept token from Authorization: Bearer header OR ?token= query param.
-      // The ?token= fallback is required for browser EventSource which cannot set headers.
-      this._app.use('/api', (req, _res, next) => {
+      // For SSE only: promote ?token= to Authorization header.
+      // EventSource cannot send custom headers; ?token= is the standard workaround.
+      // All other /api/* routes must use Authorization: Bearer — never a URL token —
+      // to avoid credentials appearing in server logs and referrer headers.
+      this._app.get('/api/events', (req, _res, next) => {
         if (!req.headers.authorization && typeof req.query['token'] === 'string') {
           req.headers.authorization = `Bearer ${req.query['token']}`;
         }
@@ -484,14 +486,20 @@ export class DashboardServer {
     try {
       let html = readFileSync(this._indexHtmlPath, 'utf-8');
       if (this._authToken) {
-        html = html.replace(
-          '</head>',
-          `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script></head>`
-        );
+        const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
+        // Case-insensitive replace so minified/transformed HTML still works
+        const patched = html.replace(/<\/head>/i, `${script}</head>`);
+        if (patched === html) {
+          // </head> not found — prepend script to body as fallback
+          html = html.replace(/<body/i, `${script}<body`) || html;
+        } else {
+          html = patched;
+        }
       }
-      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(html);
-    } catch {
+    } catch (err) {
+      log.error({ err }, 'Failed to serve index.html — falling back to sendFile');
       res.sendFile(this._indexHtmlPath);
     }
   }

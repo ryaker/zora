@@ -1072,12 +1072,19 @@ export class Orchestrator {
           context: step.context,
           description: step.description,
           policyValidator: (normalizedPath) => {
-            const fs = this._policy.filesystem;
-            const denied = fs.denied_paths?.some(p => normalizedPath.startsWith(p));
-            if (denied) return { allowed: false, reason: 'in denied_paths' };
-            const allowed = !fs.allowed_paths?.length ||
-              fs.allowed_paths.some(p => normalizedPath.startsWith(p.replace(/^~/, os.homedir())));
-            if (!allowed) return { allowed: false, reason: 'not in allowed_paths' };
+            const fsPol = this._policy.filesystem;
+            // Segment-aware containment: expand ~ and require path.sep boundary
+            // so /etc doesn't match /etc-foo and ~/.ssh doesn't miss due to unexpanded ~
+            const inside = (root: string) => {
+              const expanded = path.resolve(root.replace(/^~/, os.homedir()));
+              return normalizedPath === expanded || normalizedPath.startsWith(expanded + path.sep);
+            };
+            if (fsPol.denied_paths?.some(inside)) {
+              return { allowed: false, reason: 'path in denied_paths' };
+            }
+            if (fsPol.allowed_paths?.length && !fsPol.allowed_paths.some(inside)) {
+              return { allowed: false, reason: 'path not in allowed_paths' };
+            }
             return { allowed: true };
           },
         });

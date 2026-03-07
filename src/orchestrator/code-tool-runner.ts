@@ -23,6 +23,17 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('code-tool-runner');
 
+/**
+ * Segment-aware path containment check.
+ * Prevents /tmp matching /tmp-evil by requiring a path separator after the root.
+ * Expands leading ~ to os.homedir() before resolving.
+ */
+function isInsideDir(normalizedPath: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root.replace(/^~/, os.homedir()));
+  return normalizedPath === resolvedRoot ||
+    normalizedPath.startsWith(resolvedRoot + path.sep);
+}
+
 function validateUrl(url: string): void {
   let parsed: URL;
   try {
@@ -215,28 +226,27 @@ async function runFileOp(ctx: StepContext, policyValidator?: PathValidator): Pro
       return { tool: 'fileOp', success: false, error: `Path "${normalized}" denied by policy${check.reason ? ': ' + check.reason : ''}` };
     }
   } else {
-    // Fallback built-in defaults when no policy is injected
+    // Fallback built-in defaults when no policy is injected.
+    // Use isInsideDir() — segment-aware — to prevent /tmp matching /tmp-evil.
     const home = os.homedir();
-    const ALLOWED_PREFIXES = [
+    const ALLOWED_ROOTS = [
       path.join(home, '.zora'),
       path.join(home, 'Dev'),
       path.join(home, 'Documents'),
-      '/tmp',
-      '/private/tmp',
-      os.tmpdir(),
+      '/tmp', '/private/tmp', os.tmpdir(),
       process.cwd(),
     ];
-    const BLOCKED_PREFIXES = [
+    const BLOCKED_ROOTS = [
       path.join(home, '.ssh'),
       path.join(home, '.gnupg'),
       path.join(home, '.aws'),
       path.join(home, '.env'),
       '/etc', '/sys', '/proc',
     ];
-    if (BLOCKED_PREFIXES.some(p => normalized.startsWith(p))) {
+    if (BLOCKED_ROOTS.some(r => isInsideDir(normalized, r))) {
       return { tool: 'fileOp', success: false, error: `Path "${normalized}" is in a blocked directory` };
     }
-    if (!ALLOWED_PREFIXES.some(p => normalized.startsWith(p))) {
+    if (!ALLOWED_ROOTS.some(r => isInsideDir(normalized, r))) {
       return { tool: 'fileOp', success: false, error: `Path "${normalized}" is outside the allowed workspace` };
     }
   }
