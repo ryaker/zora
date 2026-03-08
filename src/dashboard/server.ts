@@ -8,7 +8,6 @@
 
 import express from 'express';
 import { readFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
@@ -104,8 +103,9 @@ export class DashboardServer {
       // All other /api/* routes must use Authorization: Bearer — never a URL token —
       // to avoid credentials appearing in server logs and referrer headers.
       this._app.get('/api/events', (req, _res, next) => {
-        if (!req.headers.authorization && typeof req.query['token'] === 'string') {
-          req.headers.authorization = `Bearer ${req.query['token']}`;
+        const raw = req.query['token'];
+        if (!req.headers.authorization && typeof raw === 'string' && raw.length <= 512) {
+          req.headers.authorization = `Bearer ${raw}`;
         }
         next();
       });
@@ -436,18 +436,18 @@ export class DashboardServer {
         res.status(503).json({ ok: false, error: 'Policy not available' });
         return;
       }
-      const home = os.homedir();
-      const expand = (s: string) => s.replace(/^~/, home);
       // Derive a human-readable preset from shell mode
       const preset = p.shell.mode === 'deny_all' ? 'safe'
         : p.shell.mode === 'allowlist' ? 'balanced'
         : 'power';
+      // Return paths as-configured (~ unexpanded) to avoid leaking the
+      // server's home directory path to browser clients.
       res.json({
         ok: true,
         policy: {
           preset,
-          allowedPaths: (p.filesystem.allowed_paths ?? []).map(expand),
-          deniedPaths: (p.filesystem.denied_paths ?? []).map(expand),
+          allowedPaths: p.filesystem.allowed_paths ?? [],
+          deniedPaths: p.filesystem.denied_paths ?? [],
           allowedCommands: p.shell.allowed_commands ?? [],
           blockedCommands: p.shell.denied_commands ?? [],
         },
@@ -534,8 +534,10 @@ export class DashboardServer {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(html);
     } catch (err) {
-      log.error({ err }, 'Failed to serve index.html — falling back to sendFile');
-      res.sendFile(this._indexHtmlPath);
+      log.error({ err }, 'Failed to serve index.html');
+      if (!res.headersSent) {
+        res.status(500).send('Internal server error');
+      }
     }
   }
 
