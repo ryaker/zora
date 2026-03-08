@@ -69,6 +69,7 @@ export class DashboardServer {
   /** TLCI cost tracker — undefined when not configured */
   private readonly _tlciCostTracker: CostTracker | undefined;
   private readonly _authToken: string | undefined;
+  private readonly _authMiddleware: import('express').RequestHandler | null;
   private readonly _indexHtmlPath: string;
 
   constructor(options: DashboardOptions) {
@@ -88,7 +89,16 @@ export class DashboardServer {
     // SEC-01: Mount Bearer token auth on API routes when a token is configured.
     // When no dashboardToken is set, auth is skipped entirely — this covers
     // the localhost-only use case where the dashboard is not exposed externally.
-    if (this._authToken) {
+    //
+    // The middleware instance is stored as a class field so it can also be
+    // applied to the index and SPA catch-all routes in _setupRoutes(), preventing
+    // token leakage via unauthenticated GET '/' requests that would otherwise
+    // receive window.__ZORA_TOKEN__ in the HTML response.
+    this._authMiddleware = this._authToken
+      ? createAuthMiddleware({ staticToken: this._authToken })
+      : null;
+
+    if (this._authMiddleware) {
       // For SSE only: promote ?token= to Authorization header.
       // EventSource cannot send custom headers; ?token= is the standard workaround.
       // All other /api/* routes must use Authorization: Bearer — never a URL token —
@@ -99,7 +109,7 @@ export class DashboardServer {
         }
         next();
       });
-      this._app.use('/api', createAuthMiddleware({ staticToken: this._authToken }));
+      this._app.use('/api', this._authMiddleware);
       log.info('Dashboard API authentication enabled');
     } else {
       log.warn('Dashboard API authentication disabled — no dashboardToken configured');
@@ -108,8 +118,14 @@ export class DashboardServer {
     // Serve static frontend files (Vite build output).
     // index.html gets window.__ZORA_TOKEN__ injected so the React app can authenticate
     // axios calls and SSE without needing a separate token endpoint.
+    // Auth is applied here too so an unauthenticated request cannot read the
+    // injected token from the HTML response.
     const staticPath = path.join(__dirname, 'frontend', 'dist');
-    this._app.get('/', (_req, res) => this._serveIndex(res));
+    if (this._authMiddleware) {
+      this._app.get('/', this._authMiddleware, (_req, res) => this._serveIndex(res));
+    } else {
+      this._app.get('/', (_req, res) => this._serveIndex(res));
+    }
     this._app.use(express.static(staticPath));
 
     this._setupRoutes();
@@ -438,8 +454,27 @@ export class DashboardServer {
       });
     });
 
-    // Catch-all: serve index.html for SPA routing (with token injection)
-    this._app.get('*', (_req, res) => this._serveIndex(res));
+    // Catch-all: serve index.html for SPA routing (with token injection).
+    // Auth is applied so the token injected into the HTML is not readable by
+    // unauthenticated clients. API paths fall through to a 404 rather than
+    // being served the SPA shell, which would mask missing API routes.
+    if (this._authMiddleware) {
+      this._app.get('*', this._authMiddleware, (req, res) => {
+        if (req.path.startsWith('/api')) {
+          res.status(404).json({ error: 'Not found' });
+          return;
+        }
+        this._serveIndex(res);
+      });
+    } else {
+      this._app.get('*', (req, res) => {
+        if (req.path.startsWith('/api')) {
+          res.status(404).json({ error: 'Not found' });
+          return;
+        }
+        this._serveIndex(res);
+      });
+    }
   }
 
   /**
