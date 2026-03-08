@@ -70,6 +70,8 @@ export class DashboardServer {
   private readonly _authToken: string | undefined;
   private readonly _authMiddleware: import('express').RequestHandler | null;
   private readonly _indexHtmlPath: string;
+  /** Cached index.html content — read once at startup to avoid blocking the event loop on every GET /. */
+  private _indexHtmlCache: string | undefined;
 
   constructor(options: DashboardOptions) {
     this._options = options;
@@ -519,7 +521,13 @@ export class DashboardServer {
   /** Serve index.html with __ZORA_TOKEN__ injected when auth is enabled. */
   private _serveIndex(res: import('express').Response): void {
     try {
-      let html = readFileSync(this._indexHtmlPath, 'utf-8');
+      // Use cached HTML to avoid blocking the event loop on disk I/O per request.
+      // Token injection is deterministic at startup, so the cache is valid for the
+      // lifetime of the process.
+      if (!this._indexHtmlCache) {
+        this._indexHtmlCache = readFileSync(this._indexHtmlPath, 'utf-8');
+      }
+      let html = this._indexHtmlCache;
       if (this._authToken) {
         const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
         // Case-insensitive replace so minified/transformed HTML still works
