@@ -19,8 +19,15 @@ import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger } from '../utils/logger.js';
-import { TelegramGateway } from '../steering/telegram-gateway.js';
-import type { TelegramConfig } from '../steering/telegram-gateway.js';
+import { ChannelIdentityRegistry } from '../channels/channel-identity-registry.js';
+import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
+import { CapabilityResolver } from '../channels/capability-resolver.js';
+import { QuarantineProcessor } from '../channels/quarantine-processor.js';
+import { ChannelAuditLog } from '../channels/channel-audit-log.js';
+import { ChannelManager } from '../channels/channel-manager.js';
+import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
+import { SignalAdapter } from '../channels/signal/signal-adapter.js';
+import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 
 // Allow claude CLI to run as a subprocess even when launched from a Claude Code session.
 // Claude Code sets CLAUDECODE to prevent nesting, but the Zora daemon legitimately
@@ -122,33 +129,58 @@ async function main() {
   });
   await dashboard.start();
 
-  // Initialize Telegram gateway if enabled and configured
-  let telegramGateway: TelegramGateway | undefined;
-  const telegramConfig = config.steering.telegram;
-  if (telegramConfig?.enabled) {
-    const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) {
-      log.warn('Telegram enabled but no bot_token configured and TELEGRAM_BOT_TOKEN not set. Skipping.');
-    } else {
-      log.warn(
-        'Telegram: Ensure you are using a dedicated bot token for this Zora instance. ' +
-        'Sharing a bot token across multiple processes causes polling conflicts and lost messages.'
-      );
-      try {
-        const fullTelegramConfig: TelegramConfig = {
-          ...config.steering,
-          ...telegramConfig,
-          bot_token: token,
-        };
-        telegramGateway = await TelegramGateway.create(
-          fullTelegramConfig,
-          orchestrator.steeringManager,
-        );
-        log.info({ mode: telegramConfig.mode ?? 'polling' }, 'Telegram gateway started');
-      } catch (err) {
-        log.error({ err }, 'Failed to start Telegram gateway');
+  // Multi-channel secure architecture (IChannelAdapter + ChannelManager + Quarantine)
+  let channelManager: ChannelManager | undefined;
+
+  const channelPolicyPath = path.join(configDir, 'config', 'channel-policy.toml');
+  if (fs.existsSync(channelPolicyPath)) {
+    try {
+      const registry = await ChannelIdentityRegistry.load(channelPolicyPath);
+      registry.listenForReload();
+
+      const casbinModelPath = path.join(configDir, 'config', 'casbin', 'model.conf');
+      const gate = new ChannelPolicyGate(registry, casbinModelPath);
+      await gate.init();
+
+      const resolver = new CapabilityResolver(registry, gate);
+      const quarantine = new QuarantineProcessor(registry.getQuarantineModel());
+      const audit = new ChannelAuditLog(configDir);
+
+      channelManager = new ChannelManager(orchestrator, gate, resolver, quarantine, audit);
+
+      // 1. Signal
+      const signalConfig = registry.getSignalConfig();
+      const signalPhone = signalConfig?.phone_number ?? process.env['ZORA_SIGNAL_PHONE'];
+      if (signalPhone) {
+        const rawCliPath = signalConfig?.signal_cli_path;
+        const cliPath = rawCliPath ? rawCliPath.replace(/^~/, os.homedir()) : undefined;
+        const intake = new SignalIntakeAdapter(signalPhone, cliPath);
+        const signalAdapter = new SignalAdapter(intake);
+        await channelManager.registerAdapter(signalAdapter);
       }
+
+      // 2. Telegram
+      const telegramConfig = config.steering.telegram;
+      if (telegramConfig?.enabled) {
+        const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+        if (token) {
+          const telegramAdapter = new TelegramAdapter(token);
+          await channelManager.registerAdapter(telegramAdapter);
+        } else {
+          log.warn('Telegram enabled but no bot_token found. Skipping adapter.');
+        }
+      }
+
+      await channelManager.start();
+      const activeAdapters = [];
+      if (signalPhone) activeAdapters.push('signal');
+      if (telegramConfig?.enabled && telegramConfig.bot_token) activeAdapters.push('telegram');
+      log.info({ adapters: activeAdapters.join(', ') }, 'Multi-channel architecture online');
+    } catch (err) {
+      log.error({ err }, 'Failed to initialize multi-channel architecture');
     }
+  } else {
+    log.info('No channel-policy.toml found — multi-channel architecture disabled');
   }
 
   log.info('Zora daemon is running');
@@ -170,8 +202,8 @@ async function main() {
 
     const graceful = async () => {
       try {
-        if (telegramGateway) {
-          await telegramGateway.stop();
+        if (channelManager) {
+          await channelManager.stop();
         }
         await dashboard.stop();
         await orchestrator.shutdown();
