@@ -8,7 +8,9 @@
 import { ChannelIdentity, ChannelMessage } from '../types/channel.js';
 
 export interface SendOptions {
-  /** Original message timestamp for quoting (group replies) */
+  /** Original message ID for quoting/replying (used by Telegram and other platforms) */
+  quoteMessageId?: string;
+  /** Original message timestamp for quoting (used by Signal group replies) */
   quoteTimestamp?: number;
   /** Author identifier for the quoted message (phone or UUID) */
   quoteAuthor?: string;

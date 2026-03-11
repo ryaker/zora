@@ -56,15 +56,27 @@ export class WebhookServer {
     });
 
     // Platform-specific webhooks
-    // Each platform adapter will register its own route here
+    // INVARIANT-10: Signature validation must be performed before dispatching.
     this._app.post('/webhooks/:platform', express.json(), async (req, res) => {
       const platform = req.params.platform;
       log.info({ platform }, 'Received webhook');
 
-      // 1. Validate signature (platform-specific)
-      // 2. Map payload to event
-      // 3. Dispatch to manager.handleMessage()
+      // 1. Validate that the platform has a registered adapter
+      const adapter = this._manager.getAdapter(platform);
+      if (!adapter) {
+        log.warn({ platform }, 'Webhook received for unknown platform');
+        res.status(404).json({ error: 'Unknown platform' });
+        return;
+      }
 
+      // 2. Signature validation placeholder — must be implemented per-platform
+      //    before this server is used in production. Requests without a valid
+      //    signature should be rejected here with 401.
+      //    TODO: implement platform-specific HMAC signature validation.
+
+      // 3. Payload dispatch is handled by each adapter's own polling/webhook handler.
+      //    Adapters using the Vercel Chat SDK handle their own webhook registration.
+      //    This route exists for platforms that push raw payloads here directly.
       res.status(200).send('OK');
     });
   }

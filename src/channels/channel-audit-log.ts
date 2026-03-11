@@ -67,10 +67,15 @@ export class ChannelAuditLog {
 
   /** Internal: Rotate log file if it exceeds MAX_LOG_SIZE */
   private async _checkRotation(): Promise<void> {
+    let stats: fs.Stats;
     try {
-      if (!fs.existsSync(this._logPath)) return;
+      stats = await fs.promises.stat(this._logPath);
+    } catch {
+      // File doesn't exist yet — nothing to rotate
+      return;
+    }
 
-      const stats = await fs.promises.stat(this._logPath);
+    try {
       if (stats.size > MAX_LOG_SIZE) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const rotatedPath = `${this._logPath}.${timestamp}.bak`;

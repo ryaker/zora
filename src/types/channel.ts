@@ -11,10 +11,10 @@
 // INVARIANT-4: Channel message content never reaches privileged LLM directly
 
 export interface ChannelIdentity {
-  type: "signal";
-  phoneNumber: string;       // E.164 format: "+14155551234"
+  type: "signal" | "telegram" | string;
+  phoneNumber: string;       // E.164 for Signal; userId/chatId for other platforms
   signalUuid?: string;       // Signal's internal UUID (more stable than phone)
-  displayName?: string;      // Contact name from signal-cli
+  displayName?: string;      // Contact name from signal-cli or platform username
   isLinkedDevice: boolean;
 }
 

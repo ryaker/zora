@@ -160,12 +160,14 @@ async function main() {
       }
 
       // 2. Telegram
+      let telegramRegistered = false;
       const telegramConfig = config.steering.telegram;
       if (telegramConfig?.enabled) {
         const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
         if (token) {
           const telegramAdapter = new TelegramAdapter(token);
           await channelManager.registerAdapter(telegramAdapter);
+          telegramRegistered = true;
         } else {
           log.warn('Telegram enabled but no bot_token found. Skipping adapter.');
         }
@@ -174,7 +176,7 @@ async function main() {
       await channelManager.start();
       const activeAdapters = [];
       if (signalPhone) activeAdapters.push('signal');
-      if (telegramConfig?.enabled && telegramConfig.bot_token) activeAdapters.push('telegram');
+      if (telegramRegistered) activeAdapters.push('telegram');
       log.info({ adapters: activeAdapters.join(', ') }, 'Multi-channel architecture online');
     } catch (err) {
       log.error({ err }, 'Failed to initialize multi-channel architecture');

@@ -107,7 +107,8 @@ export interface SubmitTaskOptions {
    */
   channelContext?: {
     capability: CapabilitySet;
-    channelMessage: ChannelMessage;
+    /** Raw channel message — kept for contextual logging only. INVARIANT-4: never passed to the privileged LLM prompt. */
+    channelMessage?: ChannelMessage;
   };
 }
 

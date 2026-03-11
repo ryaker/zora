@@ -23,9 +23,8 @@ const log = createLogger('channel-manager');
 interface TaskSubmittable {
   submitTask(options: {
     prompt: string;
-    channelContext: {
+    channelContext?: {
       capability: any;
-      channelMessage: ChannelMessage;
     };
     onEvent: (event: any) => void;
   }): Promise<string>;
@@ -71,22 +70,40 @@ export class ChannelManager {
 
   /**
    * Start all registered adapters.
+   * Continues on individual adapter failure so a single bad adapter doesn't block the rest.
    */
   async start(): Promise<void> {
     for (const adapter of this._adapters.values()) {
-      await adapter.start();
+      try {
+        await adapter.start();
+      } catch (err) {
+        log.error({ err, adapter: adapter.name }, 'Failed to start channel adapter');
+      }
     }
     log.info({ count: this._adapters.size }, 'Channel manager started');
   }
 
   /**
    * Stop all registered adapters.
+   * Continues on individual adapter failure so all adapters are given a chance to stop.
    */
   async stop(): Promise<void> {
     for (const adapter of this._adapters.values()) {
-      await adapter.stop();
+      try {
+        await adapter.stop();
+      } catch (err) {
+        log.error({ err, adapter: adapter.name }, 'Failed to stop channel adapter');
+      }
     }
     log.info('Channel manager stopped');
+  }
+
+  /**
+   * Retrieve a registered adapter by name.
+   * Used by WebhookServer to dispatch incoming webhook payloads.
+   */
+  getAdapter(name: string): IChannelAdapter | undefined {
+    return this._adapters.get(name);
   }
 
   /**
@@ -96,6 +113,10 @@ export class ChannelManager {
   async handleMessage(adapter: IChannelAdapter, msg: ChannelMessage): Promise<void> {
     const sender = msg.from.phoneNumber;
     const channelId = msg.channelId;
+
+    // Track whether the sender passed intake authorization.
+    // INVARIANT-3: Unknown/denied senders receive NO response — even error replies.
+    let intakeAuthorized = false;
 
     try {
       // 1. Policy Gate: Check if sender is allowed to trigger intake
@@ -130,6 +151,9 @@ export class ChannelManager {
         return;
       }
 
+      // Sender is authorized — errors from here may be surfaced as replies
+      intakeAuthorized = true;
+
       // 3. Quarantine Processor: Extract structured intent using isolated LLM
       // INVARIANT-4: Channel message content never reaches the privileged LLM directly
       const intent = await this._quarantine.process(msg, capability);
@@ -144,6 +168,7 @@ export class ChannelManager {
           metadata: { reason: intent.suspicious_reason }
         });
         await adapter.send(msg.from, channelId, `⛔ Access Denied: ${intent.suspicious_reason ?? 'security policy violation'}`, {
+          quoteMessageId: msg.id,
           quoteTimestamp: msg.timestamp.getTime(),
           quoteAuthor: sender,
         });
@@ -159,15 +184,13 @@ export class ChannelManager {
         metadata: { goal: intent.goal, role: capability.role }
       });
 
-      // 4. Orchestrator: Submit task with extracted goal + capability context
-      log.info({ sender, goal: intent.goal, role: capability.role }, 'Executing channel-sourced task');
-
-      // 4. Orchestrator: Submit task with extracted goal + capability context
+      // 4. Orchestrator: Submit task with extracted goal + capability context.
+      // INVARIANT-4: Only the sanitized intent.goal is passed — raw msg.content is NOT forwarded.
       log.info({ sender, goal: intent.goal, role: capability.role }, 'Executing channel-sourced task');
 
       const response = await this._orchestrator.submitTask({
         prompt: intent.goal,
-        channelContext: { capability, channelMessage: msg },
+        channelContext: { capability },
         onEvent: (_event) => {
           // Progress updates could be sent here if desired
         },
@@ -176,6 +199,7 @@ export class ChannelManager {
       // 5. Response Gateway: Send result back through the adapter
       if (response) {
         await adapter.send(msg.from, channelId, response, {
+          quoteMessageId: msg.id,
           quoteTimestamp: msg.timestamp.getTime(),
           quoteAuthor: sender,
         });
@@ -185,7 +209,15 @@ export class ChannelManager {
 
     } catch (err) {
       log.error({ err, sender, channelId }, 'Error in channel message pipeline');
-      await adapter.send(msg.from, channelId, '❌ Sorry, I encountered an internal error. Check daemon logs.');
+      // Only reply with an error message if the sender was already authorized.
+      // INVARIANT-3: Unknown/denied senders receive NO response.
+      if (intakeAuthorized) {
+        try {
+          await adapter.send(msg.from, channelId, '❌ Sorry, I encountered an internal error. Check daemon logs.');
+        } catch (sendErr) {
+          log.error({ sendErr, sender, channelId }, 'Failed to send error reply to authorized sender');
+        }
+      }
     }
   }
 }

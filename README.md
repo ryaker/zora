@@ -214,6 +214,37 @@ Opens `http://localhost:8070` — watch tasks run in real time, check provider h
 
 ![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
 
+## Multi-Channel Messaging
+
+Zora can receive tasks and send responses over multiple messaging platforms. Powered by the **[Vercel AI SDK](https://sdk.vercel.ai/)**, which provides a growing ecosystem of channel adapters — new platforms require minimal code.
+
+| Channel | Status | Notes |
+|---------|--------|-------|
+| **Signal** | ✅ Working | End-to-end encrypted, requires signal-cli |
+| **Telegram** | ✅ Working | Native SDK adapter, bot token required |
+| **More coming** | 🚧 Planned | WhatsApp, Slack, Discord via Vercel AI SDK |
+
+Every incoming message passes through a security-hardened pipeline:
+
+```
+Incoming message → Policy gate → Capability resolver → Quarantine processor → Orchestrator → Response
+```
+
+Raw message content is never passed directly to the LLM — a quarantined model extracts structured intent first. This prevents prompt injection attacks from untrusted senders.
+
+```toml
+# ~/.zora/policy.toml — channel access control
+[channels]
+allowed_numbers = ["+15555550100"]  # Signal: allowlist by phone number
+telegram_allowed_users = [123456789]  # Telegram: allowlist by user ID
+```
+
+See [SIGNAL_CHANNEL_SETUP.md](docs/SIGNAL_CHANNEL_SETUP.md) for setup instructions.
+
+---
+
+![Divider](docs/archive/v5-spec/assets/lcars_divider.svg)
+
 ## Scheduled Tasks
 
 ```
@@ -230,7 +261,7 @@ See the [Routines Cookbook](ROUTINES_COOKBOOK.md) for templates.
 
 ## Project Status
 
-Zora is in active development (v0.9.9). Core features work reliably today.
+Zora is in active development (v0.11.0). Core features work reliably today.
 
 | Feature | Status |
 |---------|--------|
@@ -243,8 +274,11 @@ Zora is in active development (v0.9.9). Core features work reliably today.
 | Skill audit (catches manually installed skills) | ✅ Working |
 | Long-term memory across sessions | ✅ Working |
 | Web dashboard with live monitoring | ✅ Working |
+| Per-instance dashboard identity (name, color, icon) | ✅ Working |
 | Scheduled routines (cron-based) | ✅ Working |
 | Failed task retry with backoff | ✅ Working |
+| Signal messaging (E2E encrypted) | ✅ Working |
+| Telegram messaging (Vercel AI SDK) | ✅ Working |
 | Cross-platform (macOS, Linux, Windows) | 🚧 macOS tested, others in progress |
 
 ---
