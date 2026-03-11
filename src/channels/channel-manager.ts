@@ -162,9 +162,6 @@ export class ChannelManager {
       // 4. Orchestrator: Submit task with extracted goal + capability context
       log.info({ sender, goal: intent.goal, role: capability.role }, 'Executing channel-sourced task');
 
-      // 4. Orchestrator: Submit task with extracted goal + capability context
-      log.info({ sender, goal: intent.goal, role: capability.role }, 'Executing channel-sourced task');
-
       const response = await this._orchestrator.submitTask({
         prompt: intent.goal,
         channelContext: { capability, channelMessage: msg },

@@ -34,7 +34,7 @@ export class TelegramAdapter implements IChannelAdapter {
       const msg: ChannelMessage = {
         id: event.id,
         from: {
-          type: 'telegram' as any,
+          type: 'telegram',
           phoneNumber: event.userId, // Telegram ID as the unique identifier
           displayName: event.username,
           isLinkedDevice: false,
