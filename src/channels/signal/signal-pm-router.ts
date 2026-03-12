@@ -42,17 +42,20 @@ const SLASH_COMMANDS = new Set(['/status', '/spawn', '/stop', '/list', '/help'])
 export function routeMessage(message: string, projects: ProjectEntry[]): RoutingResult {
   const text = message.trim();
 
-  // 1. Slash commands — PM Zora handles these directly
+  // 1. Slash commands — PM Zora handles these directly.
+  // Unknown slash commands return 'unresolved' immediately — do not fall through to
+  // keyword routing, as that would cause `/unknowncmd` to accidentally match project keywords.
   const cmdMatch = text.match(/^(\/\w+)\s*(.*)?$/s);
   if (cmdMatch?.[1]) {
     const cmd = cmdMatch[1].toLowerCase();
     if (SLASH_COMMANDS.has(cmd)) {
       return { type: 'command', command: cmd, args: (cmdMatch[2] ?? '').trim(), content: text };
     }
+    return { type: 'unresolved', content: text };
   }
 
-  // 2. Explicit @ProjectName prefix
-  const atMatch = text.match(/^@(\w+)\s+([\s\S]+)$/i);
+  // 2. Explicit @ProjectName prefix — allow hyphens in project names (e.g. @my-project)
+  const atMatch = text.match(/^@([\w-]+)\s+([\s\S]+)$/i);
   if (atMatch?.[1] && atMatch[2]) {
     const requestedName = atMatch[1].toLowerCase();
     const project = projects.find((p) => p.name.toLowerCase() === requestedName);
