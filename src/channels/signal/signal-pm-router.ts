@@ -85,20 +85,22 @@ export function routeMessage(message: string, projects: ProjectEntry[]): Routing
 export async function formatStatus(
   projects: ProjectEntry[],
 ): Promise<string> {
-  const lines: string[] = ['*PM Zora — Instance Status*', ''];
-  for (const p of projects) {
-    const icon = p.icon ?? '⚡';
-    try {
-      const res = await fetch(`http://localhost:${p.port}/api/health`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      const status = res.ok ? '🟢 running' : '🔴 unhealthy';
-      lines.push(`${icon} *${p.name}* — ${status} (port ${p.port})`);
-    } catch {
-      lines.push(`${icon} *${p.name}* — ⚫ offline (port ${p.port})`);
-    }
-  }
-  return lines.join('\n');
+  // Check all instances in parallel — one slow/offline instance won't block others
+  const checks = await Promise.all(
+    projects.map(async (p) => {
+      const icon = p.icon ?? '⚡';
+      try {
+        const res = await fetch(`http://localhost:${p.port}/api/health`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        const status = res.ok ? '🟢 running' : '🔴 unhealthy';
+        return `${icon} *${p.name}* — ${status} (port ${p.port})`;
+      } catch {
+        return `${icon} *${p.name}* — ⚫ offline (port ${p.port})`;
+      }
+    }),
+  );
+  return ['*PM Zora — Instance Status*', '', ...checks].join('\n');
 }
 
 /**
@@ -116,7 +118,11 @@ export function formatList(projects: ProjectEntry[]): string {
   return lines.join('\n');
 }
 
-export function formatHelp(): string {
+export function formatHelp(projects: ProjectEntry[]): string {
+  const routingExamples = projects
+    .slice(0, 2)
+    .map((p) => `\`@${p.name} <message>\` — Route to ${p.name} Zora`);
+
   return [
     '*PM Zora Commands*',
     '',
@@ -126,8 +132,7 @@ export function formatHelp(): string {
     '`/stop <project>` — Stop a project Zora',
     '',
     '*Routing*',
-    '`@AgentDev <message>` — Route to AgentDev Zora',
-    '`@Trading <message>` — Route to Trading Zora',
+    ...routingExamples,
     '',
     'Or just send a message — PM Zora will route it automatically.',
   ].join('\n');
