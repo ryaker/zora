@@ -198,8 +198,11 @@ export async function resolveConfig(options?: {
   // the caller explicitly passes options.configDir (not projectDir/cwd), so that the
   // daemon can set ZORA_PROJECT_DIR + ZORA_CONFIG_DIR independently.
   // Guard against empty string (e.g. ZORA_CONFIG_DIR="" set but blank).
-  const envConfigDir = !options?.configDir ? (process.env['ZORA_CONFIG_DIR'] || undefined) : undefined;
-  const explicitConfigDir = options?.configDir || envConfigDir || undefined;
+  // Normalize: trim whitespace and treat blank strings as absent so that
+  // ZORA_CONFIG_DIR="  " or options.configDir="" don't silently override derived paths.
+  const normalizeDir = (v?: string): string | undefined => v?.trim() || undefined;
+  const envConfigDir = !options?.configDir ? normalizeDir(process.env['ZORA_CONFIG_DIR']) : undefined;
+  const explicitConfigDir = normalizeDir(options?.configDir) || envConfigDir || undefined;
   const projectPath = explicitConfigDir
     ? path.join(explicitConfigDir.replace(/^~/, os.homedir()), 'config.toml')
     : path.join(projectBase, '.zora', 'config.toml');
