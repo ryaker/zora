@@ -54,8 +54,9 @@ export function routeMessage(message: string, projects: ProjectEntry[]): Routing
     return { type: 'unresolved', content: text };
   }
 
-  // 2. Explicit @ProjectName prefix — allow hyphens in project names (e.g. @my-project)
-  const atMatch = text.match(/^@([\w-]+)\s+([\s\S]+)$/i);
+  // 2. Explicit @ProjectName prefix — match any non-whitespace token so names like
+  // "my-project", "abundance.coach", or "Zora_Dev" all route correctly.
+  const atMatch = text.match(/^@([^\s]+)\s+([\s\S]+)$/i);
   if (atMatch?.[1] && atMatch[2]) {
     const requestedName = atMatch[1].toLowerCase();
     const project = projects.find((p) => p.name.toLowerCase() === requestedName);
@@ -69,14 +70,24 @@ export function routeMessage(message: string, projects: ProjectEntry[]): Routing
     };
   }
 
-  // 3. Keyword-based classification
+  // 3. Keyword-based classification — score each project by number of keyword hits
+  // and route to the highest-scoring match, so config order does not determine winner.
   const lower = text.toLowerCase();
+  let bestProject: ProjectEntry | undefined;
+  let bestScore = 0;
+
   for (const project of projects) {
     const keywords = project.keywords ?? [project.name.toLowerCase()];
-    if (keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
-      log.info({ project: project.name, message: text.slice(0, 80) }, '[pm-router] Keyword match');
-      return { type: 'route', project: project.name, content: text };
+    const score = keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestProject = project;
     }
+  }
+
+  if (bestProject) {
+    log.info({ project: bestProject.name, score: bestScore, message: text.slice(0, 80) }, '[pm-router] Keyword match');
+    return { type: 'route', project: bestProject.name, content: text };
   }
 
   return { type: 'unresolved', content: text };
