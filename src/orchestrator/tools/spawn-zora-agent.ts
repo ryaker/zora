@@ -6,18 +6,28 @@
  *
  * Safety constraints:
  * - Max concurrent children enforced via config [pm].max_children (default 5)
- * - Child stdout/stderr → ~/Library/Logs/zora-<project>.log
+ * - Child stdout/stderr → platform log directory / zora-<project>.log
  * - Child PIDs tracked for orphan prevention on PM shutdown
+ * - Per-project spawn lock prevents duplicate launches from concurrent calls
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, createWriteStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { CustomToolDefinition } from '../execution-loop.js';
 import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('spawn-zora-agent');
+
+/** Platform-appropriate log directory for child Zora instances. */
+function logDir(): string {
+  if (os.platform() === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Logs');
+  }
+  // Linux / other: use XDG_STATE_HOME or ~/.local/state
+  return process.env['XDG_STATE_HOME'] ?? path.join(os.homedir(), '.local', 'state', 'zora');
+}
 
 export interface ProjectEntry {
   name: string;
@@ -52,28 +62,22 @@ async function isRunning(port: number): Promise<boolean> {
 
 /**
  * Spawn a Zora instance for the given project directory.
+ * Uses the `zora-agent` CLI binary resolved from PATH — no hard-coded paths.
  */
 function spawnZora(project: ProjectEntry, opts: SpawnToolOptions): void {
-  const zoraPath = process.execPath; // node binary
-  const zoraBin = path.resolve(
-    path.dirname(process.argv[1] ?? ''),
-    'zora-agent',
-  );
-
   const projectDir = project.project_dir.replace(/^~/, os.homedir());
-  const logFile = path.join(
-    os.homedir(),
-    'Library',
-    'Logs',
-    `zora-${project.name.toLowerCase()}.log`,
-  );
+  const dir = logDir();
+  const logFile = path.join(dir, `zora-${project.name.toLowerCase()}.log`);
 
-  // Determine config: use project dir's .zora/ if it exists, else fallback
-  const args = ['start', '--project', projectDir, '--no-open'];
+  // Ensure log directory exists
+  mkdirSync(dir, { recursive: true });
 
-  log.info({ project: project.name, port: project.port, args }, '[spawn] Starting child Zora');
+  const logStream = createWriteStream(logFile, { flags: 'a' });
 
-  const child = spawn(zoraPath, [zoraBin, ...args], {
+  log.info({ project: project.name, port: project.port, logFile }, '[spawn] Starting child Zora');
+
+  // Use `zora-agent` from PATH — same binary that started the PM daemon
+  const child = spawn('zora-agent', ['start', '--project', projectDir, '--no-open'], {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
@@ -82,12 +86,8 @@ function spawnZora(project: ProjectEntry, opts: SpawnToolOptions): void {
     },
   });
 
-  // Redirect logs
-  const { createWriteStream } = require('node:fs');
-  const logStream = createWriteStream(logFile, { flags: 'a' });
   child.stdout?.pipe(logStream);
   child.stderr?.pipe(logStream);
-
   child.unref(); // allow parent to exit independently
 
   if (child.pid) {
@@ -101,6 +101,8 @@ function spawnZora(project: ProjectEntry, opts: SpawnToolOptions): void {
 
 export function createSpawnZoraTool(opts: SpawnToolOptions): CustomToolDefinition {
   const activeChildren = new Map<string, number>(); // project name → PID
+  /** Per-project spawn lock — prevents concurrent duplicate launches */
+  const spawning = new Set<string>();
 
   const trackSpawn = (pid: number, project: string) => {
     activeChildren.set(project, pid);
@@ -151,7 +153,7 @@ export function createSpawnZoraTool(opts: SpawnToolOptions): CustomToolDefinitio
         };
       }
 
-      // Check if already running
+      // Check if already running (health check)
       if (await isRunning(project.port)) {
         log.info({ project: projectName, port: project.port }, '[spawn] Already running');
         return {
@@ -161,6 +163,14 @@ export function createSpawnZoraTool(opts: SpawnToolOptions): CustomToolDefinitio
           url: `http://localhost:${project.port}`,
           port: project.port,
           task: task ?? null,
+        };
+      }
+
+      // Per-project spawn lock — prevent duplicate launches from concurrent calls
+      if (spawning.has(project.name)) {
+        return {
+          success: false,
+          error: `Spawn already in progress for "${project.name}" — try again in a moment`,
         };
       }
 
@@ -183,30 +193,36 @@ export function createSpawnZoraTool(opts: SpawnToolOptions): CustomToolDefinitio
         };
       }
 
-      spawnZora(project, { ...opts, onSpawn: trackSpawn, onExit: trackExit });
+      spawning.add(project.name);
+      try {
+        spawnZora(project, { ...opts, onSpawn: trackSpawn, onExit: trackExit });
 
-      // Wait up to 10s for the instance to come up
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
-        if (await isRunning(project.port)) {
-          log.info({ project: projectName, port: project.port }, '[spawn] Child Zora ready');
-          return {
-            success: true,
-            status: 'spawned',
-            project: project.name,
-            url: `http://localhost:${project.port}`,
-            port: project.port,
-            task: task ?? null,
-          };
+        // Wait up to 10s for the instance to come up
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500));
+          if (await isRunning(project.port)) {
+            log.info({ project: projectName, port: project.port }, '[spawn] Child Zora ready');
+            return {
+              success: true,
+              status: 'spawned',
+              project: project.name,
+              url: `http://localhost:${project.port}`,
+              port: project.port,
+              task: task ?? null,
+            };
+          }
         }
-      }
 
-      return {
-        success: false,
-        error: `Zora for "${projectName}" did not come up within 10 seconds. Check ~/Library/Logs/zora-${projectName.toLowerCase()}.log`,
-        port: project.port,
-      };
+        const logFile = path.join(logDir(), `zora-${project.name.toLowerCase()}.log`);
+        return {
+          success: false,
+          error: `Zora for "${project.name}" did not come up within 10 seconds. Check ${logFile}`,
+          port: project.port,
+        };
+      } finally {
+        spawning.delete(project.name);
+      }
     },
   };
 }

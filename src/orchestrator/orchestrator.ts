@@ -1678,11 +1678,11 @@ export class Orchestrator {
     );
 
     // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances
-    const pmProjects = (this._config as unknown as Record<string, unknown>)['pm'] as
-      | { projects?: Array<{ name: string; port: number; icon?: string; color?: string; project_dir: string }> }
+    const pmConfig = (this._config as unknown as Record<string, unknown>)['pm'] as
+      | { projects?: Array<{ name: string; port: number; icon?: string; color?: string; project_dir: string }>; max_children?: number }
       | undefined;
-    const spawnTools: CustomToolDefinition[] = pmProjects?.projects?.length
-      ? [createSpawnZoraTool({ projects: pmProjects.projects, maxChildren: 5 })]
+    const spawnTools: CustomToolDefinition[] = pmConfig?.projects?.length
+      ? [createSpawnZoraTool({ projects: pmConfig.projects, maxChildren: pmConfig.max_children ?? 5 })]
       : [];
 
     return [...permissionTools, ...memoryTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
