@@ -176,7 +176,9 @@ export function loadConfigFromString(toml: string): ZoraConfig {
  * Resolution order:
  *   1. Built-in defaults (DEFAULT_CONFIG)
  *   2. ~/.zora/config.toml (global user config)
- *   3. <projectDir>/.zora/config.toml (project-local overrides)
+ *   3. Project config, resolved as:
+ *      - <configDir>/config.toml if `configDir` option or ZORA_CONFIG_DIR env var is set
+ *      - <projectDir>/.zora/config.toml otherwise
  *
  * Arrays (providers, hooks) are replaced, not merged — a project that
  * defines [[providers]] gets ONLY those providers.
@@ -191,7 +193,8 @@ export async function resolveConfig(options?: {
   const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
 
   // configDir: explicit option > env var > derived from projectDir
-  const explicitConfigDir = options?.configDir ?? process.env['ZORA_CONFIG_DIR'];
+  // Guard against empty string (e.g. ZORA_CONFIG_DIR="" set but empty)
+  const explicitConfigDir = (options?.configDir || process.env['ZORA_CONFIG_DIR']) || undefined;
   const projectPath = explicitConfigDir
     ? path.join(explicitConfigDir.replace(/^~/, os.homedir()), 'config.toml')
     : path.join(projectBase, '.zora', 'config.toml');
