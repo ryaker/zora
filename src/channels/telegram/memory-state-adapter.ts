@@ -44,9 +44,19 @@ export class MemoryStateAdapter implements StateAdapter {
   }
 
   async setIfNotExists(key: string, value: unknown, ttlMs?: number): Promise<boolean> {
-    const existing = await this.get(key);
-    if (existing !== null) return false;
-    await this.set(key, value, ttlMs);
+    // Synchronous check-and-set: operates directly on _cache without intermediate
+    // await points so concurrent callers cannot interleave between the check and the set.
+    const existing = this._cache.get(key);
+    if (existing !== undefined) {
+      if (existing.expiresAt === undefined || Date.now() < existing.expiresAt) {
+        return false; // Key exists and has not expired
+      }
+      // Entry has expired — fall through to overwrite
+    }
+    this._cache.set(key, {
+      value,
+      expiresAt: ttlMs !== undefined ? Date.now() + ttlMs : undefined,
+    });
     return true;
   }
 

@@ -181,12 +181,14 @@ export class ChannelManager {
         channelId,
         action: 'intake_allowed',
         status: 'ok',
-        metadata: { goal: intent.goal, role: capability.role }
+        // Log non-content metadata only — intent.goal is NOT persisted to avoid
+        // leaking user message content into the plaintext audit log.
+        metadata: { goalLength: intent.goal.length, role: capability.role }
       });
 
       // 4. Orchestrator: Submit task with extracted goal + capability context.
       // INVARIANT-4: Only the sanitized intent.goal is passed — raw msg.content is NOT forwarded.
-      log.info({ sender, goal: intent.goal, role: capability.role }, 'Executing channel-sourced task');
+      log.info({ sender, goalLength: intent.goal.length, role: capability.role }, 'Executing channel-sourced task');
 
       const response = await this._orchestrator.submitTask({
         prompt: intent.goal,

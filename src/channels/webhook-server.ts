@@ -30,10 +30,14 @@ export class WebhookServer {
    * Start the webhook server.
    */
   async start(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this._server = this._app.listen(this._port, () => {
         log.info({ port: this._port }, 'Webhook server listening');
         resolve();
+      });
+      this._server.once('error', (err: Error) => {
+        log.error({ err, port: this._port }, 'Webhook server failed to bind');
+        reject(err);
       });
     });
   }
