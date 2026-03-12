@@ -76,15 +76,14 @@ export class WebhookServer {
         return;
       }
 
-      // 2. Signature validation placeholder — must be implemented per-platform
-      //    before this server is used in production. Requests without a valid
-      //    signature should be rejected here with 401.
-      //    TODO: implement platform-specific HMAC signature validation.
-
-      // 3. Payload dispatch is handled by each adapter's own polling/webhook handler.
-      //    Adapters using the Vercel Chat SDK handle their own webhook registration.
-      //    This route exists for platforms that push raw payloads here directly.
-      res.status(200).send('OK');
+      // 2. Signature validation — INVARIANT-10 requires per-platform HMAC checks before
+      //    processing any webhook payload. Until per-platform validation is implemented,
+      //    reject all inbound webhook calls with 501 to prevent spoofed requests from
+      //    being treated as successful.
+      //    TODO: implement platform-specific HMAC signature validation, then replace
+      //    this block with the validated dispatch path.
+      log.warn({ platform }, 'Webhook endpoint not yet implemented — signature validation required');
+      res.status(501).json({ error: 'Webhook signature validation not yet implemented for this platform' });
     });
   }
 }
