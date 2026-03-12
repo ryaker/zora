@@ -28,6 +28,7 @@ import { ChannelManager } from '../channels/channel-manager.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
+import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 
 // Allow claude CLI to run as a subprocess even when launched from a Claude Code session.
 // Claude Code sets CLAUDECODE to prevent nesting, but the Zora daemon legitimately
@@ -102,6 +103,13 @@ async function main() {
   const providers = createProviders(config);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });
   await orchestrator.boot();
+
+  // Register with AgentBus (best-effort — failure doesn't block startup)
+  const agentBusClient = new AgentBusClient({
+    project: config.project?.name ?? config.agent.name,
+    folderPath: projectDir,
+  });
+  await agentBusClient.register();
 
   // Start dashboard server
   const dashboard = new DashboardServer({
@@ -205,6 +213,7 @@ async function main() {
         if (channelManager) {
           await channelManager.stop();
         }
+        await agentBusClient.deregister();
         await dashboard.stop();
         await orchestrator.shutdown();
       } catch (err) {
