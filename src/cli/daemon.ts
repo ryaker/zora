@@ -28,6 +28,7 @@ import { ChannelManager } from '../channels/channel-manager.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
+import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 
 // Allow claude CLI to run as a subprocess even when launched from a Claude Code session.
 // Claude Code sets CLAUDECODE to prevent nesting, but the Zora daemon legitimately
@@ -70,10 +71,12 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 }
 
 async function main() {
-  // Resolve project directory from env (set by CLI start command) or cwd
-  const projectDir = process.env.ZORA_PROJECT_DIR ?? process.cwd();
+  // Resolve project directory from env (set by CLI start command) or cwd.
+  // path.resolve() normalizes relative paths (e.g. ZORA_PROJECT_DIR=".") to absolute.
+  const projectDir = path.resolve(process.env.ZORA_PROJECT_DIR ?? process.cwd());
 
   // Three-layer config resolution: defaults → global → project
+  // ZORA_CONFIG_DIR env var is read directly by resolveConfig (no need to pass explicitly)
   let config: ZoraConfig;
   let sources: string[];
   try {
@@ -102,6 +105,13 @@ async function main() {
   const providers = createProviders(config);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });
   await orchestrator.boot();
+
+  // Register with AgentBus (best-effort — failure doesn't block startup)
+  const agentBusClient = new AgentBusClient({
+    project: config.project?.name ?? config.agent.name,
+    folderPath: projectDir,
+  });
+  agentBusClient.register(); // non-blocking — failure never delays startup
 
   // Start dashboard server
   const dashboard = new DashboardServer({
@@ -207,6 +217,7 @@ async function main() {
         if (channelManager) {
           await channelManager.stop();
         }
+        await agentBusClient.deregister();
         await dashboard.stop();
         await orchestrator.shutdown();
       } catch (err) {

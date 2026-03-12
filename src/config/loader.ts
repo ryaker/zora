@@ -176,7 +176,9 @@ export function loadConfigFromString(toml: string): ZoraConfig {
  * Resolution order:
  *   1. Built-in defaults (DEFAULT_CONFIG)
  *   2. ~/.zora/config.toml (global user config)
- *   3. <projectDir>/.zora/config.toml (project-local overrides)
+ *   3. Project config, resolved as:
+ *      - <configDir>/config.toml if `configDir` option or ZORA_CONFIG_DIR env var is set
+ *      - <projectDir>/.zora/config.toml otherwise
  *
  * Arrays (providers, hooks) are replaced, not merged — a project that
  * defines [[providers]] gets ONLY those providers.
@@ -184,10 +186,26 @@ export function loadConfigFromString(toml: string): ZoraConfig {
 export async function resolveConfig(options?: {
   cwd?: string;
   projectDir?: string;
+  /** Directly specify a config directory (contains config.toml). Also reads ZORA_CONFIG_DIR env var. */
+  configDir?: string;
 }): Promise<{ config: ZoraConfig; sources: string[] }> {
   const globalPath = path.join(os.homedir(), '.zora', 'config.toml');
   const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
-  const projectPath = path.join(projectBase, '.zora', 'config.toml');
+
+  // configDir: explicit option > ZORA_CONFIG_DIR env var > derived from projectDir.
+  // projectDir and configDir are orthogonal: projectDir says WHERE the project lives,
+  // configDir says WHERE to read config from. ZORA_CONFIG_DIR is only suppressed when
+  // the caller explicitly passes options.configDir (not projectDir/cwd), so that the
+  // daemon can set ZORA_PROJECT_DIR + ZORA_CONFIG_DIR independently.
+  // Guard against empty string (e.g. ZORA_CONFIG_DIR="" set but blank).
+  // Normalize: trim whitespace and treat blank strings as absent so that
+  // ZORA_CONFIG_DIR="  " or options.configDir="" don't silently override derived paths.
+  const normalizeDir = (v?: string): string | undefined => v?.trim() || undefined;
+  const envConfigDir = !options?.configDir ? normalizeDir(process.env['ZORA_CONFIG_DIR']) : undefined;
+  const explicitConfigDir = normalizeDir(options?.configDir) || envConfigDir || undefined;
+  const projectPath = explicitConfigDir
+    ? path.join(explicitConfigDir.replace(/^~/, os.homedir()), 'config.toml')
+    : path.join(projectBase, '.zora', 'config.toml');
 
   // Layer 1: defaults
   let merged = { ...DEFAULT_CONFIG } as unknown as Record<string, unknown>;
