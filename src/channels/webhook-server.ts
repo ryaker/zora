@@ -47,7 +47,10 @@ export class WebhookServer {
    */
   async stop(): Promise<void> {
     if (this._server) {
-      await new Promise((resolve) => this._server.close(resolve));
+      await new Promise<void>((resolve) => this._server.close((err?: Error) => {
+        if (err) log.warn({ err }, 'Webhook server close error');
+        resolve();
+      }));
       this._server = null;
     }
     log.info('Webhook server stopped');
