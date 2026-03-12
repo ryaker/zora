@@ -184,10 +184,17 @@ export function loadConfigFromString(toml: string): ZoraConfig {
 export async function resolveConfig(options?: {
   cwd?: string;
   projectDir?: string;
+  /** Directly specify a config directory (contains config.toml). Also reads ZORA_CONFIG_DIR env var. */
+  configDir?: string;
 }): Promise<{ config: ZoraConfig; sources: string[] }> {
   const globalPath = path.join(os.homedir(), '.zora', 'config.toml');
   const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
-  const projectPath = path.join(projectBase, '.zora', 'config.toml');
+
+  // configDir: explicit option > env var > derived from projectDir
+  const explicitConfigDir = options?.configDir ?? process.env['ZORA_CONFIG_DIR'];
+  const projectPath = explicitConfigDir
+    ? path.join(explicitConfigDir.replace(/^~/, os.homedir()), 'config.toml')
+    : path.join(projectBase, '.zora', 'config.toml');
 
   // Layer 1: defaults
   let merged = { ...DEFAULT_CONFIG } as unknown as Record<string, unknown>;

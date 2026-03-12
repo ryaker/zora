@@ -73,11 +73,14 @@ async function main() {
   // Resolve project directory from env (set by CLI start command) or cwd
   const projectDir = process.env.ZORA_PROJECT_DIR ?? process.cwd();
 
+  // Optional: ZORA_CONFIG_DIR points directly to a config directory (e.g. ~/.zora/projects/AgentDev)
+  const configDirOverride = process.env['ZORA_CONFIG_DIR'];
+
   // Three-layer config resolution: defaults → global → project
   let config: ZoraConfig;
   let sources: string[];
   try {
-    const resolved = await resolveConfig({ projectDir });
+    const resolved = await resolveConfig({ projectDir, configDir: configDirOverride });
     config = resolved.config;
     sources = resolved.sources;
   } catch (err) {
