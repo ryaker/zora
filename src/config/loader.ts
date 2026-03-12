@@ -192,12 +192,13 @@ export async function resolveConfig(options?: {
   const globalPath = path.join(os.homedir(), '.zora', 'config.toml');
   const projectBase = options?.projectDir ?? options?.cwd ?? process.cwd();
 
-  // configDir: explicit option > env var (only when no explicit projectDir/cwd) > derived from projectDir
-  // Guard against empty string (e.g. ZORA_CONFIG_DIR="" set but empty).
-  // The env var is NOT applied when the caller explicitly passes projectDir or cwd — those
-  // callers have already resolved the right path and should not be overridden by env.
-  const callerExplicitDir = options?.projectDir ?? options?.cwd;
-  const envConfigDir = !callerExplicitDir ? (process.env['ZORA_CONFIG_DIR'] || undefined) : undefined;
+  // configDir: explicit option > ZORA_CONFIG_DIR env var > derived from projectDir.
+  // projectDir and configDir are orthogonal: projectDir says WHERE the project lives,
+  // configDir says WHERE to read config from. ZORA_CONFIG_DIR is only suppressed when
+  // the caller explicitly passes options.configDir (not projectDir/cwd), so that the
+  // daemon can set ZORA_PROJECT_DIR + ZORA_CONFIG_DIR independently.
+  // Guard against empty string (e.g. ZORA_CONFIG_DIR="" set but blank).
+  const envConfigDir = !options?.configDir ? (process.env['ZORA_CONFIG_DIR'] || undefined) : undefined;
   const explicitConfigDir = options?.configDir || envConfigDir || undefined;
   const projectPath = explicitConfigDir
     ? path.join(explicitConfigDir.replace(/^~/, os.homedir()), 'config.toml')
