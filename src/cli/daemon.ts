@@ -109,7 +109,7 @@ async function main() {
     project: config.project?.name ?? config.agent.name,
     folderPath: projectDir,
   });
-  await agentBusClient.register();
+  agentBusClient.register(); // non-blocking — failure never delays startup
 
   // Start dashboard server
   const dashboard = new DashboardServer({

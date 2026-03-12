@@ -51,36 +51,41 @@ export class AgentBusClient {
   }
 
   /**
-   * Register this Zora instance with AgentBus on boot.
+   * Register this Zora instance with AgentBus on boot. Non-blocking — runs in the
+   * background with a 5s timeout so it never delays daemon startup.
    * Safe to call multiple times — subsequent calls are no-ops if already registered.
    */
-  async register(): Promise<void> {
+  register(): void {
     if (this._registered) return;
 
-    try {
-      const res = await fetch(`${this._baseUrl}/api/bus/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project: this._project,
-          folder_path: this._folderPath,
-          runtime: 'zora',
-          pid: process.pid,
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
+    const doRegister = async () => {
+      try {
+        const res = await fetch(`${this._baseUrl}/api/bus/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project: this._project,
+            folder_path: this._folderPath,
+            runtime: 'zora',
+            pid: process.pid,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        log.warn({ status: res.status, body }, '[agentbus] Registration failed — continuing without AgentBus');
-        return;
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          log.warn({ status: res.status, body }, '[agentbus] Registration failed — continuing without AgentBus');
+          return;
+        }
+
+        this._registered = true;
+        log.info({ project: this._project, pid: process.pid }, '[agentbus] Registered with AgentBus');
+      } catch (err) {
+        log.warn({ err }, '[agentbus] AgentBus unreachable — registration skipped');
       }
+    };
 
-      this._registered = true;
-      log.info({ project: this._project, pid: process.pid }, '[agentbus] Registered with AgentBus');
-    } catch (err) {
-      log.warn({ err }, '[agentbus] AgentBus unreachable — registration skipped');
-    }
+    doRegister().catch((err) => log.warn({ err }, '[agentbus] register() background error'));
   }
 
   /**
@@ -121,12 +126,16 @@ export class AgentBusClient {
    */
   async ack(messageId: number): Promise<void> {
     try {
-      await fetch(`${this._baseUrl}/api/bus/ack`, {
+      const res = await fetch(`${this._baseUrl}/api/bus/ack`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: messageId, handled_by: this._project }),
         signal: AbortSignal.timeout(5000),
       });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        log.warn({ messageId, status: res.status, body }, '[agentbus] Ack returned non-2xx');
+      }
     } catch (err) {
       log.warn({ err, messageId }, '[agentbus] Ack failed');
     }
