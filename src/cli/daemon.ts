@@ -71,8 +71,9 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 }
 
 async function main() {
-  // Resolve project directory from env (set by CLI start command) or cwd
-  const projectDir = process.env.ZORA_PROJECT_DIR ?? process.cwd();
+  // Resolve project directory from env (set by CLI start command) or cwd.
+  // path.resolve() normalizes relative paths (e.g. ZORA_PROJECT_DIR=".") to absolute.
+  const projectDir = path.resolve(process.env.ZORA_PROJECT_DIR ?? process.cwd());
 
   // Three-layer config resolution: defaults → global → project
   let config: ZoraConfig;
