@@ -1,20 +1,67 @@
 [routine]
 name = "content-pipeline"
-schedule = "0 8 * * 2"
-model_preference = "claude-haiku"
-max_cost_tier = "included"
-timeout = "30m"
+schedule = "0 8 * * 2"          # Tuesday 08:00
+model_preference = "claude-sonnet-4-6"
+max_cost_tier = "standard"
+timeout = "90m"
+one_shot = true
 
-[task]
-prompt = """
-It's Tuesday — time for the weekly MyMoneyCoach.ai content pipeline.
+[routine.env]
+# Pulled from Doppler at runtime — do NOT hardcode values here
+doppler_project = "sophia-wire"
+doppler_config = "dev"
+secrets = ["SOPHIA_CONTENT_MONGODB_URI", "META_PAGE_ID", "META_PAGE_ACCESS_TOKEN", "INSTAGRAM_USER_ID"]
+env_map = { "SOPHIA_CONTENT_MONGODB_URI" = "MONGODB_URI" }
 
-1. Check the content calendar for this week's blog topic
-2. Write a blog post using the StoryBrand framework with Sophia's voice
-3. Generate a Sophia coaching image for the blog header
-4. Create social media soundbites for Wednesday through Monday
-5. Schedule all content in the content calendar
+[team]
+name = "Content-Crew"
+mode = "sequential"
 
-Use the PEACE framework (Plan, Educate, Act, Coach, Empower) for messaging.
-Write blog to ~/.zora/workspace/content/{date}-blog.md
+[[team.agents]]
+name = "signal-agent"
+prompt_file = "content-pipeline/signal-agent.md"
+tools = ["bash", "fs_read", "fs_write"]
+abort_on_error = true            # Whole pipeline stops if signals insufficient
+
+[[team.agents]]
+name = "writer-agent"
+prompt_file = "content-pipeline/writer-agent.md"
+tools = ["bash", "fs_read", "fs_write"]
+depends_on = "signal-agent"
+
+[human_gate]
+enabled = true
+after = "writer-agent"
+before = "image-agent"
+channel = "telegram"
+message_template = """
+📝 *Tuesday Blog Draft Ready for Review*
+
+*Topic:* {topic.question}
+*Signals:* {topic.signal_count} expert citations
+*Word count:* {word_count}
+
+*Excerpt:*
+{excerpt}
+
+---
+{preview_400_words}
+
+---
+Reply *approve* to publish, *reject* to cancel.
+Auto-publishes in *2 hours* if no response.
 """
+timeout_action = "approve"       # Auto-approve after timeout (not reject)
+timeout_minutes = 120
+
+[[team.agents]]
+name = "image-agent"
+prompt_file = "content-pipeline/image-agent.md"
+tools = ["bash", "fs_read", "fs_write", "mcp_nanobanana"]
+depends_on = "writer-agent"      # Runs after gate clears
+
+[[team.agents]]
+name = "publisher-agent"
+prompt_file = "content-pipeline/publisher-agent.md"
+tools = ["bash", "fs_read", "fs_write", "http"]
+depends_on = ["writer-agent", "image-agent"]
