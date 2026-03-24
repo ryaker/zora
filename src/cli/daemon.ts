@@ -18,7 +18,7 @@ import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, initLogger } from '../utils/logger.js';
 import { ChannelIdentityRegistry } from '../channels/channel-identity-registry.js';
 import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
@@ -93,6 +93,9 @@ async function main() {
     process.exit(1);
   }
   log.info({ sources }, 'Config resolved');
+
+  // Wire agent.log_level early so all subsequent log calls use the correct level
+  initLogger({ level: config.agent.log_level }, /* force= */ true);
 
   // Two-layer policy resolution: global → project
   let policy: ZoraPolicy;
@@ -190,6 +193,13 @@ async function main() {
       })(),
     } : {}),
   });
+
+  // Wire steering.auto_approve_low_risk: pre-activate session blanket allow for low-risk actions.
+  // All tool calls scoring below the flag threshold (default 65) are auto-approved this session.
+  if (config.steering.auto_approve_low_risk && approvalQueue.isEnabled()) {
+    const flagThreshold = (policy.actions?.thresholds?.flag as number | undefined) ?? 65;
+    approvalQueue.setSessionBlanketAllow(flagThreshold);
+  }
 
   const providers = createProviders(config);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });

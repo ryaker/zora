@@ -17,6 +17,9 @@ import type {
 } from '../types.js';
 import { isTextEvent, isToolCallEvent } from '../types.js';
 import { Router } from './router.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('failover-controller');
 
 export type ErrorCategory = 'rate_limit' | 'quota' | 'auth' | 'timeout' | 'transient' | 'permanent' | 'unknown';
 
@@ -34,13 +37,22 @@ export interface FailoverResult {
   handoffBundle: HandoffBundle;
 }
 
+export interface FailoverCallbacks {
+  /** Called when a checkpoint should be saved (checkpoint_on_auth_failure). */
+  onCheckpoint?: (task: TaskContext) => Promise<void>;
+  /** Called when a failover notification should be sent (notify_on_failover). */
+  onNotify?: (message: string) => Promise<void>;
+}
+
 export class FailoverController {
   private readonly _providers: LLMProvider[];
   private readonly _config: FailoverConfig;
+  private readonly _callbacks: FailoverCallbacks;
 
-  constructor(providers: LLMProvider[], _router: Router, config: FailoverConfig) {
+  constructor(providers: LLMProvider[], _router: Router, config: FailoverConfig, callbacks: FailoverCallbacks = {}) {
     this._providers = providers;
     this._config = config;
+    this._callbacks = callbacks;
   }
 
   /**
@@ -143,6 +155,22 @@ export class FailoverController {
       return null;
     }
 
+    // checkpoint_on_auth_failure: save task context before handing off on auth errors
+    if (isAuthError && this._config.checkpoint_on_auth_failure && this._callbacks.onCheckpoint) {
+      try {
+        await this._callbacks.onCheckpoint(task);
+        log.info({ jobId: task.jobId }, 'Checkpoint saved before auth-failure failover');
+      } catch (checkpointErr) {
+        log.warn({ jobId: task.jobId, err: checkpointErr }, 'Checkpoint on auth failure failed (non-critical)');
+      }
+    }
+
+    // auto_handoff: if false, skip provider selection and return null (no handoff)
+    if (!this._config.auto_handoff) {
+      log.info({ jobId: task.jobId, failedProvider: failedProvider.name }, 'auto_handoff=false — skipping failover');
+      return null;
+    }
+
     // 1. Mark the failed provider as unhealthy
     // (In a real system, the provider state would be globally updated)
 
@@ -160,11 +188,28 @@ export class FailoverController {
       // 3. Create HandoffBundle
       const handoffBundle = this._createHandoffBundle(task, failedProvider, nextProvider, classified);
 
+      // notify_on_failover: send notification that a failover occurred
+      if (this._config.notify_on_failover && this._callbacks.onNotify) {
+        const reason = isAuthError ? 'auth failure' : 'quota/rate limit';
+        const msg = `Failover: ${failedProvider.name} → ${nextProvider.name} (${reason}) for job ${task.jobId}`;
+        this._callbacks.onNotify(msg).catch(err => {
+          log.warn({ err }, 'Failover notification failed (non-critical)');
+        });
+      }
+
       return { nextProvider, handoffBundle };
     } catch (err) {
       // No other provider available
       return null;
     }
+  }
+
+  /**
+   * Whether to retry a task after cooldown expires.
+   * Guards retry-queue re-enqueue logic: callers should check this before re-submitting.
+   */
+  shouldRetryAfterCooldown(): boolean {
+    return this._config.retry_after_cooldown ?? true;
   }
 
   /**

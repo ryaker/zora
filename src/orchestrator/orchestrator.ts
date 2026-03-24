@@ -14,6 +14,10 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import type {
   ZoraConfig,
   ZoraPolicy,
@@ -42,12 +46,13 @@ import { SecretRedactHook } from '../hooks/built-in/secret-redact.js';
 import { SensitiveFileGuardHook } from '../hooks/built-in/sensitive-file-guard.js';
 import { IrreversibilityScorerHook, DEFAULT_IRREVERSIBILITY_SCORES, DEFAULT_IRREVERSIBILITY_THRESHOLDS } from '../hooks/built-in/irreversibility-scorer.js';
 import { Router } from './router.js';
-import { FailoverController } from './failover-controller.js';
+import { FailoverController, type FailoverCallbacks } from './failover-controller.js';
 import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
 import { SessionManager, BufferedSessionWriter } from './session-manager.js';
 import { ExecutionLoop, type CustomToolDefinition, defaultTransformContext, type TransformContextFn } from './execution-loop.js';
 import { SteeringManager } from '../steering/steering-manager.js';
+import { FlagManager } from '../steering/flag-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
@@ -69,7 +74,7 @@ import { createCapabilityToken, enforceCapability } from '../security/capability
 import type { WorkerCapabilityToken } from '../types.js';
 import { IntegrityGuardian } from '../security/integrity-guardian.js';
 import { SecretsManager } from '../security/secrets-manager.js';
-import { createLogger } from '../utils/logger.js';
+import { createLogger, initLogger } from '../utils/logger.js';
 import { TLCIDispatcher, type DispatchResult, type DispatchCallOptions } from './tlci-dispatcher.js';
 import { PlanCache } from '../memory/plan-cache.js';
 import type { WorkflowStep } from './step-classifier.js';
@@ -133,6 +138,7 @@ export class Orchestrator {
   private _authMonitor!: AuthMonitor;
   private _sessionManager!: SessionManager;
   private _steeringManager!: SteeringManager;
+  private _flagManager!: FlagManager;
   private _memoryManager!: MemoryManager;
   private _policyEngine!: PolicyEngine;
   private _notifications!: NotificationTools;
@@ -182,6 +188,7 @@ export class Orchestrator {
   private _integrityCheckTimeout: ReturnType<typeof setTimeout> | null = null;
   // Set to true during shutdown so in-flight integrity check callbacks skip rescheduling.
   private _shuttingDown = false;
+  private _memoryExtractIntervalTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private _booted = false;
 
@@ -242,6 +249,10 @@ export class Orchestrator {
 
   async boot(): Promise<void> {
     if (this._booted) return;
+
+    // Wire agent.log_level — reinitialize root logger with config-specified level.
+    // This overrides the env-var default so config.toml is the authoritative source.
+    initLogger({ level: this._config.agent.log_level }, /* force= */ true);
 
     // Initialize core services
     // Wire notifications.enabled + per-event toggles from config
@@ -376,8 +387,25 @@ export class Orchestrator {
 
     this._sessionManager = new SessionManager(this._baseDir);
 
-    this._steeringManager = new SteeringManager(this._baseDir);
-    await this._steeringManager.init();
+    // steering.enabled: skip init entirely if false
+    if (this._config.steering.enabled !== false) {
+      this._steeringManager = new SteeringManager(this._baseDir);
+      await this._steeringManager.init();
+    } else {
+      // Provide a no-op SteeringManager so downstream code doesn't need null checks
+      this._steeringManager = new SteeringManager(this._baseDir);
+      log.info('Steering disabled via config — SteeringManager inert');
+    }
+
+    // Wire FlagManager with flag_timeout and notify_on_flag from steering config
+    const flagTimeoutMs = this._parseIntervalMs(this._config.steering.flag_timeout ?? '10m');
+    const notifyFn = this._config.steering.notify_on_flag
+      ? (msg: string) => { this._notifications.notify('Zora Flag', msg).catch(() => {}); }
+      : undefined;
+    this._flagManager = new FlagManager(
+      path.join(this._baseDir, 'flags'),
+      { timeoutMs: flagTimeoutMs, notifyFn },
+    );
 
     this._memoryManager = new MemoryManager(this._config.memory, this._baseDir);
     await this._memoryManager.init();
@@ -403,11 +431,26 @@ export class Orchestrator {
       providerOnlyName: this._config.routing.provider_only_name,
     });
 
-    // R3: Wire FailoverController
+    // R3: Wire FailoverController with callbacks for checkpoint_on_auth_failure and notify_on_failover
+    const failoverCallbacks: FailoverCallbacks = {
+      onCheckpoint: async (task) => {
+        // Persist current task context as a checkpoint entry in the session store
+        await this._sessionManager.appendEvent(task.jobId, {
+          type: 'steering',
+          timestamp: new Date(),
+          source: 'failover-checkpoint',
+          content: { text: `[CHECKPOINT] Auth failure — task state saved for job ${task.jobId}`, source: 'failover', author: 'system' },
+        });
+      },
+      onNotify: async (message) => {
+        await this._notifications.notify('Zora Failover', message);
+      },
+    };
     this._failoverController = new FailoverController(
       this._providers,
       this._router,
       this._config.failover,
+      failoverCallbacks,
     );
 
     // R5: Initialize RetryQueue
@@ -441,8 +484,14 @@ export class Orchestrator {
 
     // R5 / ERR-08: Poll RetryQueue (every 30 seconds) — use _resumeTask to preserve full
     // TaskContext (state continuity) instead of re-submitting just the original prompt.
+    // retry_after_cooldown: if false, skip the retry poll entirely.
     const scheduleRetryPoll = () => {
       this._retryPollTimeout = setTimeout(async () => {
+        // Guard: skip all retries if retry_after_cooldown is disabled
+        if (!this._failoverController.shouldRetryAfterCooldown()) {
+          scheduleRetryPoll();
+          return;
+        }
         try {
           const readyEntries = this._retryQueue.getReadyEntries();
           for (const entry of readyEntries) {
@@ -478,13 +527,18 @@ export class Orchestrator {
     if (!this._skipChannels) {
       // Use heartbeat_provider if set (typically a free/local Ollama) to keep
       // background routine costs at zero. Falls back to rank-1 if not set.
+      const agentWorkspace = this._config.agent.workspace
+        ? this._config.agent.workspace.replace(/^~/, os.homedir())
+        : process.cwd();
+      const agentTimeoutMs = this._parseIntervalMs(this._config.agent.default_timeout ?? '2h');
       const defaultLoop = new ExecutionLoop({
         systemPrompt: 'You are Zora, a helpful autonomous agent.',
         permissionMode: 'default',
-        cwd: process.cwd(),
+        cwd: agentWorkspace,
         canUseTool: this._policyEngine.createCanUseTool(),
         customTools: this._createCustomTools(),
         model: this._config.agent.heartbeat_provider,
+        streamTimeout: agentTimeoutMs,
       });
 
       this._heartbeatSystem = new HeartbeatSystem({
@@ -538,6 +592,92 @@ export class Orchestrator {
       }
       scheduleConsolidation();
     }, 30 * 1000);
+
+    // memory.auto_extract_interval: schedule interval-based extraction fallback.
+    // This runs independently of the per-task extraction (memory.auto_extract) and
+    // catches sessions where tasks run without triggering extraction (e.g. no done event).
+    if (this._config.memory.auto_extract && this._config.memory.auto_extract_interval > 0) {
+      const extractIntervalMs = this._config.memory.auto_extract_interval * 60 * 1000; // minutes → ms
+      const scheduleExtractInterval = () => {
+        this._memoryExtractIntervalTimeout = setTimeout(async () => {
+          try {
+            // Interval-based extraction: consolidate recent daily notes as a fallback
+            // for sessions that completed without triggering per-task extraction.
+            const reflectFn = this._reflectorWorker
+              ? async (content: string): Promise<void> => {
+                  await this._reflectorWorker!.reflect(content, `interval_${Date.now()}`);
+                }
+              : undefined;
+            await this._memoryManager.consolidateDailyNotes(1, reflectFn);
+            log.debug({ intervalMinutes: this._config.memory.auto_extract_interval }, 'Interval-based memory extraction complete');
+          } catch (err) {
+            log.warn({ err }, 'Interval-based memory extraction failed (non-critical)');
+          }
+          scheduleExtractInterval();
+        }, extractIntervalMs);
+      };
+      scheduleExtractInterval();
+      log.info({ intervalMinutes: this._config.memory.auto_extract_interval }, 'Memory extraction interval scheduled');
+    }
+
+    // ORCH-12: Wire config.hooks array → HookRunner so config.toml hooks actually fire.
+    // Each entry specifies an event name and a script path. We wrap the script in a
+    // shell-exec hook handler so toml-defined hooks run at the correct lifecycle point.
+    if (this._config.hooks && this._config.hooks.length > 0) {
+      for (const hookEntry of this._config.hooks) {
+        const { event, script, match } = hookEntry;
+        if (!script) continue; // skip entries without a script
+
+        const scriptPath = script.replace(/^~/, os.homedir());
+        const matchPattern = match ? new RegExp(match) : null;
+
+        if (event === 'onTaskStart') {
+          this._hookRunner.on('onTaskStart', async (ctx) => {
+            try {
+              await execFileAsync(scriptPath, [ctx.jobId, ctx.task.slice(0, 200)], { timeout: 10_000 });
+            } catch (err) {
+              log.warn({ err, script: scriptPath, event }, 'Config hook script failed (non-critical)');
+            }
+            return ctx;
+          });
+        } else if (event === 'onTaskEnd') {
+          this._hookRunner.on('onTaskEnd', async (_ctx, result) => {
+            try {
+              await execFileAsync(scriptPath, [result.slice(0, 200)], { timeout: 10_000 });
+            } catch (err) {
+              log.warn({ err, script: scriptPath, event }, 'Config hook script failed (non-critical)');
+            }
+            return {};
+          });
+        } else if (event === 'beforeToolExecute') {
+          this._hookRunner.on('beforeToolExecute', async (toolName, args) => {
+            if (matchPattern && !matchPattern.test(toolName)) {
+              return { allow: true };
+            }
+            try {
+              await execFileAsync(scriptPath, [toolName], { timeout: 10_000 });
+            } catch (err) {
+              log.warn({ err, script: scriptPath, event, tool: toolName }, 'Config hook script failed (non-critical)');
+            }
+            return { allow: true, args };
+          });
+        } else if (event === 'afterToolExecute') {
+          this._hookRunner.on('afterToolExecute', async (toolName, result) => {
+            if (matchPattern && !matchPattern.test(toolName)) {
+              return result;
+            }
+            try {
+              await execFileAsync(scriptPath, [toolName], { timeout: 10_000 });
+            } catch (err) {
+              log.warn({ err, script: scriptPath, event, tool: toolName }, 'Config hook script failed (non-critical)');
+            }
+            return result;
+          });
+        }
+
+        log.info({ event, script: scriptPath, match: match ?? '*' }, 'Config hook registered from config.toml');
+      }
+    }
 
     // Register default tool-level hooks.
     // SensitiveFileGuardHook is registered FIRST — it is a hard-coded,
@@ -733,6 +873,10 @@ export class Orchestrator {
     if (this._integrityCheckTimeout) {
       clearTimeout(this._integrityCheckTimeout);
       this._integrityCheckTimeout = null;
+    }
+    if (this._memoryExtractIntervalTimeout) {
+      clearTimeout(this._memoryExtractIntervalTimeout);
+      this._memoryExtractIntervalTimeout = null;
     }
 
     // Stop heartbeat and routines
@@ -1290,9 +1434,11 @@ export class Orchestrator {
 
           // (ERR-09: stale-state tracking is done on 'done' events below)
 
-          // R7: Poll SteeringManager with debouncing (max once per 2 seconds)
-          if (event.type === 'text' || event.type === 'tool_result') {
-            const pendingMessages = await this._steeringManager.cachedGetPendingMessages(taskContext.jobId, 2000);
+          // R7: Poll SteeringManager with debouncing — only when steering is enabled.
+          // Uses steering.poll_interval from config to control debounce window.
+          if ((event.type === 'text' || event.type === 'tool_result') && this._config.steering.enabled !== false) {
+            const steerPollMs = this._parseIntervalMs(this._config.steering.poll_interval ?? '5s');
+            const pendingMessages = await this._steeringManager.cachedGetPendingMessages(taskContext.jobId, steerPollMs);
             for (const msg of pendingMessages) {
               // Inject steering as an event
               const steerEvent: AgentEvent = {
@@ -1742,11 +1888,14 @@ export class Orchestrator {
     const categoryNames = categories.map(c => c.category);
 
     // Create extraction pipeline using the first available provider as the LLM
+    const agentWorkspaceCwd = this._config.agent.workspace
+      ? this._config.agent.workspace.replace(/^~/, os.homedir())
+      : process.cwd();
     const extractFn = async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
         systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
         permissionMode: 'default',
-        cwd: process.cwd(),
+        cwd: agentWorkspaceCwd,
         maxTurns: 1,
       });
       return extractLoop.run(prompt);
@@ -1974,6 +2123,23 @@ export class Orchestrator {
   }
 
   /**
+   * Parse interval strings like "5s", "30m", "1h", "2h" to milliseconds.
+   * Used for steering.poll_interval, steering.flag_timeout, agent.default_timeout, etc.
+   */
+  private _parseIntervalMs(interval: string): number {
+    const match = interval.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
+    if (!match) return 5_000; // safe default: 5 seconds
+    const value = parseFloat(match[1]!);
+    switch (match[2]) {
+      case 'ms': return Math.round(value);
+      case 's': return Math.round(value * 1_000);
+      case 'm': return Math.round(value * 60_000);
+      case 'h': return Math.round(value * 3_600_000);
+      default: return 5_000;
+    }
+  }
+
+  /**
    * Parse interval strings like "30m", "1h" to minutes.
    */
   private _parseIntervalMinutes(interval: string): number {
@@ -2097,11 +2263,14 @@ export class Orchestrator {
    * Extracted so it can be reused in boot() (for ReflectorWorker) and submitTask().
    */
   private _buildCompressFn(): (prompt: string) => Promise<string> {
+    const agentWorkspaceCwd = this._config.agent.workspace
+      ? this._config.agent.workspace.replace(/^~/, os.homedir())
+      : process.cwd();
     return async (prompt: string): Promise<string> => {
       const compressLoop = new ExecutionLoop({
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
         permissionMode: 'default',
-        cwd: process.cwd(),
+        cwd: agentWorkspaceCwd,
         maxTurns: 1,
         model: this._config.memory?.compression?.model,
       });

@@ -85,6 +85,60 @@ describe('FailoverController', () => {
     expect(result).toBeNull();
   });
 
+  it('respects auto_handoff=false — skips failover even on quota error', async () => {
+    const noHandoffController = new FailoverController([p1, p2], router, { ...config, auto_handoff: false });
+    const error = new Error('Rate limit exceeded (429)');
+    const result = await noHandoffController.handleFailure(task, p1, error);
+
+    expect(result).toBeNull();
+  });
+
+  it('calls onCheckpoint callback on auth failure when checkpoint_on_auth_failure=true', async () => {
+    const checkpoints: string[] = [];
+    const callbackController = new FailoverController([p1, p2], router, config, {
+      onCheckpoint: async (t) => { checkpoints.push(t.jobId); },
+    });
+    const error = new Error('Authentication failed: session expired');
+    await callbackController.handleFailure(task, p1, error);
+
+    expect(checkpoints).toContain(task.jobId);
+  });
+
+  it('does not call onCheckpoint on quota error', async () => {
+    const checkpoints: string[] = [];
+    const callbackController = new FailoverController([p1, p2], router, config, {
+      onCheckpoint: async (t) => { checkpoints.push(t.jobId); },
+    });
+    const error = new Error('Rate limit exceeded (429)');
+    await callbackController.handleFailure(task, p1, error);
+
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it('calls onNotify callback on successful failover when notify_on_failover=true', async () => {
+    const notifications: string[] = [];
+    const callbackController = new FailoverController([p1, p2], router, config, {
+      onNotify: async (msg) => { notifications.push(msg); },
+    });
+    const error = new Error('Rate limit exceeded (429)');
+    await callbackController.handleFailure(task, p1, error);
+
+    // Wait for the non-blocking notify call to fire
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(notifications.length).toBeGreaterThan(0);
+    expect(notifications[0]).toContain('claude');
+    expect(notifications[0]).toContain('gemini');
+  });
+
+  it('shouldRetryAfterCooldown returns true when retry_after_cooldown=true', () => {
+    expect(controller.shouldRetryAfterCooldown()).toBe(true);
+  });
+
+  it('shouldRetryAfterCooldown returns false when retry_after_cooldown=false', () => {
+    const noRetryController = new FailoverController([p1, p2], router, { ...config, retry_after_cooldown: false });
+    expect(noRetryController.shouldRetryAfterCooldown()).toBe(false);
+  });
+
   describe('classifyError', () => {
     it('classifies by HTTP status code with high confidence', () => {
       const err = Object.assign(new Error('Something happened'), { status: 429 });
