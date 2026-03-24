@@ -54,10 +54,8 @@ export class AuthMonitor {
           } else if (auth.valid && auth.expiresAt) {
             const hoursRemaining = (auth.expiresAt.getTime() - Date.now()) / MS_PER_HOUR;
             if (hoursRemaining > 0 && hoursRemaining < this._preExpiryWarningHours) {
-              await this._notifications.notify(
-                'Token Near Expiry',
-                `${provider.name} token expires in ~${Math.round(hoursRemaining)}h.`
-              );
+              // on_auth_expiry toggle is enforced inside notifyAuthExpiry()
+              await this._notifications.notifyAuthExpiry(provider.name, hoursRemaining);
             }
           }
         } catch (err) {

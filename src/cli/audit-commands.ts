@@ -6,7 +6,7 @@
 
 import type { Command } from 'commander';
 import { AuditLogger } from '../security/audit-logger.js';
-import type { AuditFilter } from '../security/audit-logger.js';
+import type { AuditFilter, AuditLoggerOptions } from '../security/audit-logger.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('audit-commands');
@@ -32,6 +32,7 @@ function parseDuration(duration: string): number {
 export function registerAuditCommands(
   program: Command,
   getAuditLogPath: () => string,
+  auditLoggerOptions?: AuditLoggerOptions,
 ): void {
   program
     .command('audit')
@@ -41,7 +42,7 @@ export function registerAuditCommands(
     .option('--type <eventType>', 'Filter by event type')
     .option('--verify', 'Verify hash chain integrity')
     .action(async (opts: { last: string; job?: string; type?: string; verify?: boolean }) => {
-      const logger = new AuditLogger(getAuditLogPath());
+      const logger = new AuditLogger(getAuditLogPath(), auditLoggerOptions);
 
       if (opts.verify) {
         const result = await logger.verifyChain();

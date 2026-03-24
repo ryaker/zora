@@ -10,6 +10,7 @@
 
 import { Command } from 'commander';
 import * as clack from '@clack/prompts';
+import { parse as parseTOML } from 'smol-toml';
 import { resolveConfig } from '../config/loader.js';
 import { resolvePolicy } from '../config/policy-loader.js';
 import { PolicyEngine } from '../security/policy-engine.js';
@@ -490,7 +491,37 @@ program
 // Register new command groups
 const configDir = path.join(os.homedir(), '.zora');
 registerMemoryCommands(program, setupContext);
-registerAuditCommands(program, () => path.join(configDir, 'audit.jsonl'));
+// Wire security.audit_log path + hash-chain options from config so the audit CLI
+// reads from the correct file and uses matching AuditLogger options.
+// Config is read synchronously at CLI startup using smol-toml (already a dep).
+function _readSecurityConfigSync(): { auditLog: string; hashChain: boolean; singleWriter: boolean } {
+  const defaultResult = {
+    auditLog: path.join(configDir, 'audit.jsonl'),
+    hashChain: true,
+    singleWriter: true,
+  };
+  try {
+    const cfgPath = path.join(configDir, 'config.toml');
+    if (!fs.existsSync(cfgPath)) return defaultResult;
+    const raw = parseTOML(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+    const secRaw = raw['security'] as Record<string, unknown> | undefined;
+    return {
+      auditLog: secRaw?.['audit_log']
+        ? (secRaw['audit_log'] as string).replace(/^~/, os.homedir())
+        : defaultResult.auditLog,
+      hashChain: secRaw?.['audit_hash_chain'] !== false,
+      singleWriter: secRaw?.['audit_single_writer'] !== false,
+    };
+  } catch {
+    return defaultResult;
+  }
+}
+const _secCfg = _readSecurityConfigSync();
+registerAuditCommands(
+  program,
+  () => _secCfg.auditLog,
+  { hashChain: _secCfg.hashChain, singleWriter: _secCfg.singleWriter },
+);
 registerEditCommands(program, configDir);
 registerTeamCommands(program, configDir);
 registerSteerCommands(program, configDir);

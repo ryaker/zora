@@ -18,6 +18,23 @@ const GENESIS_HASH = 'genesis';
 
 export type AuditEntryInput = Omit<AuditEntry, 'previousHash' | 'hash' | 'entryId'>;
 
+export interface AuditLoggerOptions {
+  /**
+   * When true (default), every entry includes a SHA-256 hash of the previous entry,
+   * forming a tamper-evident chain. Set false to disable hash chaining (log entries
+   * are written without hash fields, losing chain integrity guarantees).
+   * Maps to security.audit_hash_chain in config.
+   */
+  hashChain?: boolean;
+  /**
+   * When true (default), all writes are serialised through a single Promise queue,
+   * ensuring no two concurrent writes can corrupt the log file.
+   * Set false to allow concurrent writes (not recommended for production).
+   * Maps to security.audit_single_writer in config.
+   */
+  singleWriter?: boolean;
+}
+
 export interface AuditFilter {
   jobId?: string;
   eventType?: AuditEntryEventType;
@@ -34,20 +51,31 @@ export interface ChainVerificationResult {
 
 export class AuditLogger {
   private readonly _logPath: string;
+  private readonly _hashChain: boolean;
+  private readonly _singleWriter: boolean;
   private _previousHash: string = GENESIS_HASH;
   private _entryCounter = 0;
   private _writeQueue: Promise<void> = Promise.resolve();
   private _initialized = false;
 
-  constructor(auditLogPath: string) {
+  constructor(auditLogPath: string, options: AuditLoggerOptions = {}) {
     this._logPath = auditLogPath;
+    this._hashChain = options.hashChain ?? true;
+    this._singleWriter = options.singleWriter ?? true;
   }
 
   /**
    * Append an audit entry to the log.
-   * Uses a serialized writer queue so only one write happens at a time.
+   *
+   * When singleWriter is true (the default), all writes are serialised through a
+   * Promise queue so no two concurrent writes can corrupt the file.
+   * When singleWriter is false, writes run immediately without serialisation.
    */
   async log(input: AuditEntryInput): Promise<AuditEntry> {
+    if (!this._singleWriter) {
+      // singleWriter disabled: write immediately without queuing
+      return this._appendEntry(input);
+    }
     // Queue the write and return the entry once written
     return new Promise<AuditEntry>((resolve, reject) => {
       this._writeQueue = this._writeQueue
@@ -246,25 +274,40 @@ export class AuditLogger {
 
     const entryId = `audit-${++this._entryCounter}`;
 
-    // Build the entry without hash first
-    const entryWithoutHash = {
-      entryId,
-      jobId: input.jobId,
-      eventType: input.eventType,
-      timestamp: input.timestamp,
-      provider: input.provider,
-      toolName: input.toolName,
-      parameters: input.parameters,
-      result: input.result,
-      previousHash: this._previousHash,
-    };
+    let entry: AuditEntry;
 
-    const hash = this._computeHashFromParts(entryWithoutHash);
+    if (this._hashChain) {
+      // Hash-chained mode: compute previousHash + hash for tamper evidence
+      const entryWithoutHash = {
+        entryId,
+        jobId: input.jobId,
+        eventType: input.eventType,
+        timestamp: input.timestamp,
+        provider: input.provider,
+        toolName: input.toolName,
+        parameters: input.parameters,
+        result: input.result,
+        previousHash: this._previousHash,
+      };
 
-    const entry: AuditEntry = {
-      ...entryWithoutHash,
-      hash,
-    };
+      const hash = this._computeHashFromParts(entryWithoutHash);
+      entry = { ...entryWithoutHash, hash };
+      this._previousHash = hash;
+    } else {
+      // Hash-chain disabled: omit previousHash/hash fields
+      entry = {
+        entryId,
+        jobId: input.jobId,
+        eventType: input.eventType,
+        timestamp: input.timestamp,
+        provider: input.provider,
+        toolName: input.toolName,
+        parameters: input.parameters,
+        result: input.result,
+        previousHash: '',
+        hash: '',
+      };
+    }
 
     // Append to file
     // ERR-01: Wrap file write with explicit error handling and logging
@@ -276,7 +319,6 @@ export class AuditLogger {
       throw new Error(`Audit log write failed: ${error.message}`, { cause: error });
     }
 
-    this._previousHash = hash;
     return entry;
   }
 

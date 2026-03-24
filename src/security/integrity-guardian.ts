@@ -21,17 +21,34 @@ export interface IntegrityCheckResult {
   mismatches: Array<{ file: string; expected: string; actual: string }>;
 }
 
+export interface IntegrityGuardianOptions {
+  /**
+   * When true (default), the hash of the tool registry is included in the
+   * integrity baseline, so changes to tool definitions are detected.
+   * When false, the tool registry is excluded from integrity checks.
+   * Maps to security.integrity_includes_tool_registry in config.
+   */
+  includesToolRegistry?: boolean;
+}
+
 export class IntegrityGuardian {
   private readonly _baseDir: string;
   private readonly _toolRegistry: Record<string, string>;
+  private readonly _includesToolRegistry: boolean;
 
   /**
    * @param baseDir  Root directory containing critical files (e.g. ~/.zora)
    * @param toolRegistry  Optional map of tool name → definition content to hash
+   * @param options  Optional IntegrityGuardianOptions to configure behaviour
    */
-  constructor(baseDir: string, toolRegistry: Record<string, string> = {}) {
+  constructor(
+    baseDir: string,
+    toolRegistry: Record<string, string> = {},
+    options: IntegrityGuardianOptions = {},
+  ) {
     this._baseDir = baseDir;
     this._toolRegistry = toolRegistry;
+    this._includesToolRegistry = options.includesToolRegistry ?? true;
   }
 
   /**
@@ -54,7 +71,8 @@ export class IntegrityGuardian {
     }
 
     // Tool registry hash (combined hash of all tool definitions)
-    if (Object.keys(this._toolRegistry).length > 0) {
+    // Only included when integrity_includes_tool_registry is true (the default).
+    if (this._includesToolRegistry && Object.keys(this._toolRegistry).length > 0) {
       const registryContent = JSON.stringify(
         Object.fromEntries(Object.entries(this._toolRegistry).sort()),
       );
