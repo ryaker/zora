@@ -36,6 +36,7 @@ import { ToolHookRunner } from '../hooks/tool-hook-runner.js';
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
+import { AuditLogger } from '../security/audit-logger.js';
 import { RateLimitHook } from '../hooks/built-in/rate-limit.js';
 import { SecretRedactHook } from '../hooks/built-in/secret-redact.js';
 import { SensitiveFileGuardHook } from '../hooks/built-in/sensitive-file-guard.js';
@@ -142,6 +143,7 @@ export class Orchestrator {
   private _integrityGuardian!: IntegrityGuardian;
   private _secretsManager?: SecretsManager;
   private _approvalQueue?: ApprovalQueue; // SEC-FIX-2: wired into policyEngine during boot()
+  private _auditLogger!: AuditLogger;
 
   // Per-job capability tokens (keyed by jobId) for worker isolation enforcement
   private _activeTokens = new Map<string, WorkerCapabilityToken>();
@@ -535,6 +537,21 @@ export class Orchestrator {
     // Wire security.audit_log path so the hook writes to the user-configured location
     const auditLogPath = sec.audit_log.replace(/^~/, os.homedir());
     this._toolHookRunner.register(new AuditLogHook(auditLogPath));
+    // AuditLogger: structured hash-chained security event log (boot/shutdown/auth events).
+    // audit_hash_chain and audit_single_writer config fields take effect here.
+    this._auditLogger = new AuditLogger(auditLogPath.replace('.jsonl', '-security.jsonl'), {
+      hashChain: sec.audit_hash_chain ?? true,
+      singleWriter: sec.audit_single_writer ?? true,
+    });
+    await this._auditLogger.log({
+      jobId: 'system',
+      eventType: 'tool_invocation',
+      timestamp: new Date().toISOString(),
+      provider: 'system',
+      toolName: 'orchestrator_boot',
+      parameters: { agentName: this._config.agent.name },
+      result: {},
+    });
     this._toolHookRunner.register(new RateLimitHook([
       { tool: 'bash', maxCalls: 60, windowMs: 60_000 },
       { tool: 'http_request', maxCalls: 100, windowMs: 60_000 },
@@ -670,6 +687,19 @@ export class Orchestrator {
    */
   async shutdown(): Promise<void> {
     if (!this._booted) return;
+
+    // Log shutdown to the security audit trail before teardown
+    if (this._auditLogger) {
+      await this._auditLogger.log({
+        jobId: 'system',
+        eventType: 'tool_invocation',
+        timestamp: new Date().toISOString(),
+        provider: 'system',
+        toolName: 'orchestrator_shutdown',
+        parameters: { agentName: this._config.agent.name },
+        result: {},
+      }).catch(() => {});
+    }
 
     // Stop background timers
     if (this._authCheckTimeout) {
@@ -2028,6 +2058,12 @@ export class Orchestrator {
   /** Exposes SkillSynthesizer so daemon can wire ApprovalQueue after boot */
   get skillSynthesizer(): SkillSynthesizer {
     return this._skillSynthesizer;
+  }
+
+  /** Security audit logger — hash-chained log of lifecycle events (boot/shutdown/auth) */
+  get auditLogger(): AuditLogger {
+    this._assertBooted();
+    return this._auditLogger;
   }
 
   get config(): ZoraConfig {
