@@ -293,7 +293,7 @@ export class Orchestrator {
       log.info('SecretsManager initialized');
       // Wire stored secret names into SecretRedactHook so their values are
       // redacted from tool arguments even if they don't match static patterns.
-      const secretNames = await this._secretsManager.listSecrets();
+      const secretNames = await this._secretsManager.listSecretNames();
       for (const name of secretNames) {
         // Match as a key name (exact, case-insensitive) so any arg key matching
         // the stored secret name is redacted.
