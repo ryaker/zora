@@ -180,6 +180,8 @@ export class Orchestrator {
   private _consolidationTimeout: ReturnType<typeof setTimeout> | null = null;
   // SEC-11: Periodic integrity check timer (driven by security.integrity_interval)
   private _integrityCheckTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Set to true during shutdown so in-flight integrity check callbacks skip rescheduling.
+  private _shuttingDown = false;
 
   private _booted = false;
 
@@ -319,7 +321,10 @@ export class Orchestrator {
     // Schedule periodic integrity checks driven by security.integrity_interval.
     // Uses a self-rescheduling setTimeout (same pattern as authMonitor) to avoid
     // overlapping async executions.
-    const integrityIntervalMs = this._parseIntervalMinutes(sec.integrity_interval) * 60 * 1000;
+    // Coerce integrity_interval to string in case a user wrote an unquoted number
+    // in config.toml (e.g. integrity_interval = 5 instead of "5m"), which would
+    // cause _parseIntervalMinutes to receive a number and silently return the default.
+    const integrityIntervalMs = this._parseIntervalMinutes(String(sec.integrity_interval ?? '5m')) * 60 * 1000;
     const scheduleIntegrityCheck = () => {
       this._integrityCheckTimeout = setTimeout(async () => {
         try {
@@ -335,9 +340,14 @@ export class Orchestrator {
         } catch (err) {
           log.error({ err }, 'Periodic integrity check failed');
         }
-        scheduleIntegrityCheck();
+        // Do not reschedule if shutdown has been initiated — prevents the timer from
+        // surviving past shutdown() when a check was in-flight at shutdown time.
+        if (!this._shuttingDown) {
+          scheduleIntegrityCheck();
+        }
       }, integrityIntervalMs);
     };
+    this._shuttingDown = false; // reset in case of re-boot
     scheduleIntegrityCheck();
 
     // SEC-12: SecretsManager — AES-256-GCM encrypted secrets at rest.
@@ -534,8 +544,11 @@ export class Orchestrator {
     // non-bypassable layer that cannot be disabled via policy.toml.
     this._toolHookRunner.register(SensitiveFileGuardHook);
     this._toolHookRunner.register(ShellSafetyHook);
-    // Wire security.audit_log path so the hook writes to the user-configured location
-    const auditLogPath = sec.audit_log.replace(/^~/, os.homedir());
+    // Wire security.audit_log path so the hook writes to the user-configured location.
+    // sec.audit_log may be `false` when the user sets audit_log=false in config.toml
+    // (we warn above and always enable auditing, but the value is still boolean false).
+    // Normalize to a string before calling .replace() to avoid a boot-time crash.
+    const auditLogPath = (typeof sec.audit_log === 'string' ? sec.audit_log : '~/.zora/audit/audit.jsonl').replace(/^~/, os.homedir());
     this._toolHookRunner.register(new AuditLogHook(auditLogPath));
     // AuditLogger: structured hash-chained security event log (boot/shutdown/auth events).
     // audit_hash_chain and audit_single_writer config fields take effect here.
@@ -700,6 +713,9 @@ export class Orchestrator {
         result: {},
       }).catch(() => {});
     }
+
+    // Signal shutdown so any in-flight integrity check callback skips rescheduling.
+    this._shuttingDown = true;
 
     // Stop background timers
     if (this._authCheckTimeout) {

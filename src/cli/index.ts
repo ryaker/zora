@@ -496,7 +496,8 @@ registerMemoryCommands(program, setupContext);
 // Config is read synchronously at CLI startup using smol-toml (already a dep).
 function _readSecurityConfigSync(): { auditLog: string; hashChain: boolean; singleWriter: boolean } {
   const defaultResult = {
-    auditLog: path.join(configDir, 'audit.jsonl'),
+    // Must match the runtime default in src/config/defaults.ts (security.audit_log).
+    auditLog: path.join(configDir, 'audit', 'audit.jsonl'),
     hashChain: true,
     singleWriter: true,
   };
@@ -506,13 +507,14 @@ function _readSecurityConfigSync(): { auditLog: string; hashChain: boolean; sing
     const raw = parseTOML(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
     const secRaw = raw['security'] as Record<string, unknown> | undefined;
     return {
-      auditLog: secRaw?.['audit_log']
-        ? (secRaw['audit_log'] as string).replace(/^~/, os.homedir())
+      auditLog: typeof secRaw?.['audit_log'] === 'string'
+        ? secRaw['audit_log'].replace(/^~/, os.homedir())
         : defaultResult.auditLog,
       hashChain: secRaw?.['audit_hash_chain'] !== false,
       singleWriter: secRaw?.['audit_single_writer'] !== false,
     };
-  } catch {
+  } catch (err) {
+    log.warn({ err }, 'Failed to parse config.toml — using default audit log settings');
     return defaultResult;
   }
 }

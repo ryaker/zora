@@ -27,9 +27,10 @@ export interface AuditLoggerOptions {
    */
   hashChain?: boolean;
   /**
-   * When true (default), all writes are serialised through a single Promise queue,
-   * ensuring no two concurrent writes can corrupt the log file.
-   * Set false to allow concurrent writes (not recommended for production).
+   * Reserved for future use. Currently ignored: all writes are always serialised
+   * through a single Promise queue because _appendEntry() mutates shared state
+   * (_initialized, _entryCounter, _previousHash) that is not safe for concurrent
+   * access. Setting this to false emits a warning and has no effect.
    * Maps to security.audit_single_writer in config.
    */
   singleWriter?: boolean;
@@ -61,21 +62,32 @@ export class AuditLogger {
   constructor(auditLogPath: string, options: AuditLoggerOptions = {}) {
     this._logPath = auditLogPath;
     this._hashChain = options.hashChain ?? true;
-    this._singleWriter = options.singleWriter ?? true;
+
+    const requestedSingleWriter = options.singleWriter ?? true;
+    // singleWriter=false is unsupported: _appendEntry() mutates shared state
+    // (_initialized, _entryCounter, _previousHash) that is not safe for concurrent
+    // access. Even when hashChain=false, concurrent writers would race on
+    // _entryCounter and _initialized, producing duplicate entryIds or corrupt
+    // initialization. Always promote to singleWriter=true and warn so operators know.
+    if (!requestedSingleWriter) {
+      log.warn(
+        'singleWriter=false is not supported — concurrent writes race on shared mutable state ' +
+        '(_entryCounter, _initialized) and would produce duplicate entry IDs or corrupt initialization. ' +
+        'Writes will be serialized as if singleWriter=true.',
+      );
+      this._singleWriter = true;
+    } else {
+      this._singleWriter = requestedSingleWriter;
+    }
   }
 
   /**
    * Append an audit entry to the log.
    *
-   * When singleWriter is true (the default), all writes are serialised through a
-   * Promise queue so no two concurrent writes can corrupt the file.
-   * When singleWriter is false, writes run immediately without serialisation.
+   * All writes are serialised through a Promise queue so no two concurrent writes
+   * can corrupt the file or produce duplicate entry IDs.
    */
   async log(input: AuditEntryInput): Promise<AuditEntry> {
-    if (!this._singleWriter) {
-      // singleWriter disabled: write immediately without queuing
-      return this._appendEntry(input);
-    }
     // Queue the write and return the entry once written
     return new Promise<AuditEntry>((resolve, reject) => {
       this._writeQueue = this._writeQueue
@@ -139,6 +151,13 @@ export class AuditLogger {
    * Verify the hash chain integrity of the entire audit log.
    */
   async verifyChain(): Promise<ChainVerificationResult> {
+    // When hash chaining is disabled, entries are written without hash fields.
+    // Attempting to verify the chain against those entries would always fail,
+    // so return a meaningful result instead of false positives.
+    if (!this._hashChain) {
+      return { valid: true, entries: 0, reason: 'Hash chaining disabled — chain verification not applicable' };
+    }
+
     let content: string;
     try {
       content = await fs.readFile(this._logPath, 'utf-8');
