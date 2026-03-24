@@ -185,4 +185,141 @@ prompt = "should not run"
     await manager.init();
     expect(manager.scheduledCount).toBe(0);
   });
+
+  // ─── Event-triggered routine tests ───────────────────────────────────
+
+  it('registers file_change trigger routines via watchRoutine()', async () => {
+    const watchDir = path.join(testDir, 'watched');
+    await fs.mkdir(watchDir, { recursive: true });
+    const watchFile = path.join(watchDir, 'trigger.txt');
+    await fs.writeFile(watchFile, 'initial');
+
+    manager = new RoutineManager(submitTaskMock, testDir, 30);
+    manager.watchRoutine({
+      routine: { name: 'file-watcher', trigger: 'file_change', watch_path: watchFile },
+      task: { prompt: 'file changed' },
+    });
+
+    expect(manager.watchedCount).toBe(1);
+    expect(manager.scheduledCount).toBe(0);
+
+    // Allow polling to baseline mtimes
+    await new Promise((r) => setTimeout(r, 80));
+    await fs.writeFile(watchFile, 'changed');
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(submitTaskMock).toHaveBeenCalledWith({
+      prompt: 'file changed',
+      model: undefined,
+      maxCostTier: undefined,
+    });
+
+    manager.stopAll();
+    expect(manager.watchedCount).toBe(0);
+  });
+
+  it('loads file_change routines from TOML', async () => {
+    const watchDir = path.join(testDir, 'watch-dir');
+    await fs.mkdir(watchDir, { recursive: true });
+    const watchFile = path.join(watchDir, 'signal.txt');
+    await fs.writeFile(watchFile, 'v0');
+
+    const routinePath = path.join(testDir, 'routines', 'event-routine.toml');
+    await fs.mkdir(path.dirname(routinePath), { recursive: true });
+    await fs.writeFile(routinePath, `
+[routine]
+name = "event-routine"
+trigger = "file_change"
+watch_path = "${watchFile}"
+debounce = "0"
+
+[task]
+prompt = "handle change"
+    `, 'utf8');
+
+    manager = new RoutineManager(submitTaskMock, testDir, 30);
+    await manager.init();
+
+    expect(manager.watchedCount).toBe(1);
+    expect(manager.scheduledCount).toBe(0);
+
+    // Allow polling to baseline
+    await new Promise((r) => setTimeout(r, 80));
+    await fs.writeFile(watchFile, 'v1');
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(submitTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: 'handle change' }),
+    );
+  });
+
+  it('stopAll() clears both cron tasks and file watchers', async () => {
+    manager.scheduleRoutine({
+      routine: { name: 'cron-r', schedule: '* * * * *' },
+      task: { prompt: 'cron' },
+    });
+
+    const watchFile = path.join(testDir, 'stop-test.txt');
+    await fs.writeFile(watchFile, 'x');
+    manager.watchRoutine({
+      routine: { name: 'event-r', trigger: 'file_change', watch_path: watchFile },
+      task: { prompt: 'event' },
+    });
+
+    expect(manager.scheduledCount).toBe(1);
+    expect(manager.watchedCount).toBe(1);
+
+    manager.stopAll();
+
+    expect(manager.scheduledCount).toBe(0);
+    expect(manager.watchedCount).toBe(0);
+  });
+
+  it('rejects file_change routine without watch_path', async () => {
+    const routinePath = path.join(testDir, 'routines', 'bad-event.toml');
+    await fs.mkdir(path.dirname(routinePath), { recursive: true });
+    await fs.writeFile(routinePath, `
+[routine]
+name = "bad-event"
+trigger = "file_change"
+
+[task]
+prompt = "will not register"
+    `, 'utf8');
+
+    manager = new RoutineManager(submitTaskMock, testDir, 30);
+    await manager.init();
+
+    expect(manager.watchedCount).toBe(0);
+    expect(manager.scheduledCount).toBe(0);
+  });
+
+  it('passes model_preference and max_cost_tier through watchRoutine callback', async () => {
+    const watchFile = path.join(testDir, 'model-trigger.txt');
+    await fs.writeFile(watchFile, 'init');
+
+    manager = new RoutineManager(submitTaskMock, testDir, 30);
+    manager.watchRoutine({
+      routine: {
+        name: 'model-event',
+        trigger: 'file_change',
+        watch_path: watchFile,
+        model_preference: 'ollama',
+        max_cost_tier: 'free',
+      },
+      task: { prompt: 'free event task' },
+    });
+
+    await new Promise((r) => setTimeout(r, 80));
+    await fs.writeFile(watchFile, 'changed');
+    await new Promise((r) => setTimeout(r, 80));
+
+    expect(submitTaskMock).toHaveBeenCalledWith({
+      prompt: 'free event task',
+      model: 'ollama',
+      maxCostTier: 'free',
+    });
+
+    manager.stopAll();
+  });
 });

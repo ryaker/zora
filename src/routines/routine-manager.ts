@@ -1,9 +1,10 @@
 /**
  * RoutineManager — Manages scheduled and recurring tasks (routines).
  *
- * Spec §5.6 "Cron Routines (Scheduled)":
+ * Spec §5.6 "Cron Routines (Scheduled)" and "Event-Triggered Routines":
  *   - Loads routine definitions from TOML files.
- *   - Schedules tasks using node-cron.
+ *   - Schedules tasks using node-cron (trigger = 'cron' or absent).
+ *   - Wires file-change triggers via EventTriggerManager (trigger = 'file_change').
  *   - Supports model preference, cost ceiling, and timeouts per routine.
  *
  * Routines are executed through a RoutineTaskSubmitter function, which
@@ -19,6 +20,7 @@ import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
 import type { RoutineDefinition, CostTier } from '../types.js';
+import { EventTriggerManager } from './event-triggers.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('routine-manager');
@@ -33,14 +35,26 @@ export type RoutineTaskSubmitter = (options: {
   maxCostTier?: CostTier;
 }) => Promise<string>;
 
+/** Default poll interval for EventTriggerManager (1 second). */
+const DEFAULT_POLL_INTERVAL_MS = 1000;
+
 export class RoutineManager {
   private readonly _routinesDir: string;
   private readonly _submitTask: RoutineTaskSubmitter;
   private readonly _scheduledTasks: Map<string, ScheduledTask> = new Map();
+  /** EventTriggerManager handles all file_change trigger routines. */
+  private readonly _eventTriggers: EventTriggerManager;
+  /** Tracks which watch_paths are associated with each routine name for logging. */
+  private readonly _watchedRoutines: Map<string, string> = new Map();
 
-  constructor(submitTask: RoutineTaskSubmitter, baseDir: string = path.join(os.homedir(), '.zora')) {
+  constructor(
+    submitTask: RoutineTaskSubmitter,
+    baseDir: string = path.join(os.homedir(), '.zora'),
+    pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+  ) {
     this._submitTask = submitTask;
     this._routinesDir = path.join(baseDir, 'routines');
+    this._eventTriggers = new EventTriggerManager({ pollIntervalMs });
   }
 
   /**
@@ -83,7 +97,11 @@ export class RoutineManager {
       if (this._isValidRoutine(raw)) {
         const definition = raw as RoutineDefinition;
         if (definition.routine.enabled !== false) {
-          this.scheduleRoutine(definition);
+          if (definition.routine.trigger === 'file_change') {
+            this.watchRoutine(definition);
+          } else {
+            this.scheduleRoutine(definition);
+          }
         }
       } else {
         log.error({ filePath }, 'Invalid routine definition');
@@ -106,7 +124,8 @@ export class RoutineManager {
       this._scheduledTasks.get(routine.name)!.stop();
     }
 
-    const scheduledTask = cron.schedule(routine.schedule, async () => {
+    const schedule = routine.schedule ?? '* * * * *';
+    const scheduledTask = cron.schedule(schedule, async () => {
       try {
         await this._submitTask({
           prompt: task.prompt,
@@ -134,6 +153,70 @@ export class RoutineManager {
   }
 
   /**
+   * Registers a file-change triggered routine with the EventTriggerManager.
+   * When the watched path changes, the routine's task is submitted through
+   * the same RoutineTaskSubmitter used by cron-scheduled routines.
+   */
+  watchRoutine(definition: RoutineDefinition): void {
+    const { routine, task } = definition;
+
+    if (!routine.watch_path) {
+      log.error(
+        { routine: routine.name },
+        'Event-triggered routine missing watch_path — skipping',
+      );
+      return;
+    }
+
+    const debounceMs = this._parseDebounceMs(routine.debounce ?? 0);
+
+    // Unwatch any previous registration for this routine name
+    const prevPath = this._watchedRoutines.get(routine.name);
+    if (prevPath) {
+      this._eventTriggers.unwatch(prevPath);
+    }
+
+    const watchPath = routine.watch_path.replace(/^~/, os.homedir());
+
+    this._eventTriggers.watch(watchPath, debounceMs, (changedPath: string) => {
+      log.info({ routine: routine.name, changedPath }, 'File-change event triggered routine');
+      void this._submitTask({
+        prompt: task.prompt,
+        model: routine.model_preference,
+        maxCostTier: routine.max_cost_tier,
+      }).catch((err: unknown) => {
+        log.error({ routine: routine.name, changedPath, err }, 'Event-triggered routine execution failed');
+      });
+    });
+
+    this._watchedRoutines.set(routine.name, watchPath);
+    log.info({ routine: routine.name, watchPath, debounceMs }, 'Registered file-change triggered routine');
+  }
+
+  /**
+   * Parses a debounce value into milliseconds.
+   * Accepts a number (treated as ms directly) or a duration string: "5m", "30s", "500ms".
+   * Defaults to 0 on parse failure or when value is 0/"".
+   */
+  private _parseDebounceMs(debounce: string | number): number {
+    if (typeof debounce === 'number') return debounce;
+    if (debounce === '0' || debounce === '') return 0;
+    const match = debounce.match(/^(\d+)(ms|s|m|h)$/);
+    if (!match) {
+      log.warn({ debounce }, 'Unrecognised debounce format, defaulting to 0');
+      return 0;
+    }
+    const value = parseInt(match[1]!, 10);
+    switch (match[2]) {
+      case 'ms': return value;
+      case 's':  return value * 1_000;
+      case 'm':  return value * 60_000;
+      case 'h':  return value * 3_600_000;
+      default:   return 0;
+    }
+  }
+
+  /**
    * Basic validation for RoutineDefinition.
    */
   private _isValidRoutine(raw: unknown): raw is RoutineDefinition {
@@ -149,8 +232,26 @@ export class RoutineManager {
     }
     const r = routine as Record<string, unknown>;
     const t = task as Record<string, unknown>;
-    if (typeof r['name'] !== 'string' || typeof r['schedule'] !== 'string' || typeof t['prompt'] !== 'string') {
+
+    if (typeof r['name'] !== 'string' || typeof t['prompt'] !== 'string') {
       return false;
+    }
+
+    // 'file_change' trigger requires watch_path; 'cron' (or absent) requires schedule.
+    const trigger = r['trigger'];
+    if (trigger === 'file_change') {
+      if (typeof r['watch_path'] !== 'string') {
+        log.error(
+          { routine: r['name'] },
+          'file_change routine is missing watch_path — rejecting',
+        );
+        return false;
+      }
+    } else {
+      // cron or absent: schedule is required
+      if (typeof r['schedule'] !== 'string') {
+        return false;
+      }
     }
 
     // Validate optional max_cost_tier if present
@@ -165,7 +266,7 @@ export class RoutineManager {
   }
 
   /**
-   * Stops all scheduled tasks.
+   * Stops all scheduled cron tasks and all file-change watchers.
    */
   stopAll(): void {
     for (const task of this._scheduledTasks.values()) {
@@ -174,9 +275,18 @@ export class RoutineManager {
       task.destroy();
     }
     this._scheduledTasks.clear();
+
+    // Stop all file-change watchers and clear tracking state.
+    this._eventTriggers.unwatchAll();
+    this._watchedRoutines.clear();
   }
 
   get scheduledCount(): number {
     return this._scheduledTasks.size;
+  }
+
+  /** Number of active file-change watched routines. */
+  get watchedCount(): number {
+    return this._watchedRoutines.size;
   }
 }

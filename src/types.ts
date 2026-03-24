@@ -629,11 +629,31 @@ export interface RoutineTask {
 
 export interface RoutineConfig {
   name: string;
-  schedule: string; // Cron expression
+  /**
+   * Cron expression for scheduled routines (e.g. "0 * * * *").
+   * Required when trigger is absent or 'cron'. Optional when trigger = 'file_change'.
+   */
+  schedule?: string;
   model_preference?: string;  // provider name (e.g. 'claude-haiku', 'gemini', 'ollama')
   max_cost_tier?: CostTier;   // cost ceiling: 'free' | 'included' | 'metered' | 'premium'
   timeout?: string;
   enabled?: boolean;
+  /**
+   * Trigger type. Defaults to 'cron' when absent (backward-compatible).
+   * 'file_change' enables the EventTriggerManager path; requires watch_path.
+   */
+  trigger?: 'cron' | 'file_change';
+  /**
+   * Glob-capable filesystem path to watch. Required when trigger = 'file_change'.
+   * Supports glob patterns (e.g. "~/Projects/my-app/src", "~/Dev/&#42;&#42;/dist").
+   */
+  watch_path?: string;
+  /**
+   * Debounce window for file-change events. Accepts a duration string (e.g. "5m", "30s",
+   * "500ms") or a plain number of milliseconds (e.g. 5000).
+   * Defaults to 0 (no debounce) when absent. Applies only to file_change triggers.
+   */
+  debounce?: string | number;
 }
 
 export interface RoutineDefinition {
