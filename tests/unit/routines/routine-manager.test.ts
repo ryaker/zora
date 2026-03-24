@@ -206,7 +206,12 @@ prompt = "should not run"
     // Allow polling to baseline mtimes
     await new Promise((r) => setTimeout(r, 80));
     await fs.writeFile(watchFile, 'changed');
-    await new Promise((r) => setTimeout(r, 80));
+
+    // Wait up to 2s for the callback rather than sleeping a fixed duration
+    const deadline = Date.now() + 2000;
+    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
     expect(submitTaskMock).toHaveBeenCalledWith({
       prompt: 'file changed',
@@ -246,7 +251,12 @@ prompt = "handle change"
     // Allow polling to baseline
     await new Promise((r) => setTimeout(r, 80));
     await fs.writeFile(watchFile, 'v1');
-    await new Promise((r) => setTimeout(r, 80));
+
+    // Wait up to 2s for the callback rather than sleeping a fixed duration
+    const deadline = Date.now() + 2000;
+    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
     expect(submitTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: 'handle change' }),
@@ -312,7 +322,12 @@ prompt = "will not register"
 
     await new Promise((r) => setTimeout(r, 80));
     await fs.writeFile(watchFile, 'changed');
-    await new Promise((r) => setTimeout(r, 80));
+
+    // Wait up to 2s for the callback rather than sleeping a fixed duration
+    const deadline = Date.now() + 2000;
+    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
     expect(submitTaskMock).toHaveBeenCalledWith({
       prompt: 'free event task',

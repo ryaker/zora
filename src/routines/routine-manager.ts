@@ -87,6 +87,23 @@ export class RoutineManager {
   }
 
   /**
+   * Unloads a routine by name, stopping its cron task or file watcher if active.
+   * Called at the top of loadRoutine() when reloading an existing routine so that
+   * switching trigger types (cron ↔ file_change) does not leave both active.
+   */
+  private _unloadRoutine(name: string): void {
+    if (this._scheduledTasks.has(name)) {
+      this._scheduledTasks.get(name)!.destroy();
+      this._scheduledTasks.delete(name);
+    }
+    const prevPath = this._watchedRoutines.get(name);
+    if (prevPath) {
+      this._eventTriggers.unwatch(prevPath);
+      this._watchedRoutines.delete(name);
+    }
+  }
+
+  /**
    * Loads a single routine from a TOML file and schedules it.
    */
   async loadRoutine(filePath: string): Promise<void> {
@@ -97,10 +114,26 @@ export class RoutineManager {
       if (this._isValidRoutine(raw)) {
         const definition = raw as RoutineDefinition;
         if (definition.routine.enabled !== false) {
+          // Unload any previous registration for this routine name so that
+          // switching trigger types does not leave stale cron jobs or watchers.
+          this._unloadRoutine(definition.routine.name);
+
           if (definition.routine.trigger === 'file_change') {
             this.watchRoutine(definition);
-          } else {
+          } else if (definition.routine.trigger === 'cron' || definition.routine.trigger === undefined) {
+            if (!definition.routine.schedule) {
+              log.error(
+                { routine: definition.routine.name },
+                'Cron routine missing schedule — skipping',
+              );
+              return;
+            }
             this.scheduleRoutine(definition);
+          } else {
+            log.warn(
+              { routine: definition.routine.name, trigger: definition.routine.trigger as string },
+              'Unknown trigger type — skipping routine',
+            );
           }
         }
       } else {
@@ -119,12 +152,21 @@ export class RoutineManager {
   scheduleRoutine(definition: RoutineDefinition): void {
     const { routine, task } = definition;
 
-    // Stop existing task if it exists
-    if (this._scheduledTasks.has(routine.name)) {
-      this._scheduledTasks.get(routine.name)!.stop();
+    if (!routine.schedule) {
+      log.error(
+        { routine: routine.name },
+        'Cron routine missing schedule — skipping',
+      );
+      return;
     }
 
-    const schedule = routine.schedule ?? '* * * * *';
+    // Stop existing task if it exists
+    if (this._scheduledTasks.has(routine.name)) {
+      this._scheduledTasks.get(routine.name)!.destroy();
+      this._scheduledTasks.delete(routine.name);
+    }
+
+    const schedule = routine.schedule;
     const scheduledTask = cron.schedule(schedule, async () => {
       try {
         await this._submitTask({
@@ -174,9 +216,23 @@ export class RoutineManager {
     const prevPath = this._watchedRoutines.get(routine.name);
     if (prevPath) {
       this._eventTriggers.unwatch(prevPath);
+      this._watchedRoutines.delete(routine.name);
     }
 
     const watchPath = routine.watch_path.replace(/^~/, os.homedir());
+
+    // Prevent two routines from sharing the same watch_path — the second
+    // registration would silently shadow the first, causing dropped callbacks.
+    const existingOwner = [...this._watchedRoutines.entries()].find(
+      ([, p]) => p === watchPath,
+    );
+    if (existingOwner) {
+      log.error(
+        { routine: routine.name, watchPath, existingOwner: existingOwner[0] },
+        'watch_path already registered by another routine — skipping',
+      );
+      return;
+    }
 
     this._eventTriggers.watch(watchPath, debounceMs, (changedPath: string) => {
       log.info({ routine: routine.name, changedPath }, 'File-change event triggered routine');
