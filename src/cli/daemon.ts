@@ -198,6 +198,10 @@ async function main() {
   orchestrator.setApprovalQueue(approvalQueue);
   await orchestrator.boot();
 
+  // Wire ApprovalQueue into SkillSynthesizer for daemon-mode HITL skill confirmation.
+  // Without this, skill generation in daemon mode fails closed (skills silently dropped).
+  orchestrator.skillSynthesizer.setApprovalQueue(approvalQueue);
+
   // Register with AgentBus (best-effort — failure doesn't block startup)
   const agentBusClient = new AgentBusClient({
     project: config.project?.name ?? config.agent.name,

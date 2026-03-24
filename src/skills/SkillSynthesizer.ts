@@ -25,6 +25,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import type { LLMProvider, AgentEvent, TaskContext } from '../types.js';
+import type { ApprovalQueue } from '../core/approval-queue.js';
 import { SkillsLock } from './SkillsLock.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -60,6 +61,13 @@ export interface SkillSynthesizerOptions {
    * without confirmation.
    */
   skipConfirmation?: boolean;
+  /**
+   * ApprovalQueue instance for daemon-mode HITL confirmation.
+   * When stdin is not a TTY and an ApprovalQueue is provided, skill generation
+   * goes through the queue (Telegram / channel-based approval) instead of
+   * failing closed.
+   */
+  approvalQueue?: ApprovalQueue;
 }
 
 // ─── SkillSynthesizer ─────────────────────────────────────────────────
@@ -69,6 +77,7 @@ export class SkillSynthesizer {
   private readonly _lock: SkillsLock;
   private _provider: LLMProvider | undefined;
   private readonly _skipConfirmation: boolean;
+  private _approvalQueue: ApprovalQueue | undefined;
 
   constructor(options: SkillSynthesizerOptions = {}) {
     const baseDir = options.baseDir ?? path.join(os.homedir(), '.zora');
@@ -76,6 +85,15 @@ export class SkillSynthesizer {
     this._lock = new SkillsLock(baseDir);
     this._provider = options.provider;
     this._skipConfirmation = options.skipConfirmation ?? false;
+    this._approvalQueue = options.approvalQueue;
+  }
+
+  /**
+   * Wire in an ApprovalQueue for daemon-mode HITL skill confirmation.
+   * Called by Orchestrator after boot when the approval queue is configured.
+   */
+  setApprovalQueue(queue: ApprovalQueue): void {
+    this._approvalQueue = queue;
   }
 
   /**
@@ -272,15 +290,30 @@ export class SkillSynthesizer {
    *
    * In one-shot (ask) mode: print the proposed SKILL.md and prompt stdin.
    * When skipConfirmation is true: auto-confirm (tests/programmatic use).
-   * When stdin is not a TTY (daemon/background): fail closed — do NOT auto-approve.
-   * TODO: wire an out-of-band confirmer (e.g. via ApprovalQueue) for daemon runs.
+   * When stdin is not a TTY and an ApprovalQueue is available: route through
+   * out-of-band approval (Telegram, channel, etc.) — preserves HITL in daemon mode.
+   * When stdin is not a TTY and no queue: fail closed.
    */
   private async _confirmWithUser(name: string, content: string): Promise<boolean> {
     if (this._skipConfirmation) {
       return true;
     }
     if (!process.stdin.isTTY) {
-      // Daemon/non-interactive context — fail closed to preserve HITL guarantee.
+      // Daemon/non-interactive context — try out-of-band approval queue first.
+      if (this._approvalQueue?.isEnabled()) {
+        const approved = await this._approvalQueue.request({
+          action: `Save auto-generated skill: ${name}\n\n${content.slice(0, 500)}${content.length > 500 ? '\n…(truncated)' : ''}`,
+          score: 50,  // Medium risk — writing a new file to the skills dir
+          jobId: `skill-synthesizer:${name}`,
+          tool: 'SkillSynthesizer',
+        });
+        if (!approved) {
+          log.info({ skill: name }, 'Daemon approval denied — skill not saved');
+        }
+        return approved;
+      }
+      // No queue configured — fail closed to preserve HITL guarantee.
+      log.warn({ skill: name }, 'Daemon mode with no ApprovalQueue — skill generation skipped (set approvalQueue to enable)');
       return false;
     }
 

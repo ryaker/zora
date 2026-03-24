@@ -291,8 +291,17 @@ export class Orchestrator {
       this._secretsManager = new SecretsManager(this._baseDir, masterPassword);
       await this._secretsManager.init();
       log.info('SecretsManager initialized');
-      // TODO: wire secret values into SecretRedactHook.addPattern() once that
-      // method is added to the hook's interface (SecretRedactHook has no addPattern yet)
+      // Wire stored secret names into SecretRedactHook so their values are
+      // redacted from tool arguments even if they don't match static patterns.
+      const secretNames = await this._secretsManager.listSecrets();
+      for (const name of secretNames) {
+        // Match as a key name (exact, case-insensitive) so any arg key matching
+        // the stored secret name is redacted.
+        SecretRedactHook.addPattern(new RegExp(`^${name}$`, 'i'));
+      }
+      if (secretNames.length > 0) {
+        log.info({ count: secretNames.length }, 'Registered secret names with SecretRedactHook');
+      }
     } else {
       log.warn('ZORA_MASTER_PASSWORD not set — encrypted secrets storage unavailable. Set this env var to enable.');
     }
@@ -1923,6 +1932,11 @@ export class Orchestrator {
   /** SEC-12: Access the SecretsManager (undefined if ZORA_MASTER_PASSWORD not set) */
   get secretsManager(): SecretsManager | undefined {
     return this._secretsManager;
+  }
+
+  /** Exposes SkillSynthesizer so daemon can wire ApprovalQueue after boot */
+  get skillSynthesizer(): SkillSynthesizer {
+    return this._skillSynthesizer;
   }
 
   get config(): ZoraConfig {
