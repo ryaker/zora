@@ -206,9 +206,10 @@ export class SignalIntakeAdapter {
       }
 
       if (result.type === 'route' && result.project) {
-        // Attach routing target to the message envelope so downstream handlers
-        // can forward to the correct project Zora.
-        (message as ChannelMessage & { project?: string }).project = result.project;
+        // Apply the stripped content (without @Project prefix) and attach
+        // the routing target so downstream handlers can forward to the correct project Zora.
+        message.content = result.content;
+        message.project = result.project;
         log.info({ project: result.project }, '[signal] PM Zora routed message to project');
       }
       // 'unresolved' falls through to the default handler unchanged

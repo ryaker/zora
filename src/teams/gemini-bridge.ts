@@ -58,13 +58,9 @@ export class GeminiBridge {
 
   /**
    * Stops polling and kills any active subprocess.
-   * If a watchdog is attached, it is detached first.
+   * The watchdog is NOT detached — use stopPermanently() for full teardown.
    */
   stop(): void {
-    if (this._watchdog) {
-      this.detachWatchdog();
-    }
-
     this._running = false;
 
     if (this._pollTimer) {
@@ -79,25 +75,41 @@ export class GeminiBridge {
   }
 
   /**
+   * Permanently tears down the bridge: stops polling, kills any active
+   * subprocess, and detaches the watchdog. Use this instead of stop() when
+   * the bridge is being destroyed (not just restarted by the watchdog).
+   */
+  stopPermanently(): void {
+    if (this._watchdog) {
+      this.detachWatchdog();
+    }
+    this.stop();
+  }
+
+  /**
    * Attaches a BridgeWatchdog to this bridge.
+   * Stops any previously attached watchdog before wiring the new one.
    * Wires the watchdog heartbeat to the poll-complete callback and starts monitoring.
    */
   attachWatchdog(watchdog: BridgeWatchdog): void {
+    if (this._watchdog) {
+      this._watchdog.stop();
+    }
     this._watchdog = watchdog;
     this.setOnPollComplete(() => watchdog.writeHeartbeat());
     watchdog.start();
   }
 
   /**
-   * Detaches the current watchdog, stopping its health checks and
-   * clearing the poll-complete callback.
+   * Detaches the current watchdog, stopping its health checks.
+   * Does NOT clear _onPollComplete — that callback may have been set
+   * independently and must survive watchdog detach/re-attach cycles.
    */
   detachWatchdog(): void {
     if (this._watchdog) {
       this._watchdog.stop();
       this._watchdog = undefined;
     }
-    this._onPollComplete = undefined;
   }
 
   isRunning(): boolean {

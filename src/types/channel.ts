@@ -26,6 +26,8 @@ export interface ChannelMessage {
   content: string;           // Raw message text
   timestamp: Date;
   attachments?: string[];    // File paths of downloaded attachments
+  /** PM Zora only: routing target project name, set by SignalIntakeAdapter */
+  project?: string;
 }
 
 export interface CapabilitySet {
