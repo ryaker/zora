@@ -387,13 +387,11 @@ export class Orchestrator {
 
     this._sessionManager = new SessionManager(this._baseDir);
 
-    // steering.enabled: skip init entirely if false
+    // steering.enabled: instantiate once; only call init() when enabled
+    this._steeringManager = new SteeringManager(this._baseDir);
     if (this._config.steering.enabled !== false) {
-      this._steeringManager = new SteeringManager(this._baseDir);
       await this._steeringManager.init();
     } else {
-      // Provide a no-op SteeringManager so downstream code doesn't need null checks
-      this._steeringManager = new SteeringManager(this._baseDir);
       log.info('Steering disabled via config — SteeringManager inert');
     }
 
@@ -629,7 +627,15 @@ export class Orchestrator {
         if (!script) continue; // skip entries without a script
 
         const scriptPath = script.replace(/^~/, os.homedir());
-        const matchPattern = match ? new RegExp(match) : null;
+        let matchPattern: RegExp | null = null;
+        if (match) {
+          try {
+            matchPattern = new RegExp(match);
+          } catch {
+            log.warn({ match, script: scriptPath, event }, 'Config hook has invalid regex in "match" — skipping hook entry');
+            continue;
+          }
+        }
 
         if (event === 'onTaskStart') {
           this._hookRunner.on('onTaskStart', async (ctx) => {

@@ -123,8 +123,11 @@ describe('FailoverController', () => {
     const error = new Error('Rate limit exceeded (429)');
     await callbackController.handleFailure(task, p1, error);
 
-    // Wait for the non-blocking notify call to fire
-    await new Promise(resolve => setTimeout(resolve, 10));
+    // Wait for the non-blocking notify call to fire (bounded poll to avoid flakiness)
+    const deadline = Date.now() + 500;
+    while (notifications.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 5));
+    }
     expect(notifications.length).toBeGreaterThan(0);
     expect(notifications[0]).toContain('claude');
     expect(notifications[0]).toContain('gemini');

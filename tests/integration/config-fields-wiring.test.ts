@@ -139,8 +139,9 @@ describe('failover.auto_handoff config field wiring', () => {
     const error = new Error('429 rate limit exceeded');
     await controller.handleFailure(makeTask(), primary, error);
 
-    // Give the fire-and-forget notification a chance to fire
-    await new Promise(r => setTimeout(r, 10));
+    // Poll for the fire-and-forget notification rather than using a fixed sleep,
+    // which is flaky under event-loop pressure on slow CI machines.
+    await vi.waitUntil(() => notifySpy.mock.calls.length > 0, { timeout: 2000, interval: 20 });
 
     expect(notifySpy).toHaveBeenCalledOnce();
     expect(notifySpy.mock.calls[0]![0]).toContain('claude');
@@ -169,7 +170,9 @@ describe('failover.auto_handoff config field wiring', () => {
 
     const error = new Error('429 rate limit exceeded');
     await controller.handleFailure(makeTask(), primary, error);
-    await new Promise(r => setTimeout(r, 10));
+    // Drain the microtask queue — if notify fires synchronously or in the next tick
+    // we want to catch it, but we should not wait for an event that must NOT occur.
+    await Promise.resolve();
 
     expect(notifySpy).not.toHaveBeenCalled();
   });

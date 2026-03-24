@@ -192,8 +192,8 @@ export class FailoverController {
       if (this._config.notify_on_failover && this._callbacks.onNotify) {
         const reason = isAuthError ? 'auth failure' : 'quota/rate limit';
         const msg = `Failover: ${failedProvider.name} → ${nextProvider.name} (${reason}) for job ${task.jobId}`;
-        this._callbacks.onNotify(msg).catch(err => {
-          log.warn({ err }, 'Failover notification failed (non-critical)');
+        Promise.resolve().then(() => this._callbacks.onNotify!(msg)).catch(err => {
+          log.warn({ err }, 'failover notify error');
         });
       }
 

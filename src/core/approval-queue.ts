@@ -152,6 +152,10 @@ export class ApprovalQueue {
    * for the duration of the process without requiring an interactive approval reply.
    */
   setSessionBlanketAllow(maxScore: number): void {
+    if (!Number.isFinite(maxScore) || maxScore < 0) {
+      log.warn({ maxScore }, 'setSessionBlanketAllow: invalid maxScore — blanket allow not activated');
+      return;
+    }
     this._blanketSessionScoped = true;
     this._blanketMaxScore = maxScore;
     log.info({ maxScore }, 'auto_approve_low_risk: session blanket allow pre-activated');
