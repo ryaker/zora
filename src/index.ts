@@ -17,4 +17,3 @@ export * from './routines/index.js';
 export * from './memory/index.js';
 export * from './teams/index.js';
 export * from './dashboard/auth-middleware.js';
-export * from './wasm/wasmtime-spike.js';

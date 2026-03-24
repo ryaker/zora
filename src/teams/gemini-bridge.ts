@@ -10,6 +10,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Mailbox } from './mailbox.js';
 import { createLogger } from '../utils/logger.js';
+import type { BridgeWatchdog } from './bridge-watchdog.js';
 
 const log = createLogger('gemini-bridge');
 
@@ -29,6 +30,7 @@ export class GeminiBridge {
   private _polling = false;
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
   private _activeProcess: ChildProcess | null = null;
+  private _watchdog?: BridgeWatchdog;
 
   constructor(
     teamName: string,
@@ -56,8 +58,13 @@ export class GeminiBridge {
 
   /**
    * Stops polling and kills any active subprocess.
+   * If a watchdog is attached, it is detached first.
    */
   stop(): void {
+    if (this._watchdog) {
+      this.detachWatchdog();
+    }
+
     this._running = false;
 
     if (this._pollTimer) {
@@ -69,6 +76,28 @@ export class GeminiBridge {
       this._activeProcess.kill();
       this._activeProcess = null;
     }
+  }
+
+  /**
+   * Attaches a BridgeWatchdog to this bridge.
+   * Wires the watchdog heartbeat to the poll-complete callback and starts monitoring.
+   */
+  attachWatchdog(watchdog: BridgeWatchdog): void {
+    this._watchdog = watchdog;
+    this.setOnPollComplete(() => watchdog.writeHeartbeat());
+    watchdog.start();
+  }
+
+  /**
+   * Detaches the current watchdog, stopping its health checks and
+   * clearing the poll-complete callback.
+   */
+  detachWatchdog(): void {
+    if (this._watchdog) {
+      this._watchdog.stop();
+      this._watchdog = undefined;
+    }
+    this._onPollComplete = undefined;
   }
 
   isRunning(): boolean {

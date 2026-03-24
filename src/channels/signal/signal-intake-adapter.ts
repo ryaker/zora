@@ -16,6 +16,7 @@ import { SignalCli } from 'signal-sdk';
 import { ChannelMessage } from '../../types/channel.js';
 import { signalEventToChannelMessage, SignalEvent } from './signal-identity.js';
 import { createLogger } from '../../utils/logger.js';
+import { routeMessage, type ProjectEntry, type RoutingResult } from './signal-pm-router.js';
 
 const log = createLogger('signal-intake');
 
@@ -32,10 +33,24 @@ export class SignalIntakeAdapter {
   private _retryCount = 0;
   private _stopped = false;
   private _retryTimeout: ReturnType<typeof setTimeout> | null = null;
+  /** PM Zora only: optional project list enabling per-project routing */
+  private _projects: ProjectEntry[] | undefined;
 
   constructor(phoneNumber: string, cliPath?: string) {
     this._phoneNumber = phoneNumber;
     this._cliPath = cliPath;
+  }
+
+  /**
+   * Configure PM Zora routing. When called with a non-empty project list,
+   * inbound messages are routed to the appropriate project before being
+   * forwarded to the message handler.
+   *
+   * Not required for regular Zora instances — only call this when operating
+   * in PM Zora mode with multiple downstream project Zoras.
+   */
+  setProjects(projects: ProjectEntry[]): void {
+    this._projects = projects;
   }
 
   /**
@@ -178,6 +193,26 @@ export class SignalIntakeAdapter {
       { sender: message.from.phoneNumber, channelId: message.channelId, channelType: message.channelType },
       '[signal] Message received'
     );
+
+    // PM Zora routing — only active when projects are configured
+    if (this._projects && this._projects.length > 0) {
+      const result: RoutingResult = routeMessage(message.content ?? '', this._projects);
+
+      if (result.type === 'command') {
+        // Slash commands are handled by PM Zora directly.
+        // Log and drop for now — a command handler can be attached later.
+        log.info({ command: result.command, args: result.args }, '[signal] PM Zora slash command received');
+        return;
+      }
+
+      if (result.type === 'route' && result.project) {
+        // Attach routing target to the message envelope so downstream handlers
+        // can forward to the correct project Zora.
+        (message as ChannelMessage & { project?: string }).project = result.project;
+        log.info({ project: result.project }, '[signal] PM Zora routed message to project');
+      }
+      // 'unresolved' falls through to the default handler unchanged
+    }
 
     if (this._messageHandler) {
       await this._messageHandler(message);

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { writeAtomic } from '../utils/fs.js';
 import { Mailbox } from './mailbox.js';
 import type { AgentMember, TeamConfig, MailboxMessage } from './team-types.js';
+import { PRLifecycleManager } from './pr-lifecycle.js';
 
 /**
  * Validates that a name does not contain path separators or traversal sequences.
@@ -24,6 +25,7 @@ function validateName(name: string, label: string): void {
 
 export class TeamManager {
   private readonly _teamsDir: string;
+  private _prLifecycle?: PRLifecycleManager;
 
   constructor(baseDir: string) {
     this._teamsDir = path.join(baseDir, 'teams');
@@ -34,6 +36,17 @@ export class TeamManager {
    */
   get teamsDir(): string {
     return this._teamsDir;
+  }
+
+  /**
+   * Returns a PRLifecycleManager that wraps this TeamManager.
+   * Lazy-initialised on first access — zero cost unless PR lifecycle is needed.
+   */
+  get prLifecycle(): PRLifecycleManager {
+    if (!this._prLifecycle) {
+      this._prLifecycle = new PRLifecycleManager(this);
+    }
+    return this._prLifecycle;
   }
 
   /**
