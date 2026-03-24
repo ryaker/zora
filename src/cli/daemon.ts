@@ -208,9 +208,12 @@ async function main() {
   // Wire TelegramGateway into the steering subsystem (HITL /steer, /status, /approve).
   // This is separate from TelegramAdapter (ChannelManager general messaging).
   // Runs daemon-only; skipped in one-shot `ask` mode via the enabled guard.
+  // Skip if channel-policy.toml is present — TelegramAdapter (via ChannelManager) will
+  // handle Telegram in that case; starting both would cause dual long-poll on the same token.
+  const channelPolicyExistsForGateway = fs.existsSync(path.join(configDir, 'config', 'channel-policy.toml'));
   let telegramGateway: TelegramGateway | undefined;
   const telegramCfg = config.steering.telegram;
-  if (telegramCfg?.enabled) {
+  if (telegramCfg?.enabled && !channelPolicyExistsForGateway) {
     const token = telegramCfg.bot_token || process.env['TELEGRAM_BOT_TOKEN'];
     if (!token) {
       log.warn('steering.telegram.enabled=true but TELEGRAM_BOT_TOKEN is not set — TelegramGateway disabled');
@@ -234,7 +237,7 @@ async function main() {
           telegramGateway.connectApprovalQueue(approvalQueue);
           log.info('ApprovalQueue wired to TelegramGateway');
         }
-        log.info({ allowedUsers: telegramCfg.allowed_users.length }, 'TelegramGateway online (steering HITL)');
+        log.info({ allowedUsers: (telegramCfg.allowed_users?.length ?? 0) }, 'TelegramGateway online (steering HITL)');
       } catch (err) {
         log.error({ err: err instanceof Error ? err.message : String(err) }, 'TelegramGateway failed to start — continuing without it');
         telegramGateway = undefined;
@@ -355,11 +358,11 @@ async function main() {
     log.info({ signal }, 'Received signal, shutting down');
 
     const graceful = async () => {
+      if (telegramGateway) {
+        try { await telegramGateway.stop(); } catch (err) { log.warn({ err }, 'Telegram gateway stop error'); }
+        telegramGateway = undefined;
+      }
       try {
-        if (telegramGateway) {
-          await telegramGateway.stop();
-          telegramGateway = undefined;
-        }
         if (channelManager) {
           await channelManager.stop();
         }
