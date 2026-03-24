@@ -297,7 +297,8 @@ export class Orchestrator {
       for (const name of secretNames) {
         // Match as a key name (exact, case-insensitive) so any arg key matching
         // the stored secret name is redacted.
-        SecretRedactHook.addPattern(new RegExp(`^${name}$`, 'i'));
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        SecretRedactHook.addPattern(new RegExp(`^${escaped}$`, 'i'));
       }
       if (secretNames.length > 0) {
         log.info({ count: secretNames.length }, 'Registered secret names with SecretRedactHook');

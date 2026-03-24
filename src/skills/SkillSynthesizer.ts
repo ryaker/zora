@@ -301,16 +301,21 @@ export class SkillSynthesizer {
     if (!process.stdin.isTTY) {
       // Daemon/non-interactive context — try out-of-band approval queue first.
       if (this._approvalQueue?.isEnabled()) {
-        const approved = await this._approvalQueue.request({
-          action: `Save auto-generated skill: ${name}\n\n${content.slice(0, 500)}${content.length > 500 ? '\n…(truncated)' : ''}`,
-          score: 50,  // Medium risk — writing a new file to the skills dir
-          jobId: `skill-synthesizer:${name}`,
-          tool: 'SkillSynthesizer',
-        });
-        if (!approved) {
-          log.info({ skill: name }, 'Daemon approval denied — skill not saved');
+        try {
+          const approved = await this._approvalQueue.request({
+            action: `Save auto-generated skill: ${name}\n\n${content.slice(0, 500)}${content.length > 500 ? '\n…(truncated)' : ''}`,
+            score: 50,  // Medium risk — writing a new file to the skills dir
+            jobId: `skill-synthesizer:${name}`,
+            tool: 'SkillSynthesizer',
+          });
+          if (!approved) {
+            log.info({ skill: name }, 'Daemon approval denied — skill not saved');
+          }
+          return approved;
+        } catch (err) {
+          log.warn({ err, skill: name }, 'Approval queue error — failing closed');
+          return false;
         }
-        return approved;
       }
       // No queue configured — fail closed to preserve HITL guarantee.
       log.warn({ skill: name }, 'Daemon mode with no ApprovalQueue — skill generation skipped (set approvalQueue to enable)');

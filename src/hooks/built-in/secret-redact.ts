@@ -30,8 +30,10 @@ class SecretRedactHookImpl implements ToolHook {
    * the default patterns.
    */
   addPattern(keyPattern: RegExp, valuePattern?: RegExp): void {
-    this._extraKeyPatterns.push(keyPattern);
-    if (valuePattern) this._extraValuePatterns.push(valuePattern);
+    // Strip `g` and `y` flags — global/sticky regexes advance lastIndex across
+    // successive .test() calls, causing intermittent misses.
+    this._extraKeyPatterns.push(new RegExp(keyPattern.source, keyPattern.flags.replace(/[gy]/g, '')));
+    if (valuePattern) this._extraValuePatterns.push(new RegExp(valuePattern.source, valuePattern.flags.replace(/[gy]/g, '')));
   }
 
   private _shouldRedact(key: string, value: string): boolean {
@@ -46,6 +48,9 @@ class SecretRedactHookImpl implements ToolHook {
       return this._shouldRedact(key, value) ? '[REDACTED]' : value;
     }
     if (Array.isArray(value)) {
+      // If the parent key is sensitive, redact the whole array rather than
+      // recursing with numeric indices ("0", "1", …) which never match key patterns.
+      if (this._shouldRedact(key, '')) return '[REDACTED]';
       return value.map((item, i) => this._redactDeep(String(i), item));
     }
     if (typeof value === 'object' && value !== null) {
