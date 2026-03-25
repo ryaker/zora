@@ -338,7 +338,7 @@ export interface TaskContext {
  * Adding a new provider? Add its config type string here so the compiler
  * flags every switch that needs updating.
  */
-export type KnownProviderType = 'claude-sdk' | 'gemini-cli' | 'ollama';
+export type KnownProviderType = 'claude-sdk' | 'gemini-cli' | 'ollama' | 'echo';
 
 /**
  * The core provider contract. All providers (Claude, Gemini, OpenAI, Ollama, custom)

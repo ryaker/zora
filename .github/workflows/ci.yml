@@ -37,3 +37,29 @@ jobs:
 
       - name: Security wiring audit
         run: bash scripts/security-audit.sh
+
+  e2e:
+    name: E2E Scenarios (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build:backend
+
+      - name: E2E scenario tests
+        run: npm run test:e2e
+        env:
+          ZORA_E2E: '1'

@@ -1,0 +1,30 @@
+# E2E test fixture — minimal config using EchoProvider (no API keys required)
+
+[agent]
+name = "zora-e2e-test"
+log_level = "warn"
+
+[[providers]]
+name = "echo-primary"
+type = "echo"
+rank = 1
+enabled = true
+capabilities = ["reasoning", "coding", "creative", "structured-data", "search"]
+cost_tier = "free"
+
+[[providers]]
+name = "echo-evaluator"
+type = "echo"
+rank = 2
+enabled = true
+capabilities = ["reasoning", "coding", "creative", "structured-data", "search"]
+cost_tier = "free"
+
+[memory]
+enabled = false
+
+[security]
+enabled = true
+
+[steering]
+enabled = false
