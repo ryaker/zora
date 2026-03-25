@@ -20,6 +20,7 @@ import { Orchestrator } from '../orchestrator/orchestrator.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
+import { EchoProvider } from '../providers/echo-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider, KnownProviderType } from '../types.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -73,6 +74,9 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));
+        break;
+      case 'echo':
+        providers.push(new EchoProvider({ config: pConfig }));
         break;
       default: {
         // Exhaustiveness check: if KnownProviderType gains a new member

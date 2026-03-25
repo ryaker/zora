@@ -1,0 +1,41 @@
+# E2E real-provider config example
+# Copy to e2e-config-real.toml and fill in credentials.
+# Used with: ZORA_E2E=1 ZORA_REAL_PROVIDERS=1 npm run test:e2e:real
+
+[agent]
+name = "zora-e2e-real"
+log_level = "warn"
+
+# Generator provider — Claude Haiku (fast, low cost for testing)
+[[providers]]
+name = "claude-generator"
+type = "claude-sdk"
+rank = 1
+enabled = true
+capabilities = ["reasoning", "coding", "creative", "structured-data", "search"]
+cost_tier = "free"
+auth_method = "mac_session"
+model = "claude-haiku-4-5-20251001"
+max_turns = 3
+
+# Evaluator provider — Gemini Flash (independent verification)
+[[providers]]
+name = "gemini-evaluator"
+type = "gemini-cli"
+rank = 2
+enabled = true
+capabilities = ["reasoning", "coding", "structured-data", "search"]
+cost_tier = "free"
+auth_method = "workspace_sso"
+cli_path = "gemini"
+model = "gemini-2.5-flash"
+max_turns = 3
+
+[memory]
+enabled = false
+
+[security]
+enabled = true
+
+[steering]
+enabled = false

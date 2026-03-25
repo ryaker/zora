@@ -32,3 +32,8 @@ export {
   OllamaProvider,
   type OllamaProviderOptions,
 } from './ollama-provider.js';
+
+export {
+  EchoProvider,
+  type EchoProviderOptions,
+} from './echo-provider.js';

@@ -1,0 +1,34 @@
+# E2E test fixture — minimal permissive policy for testing
+
+[filesystem]
+allowed_paths = ["/tmp"]
+denied_paths = []
+resolve_symlinks = true
+follow_symlinks = false
+
+[shell]
+mode = "allowlist"
+allowed_commands = ["node", "npm", "git", "ls", "echo", "cat"]
+denied_commands = []
+split_chained_commands = true
+max_execution_time = "2m"
+
+[actions]
+reversible = ["write_file", "edit_file", "mkdir"]
+irreversible = []
+always_flag = []
+
+[network]
+allowed_domains = ["*"]
+denied_domains = []
+max_request_size = "10MB"
+
+[budget]
+max_actions_per_session = 1000
+token_budget = 1000000
+on_exceed = "warn"
+
+[dry_run]
+enabled = false
+tools = []
+audit_dry_runs = false

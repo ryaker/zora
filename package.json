@@ -24,6 +24,8 @@
     "test": "npm run test:unit && npm run test:browser",
     "test:unit": "vitest run",
     "test:integration": "ZORA_INTEGRATION=1 vitest run tests/integration/cli-ask.test.ts",
+    "test:e2e": "ZORA_E2E=1 vitest run tests/e2e/",
+    "test:e2e:real": "ZORA_E2E=1 ZORA_REAL_PROVIDERS=1 vitest run tests/e2e/",
     "test:browser": "playwright test",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
