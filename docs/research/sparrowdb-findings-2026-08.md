@@ -257,17 +257,118 @@ running on the libuv threadpool. That plus a `executeBatch(statements[])` (which
 would also soften the multi-clause gap in S2) would remove the need for consumer
 worker threads entirely.
 
-### S3-4. Platform coverage — better than it looks, worth stating
+### S3-4. **The package is effectively linux-x64 only — and it loads the wrong binary on macOS**
 
-`optionalDependencies` correctly lists all five targets — `linux-x64-gnu`,
-`linux-arm64-gnu`, `darwin-x64`, `darwin-arm64`, `win32-x64-msvc`. Good coverage.
+> **Correction.** An earlier revision of this report said platform coverage was
+> "better than it looks" because `optionalDependencies` lists all five targets.
+> That was wrong — I checked the manifest but not the registry. Corrected below.
 
-Two notes: there is **no `linux-*-musl` build**, so Alpine-based containers
-(extremely common for Node services, and relevant to Zora since it ships a
-Dockerfile) will fail to resolve a binary. And it would help consumers if the
-failure mode on an unsupported platform were a clear, catchable error naming the
-platform rather than a bare module-resolution failure — anything doing optional/
-lazy loading needs to distinguish "not installed" from "unsupported here".
+Three compounding problems:
+
+**1. None of the five platform packages are published.** All 404 on the registry:
+
+```
+npm view @sparrowdb/linux-x64-gnu     → E404
+npm view @sparrowdb/linux-arm64-gnu   → E404
+npm view @sparrowdb/darwin-x64        → E404
+npm view @sparrowdb/darwin-arm64      → E404
+npm view @sparrowdb/win32-x64-msvc    → E404
+```
+
+Because they are `optionalDependencies`, npm silently ignores the failures and
+the install reports success. So step 1 of the loader **never succeeds for
+anyone**.
+
+**2. The fallback loads a linux binary on every platform.** With step 1 always
+failing, `loadNative()` falls to `require(join(__dirname, 'sparrowdb.node'))` —
+and that file is a linux ELF:
+
+```
+sparrowdb.node                ELF 64-bit LSB shared object, x86-64   (2461736 bytes)
+sparrowdb.linux-x64-gnu.node  ELF 64-bit LSB shared object, x86-64   (2461736 bytes)  ← identical
+sparrowdb.darwin-arm64.node   Mach-O 64-bit arm64 dynamically linked  (2075504 bytes)
+```
+
+`sparrowdb.node` is byte-identical in size to the linux-x64 build. On
+darwin-arm64 the loader `require()`s an ELF file and `dlopen` fails with an
+obscure error.
+
+**3. A working macOS binary ships in the tarball and is never consulted.**
+`sparrowdb.darwin-arm64.node` is a genuine Mach-O arm64 library, shipped by the
+`"files": ["*.node"]` glob — but `loadNative()` has no branch for the
+`sparrowdb.<platform>-<arch>.node` naming convention it uses. The binary is
+right there, correct, and unreachable.
+
+**Fix — one line, high value.** Insert a platform-specific filename attempt
+between steps 1 and 2:
+
+```js
+const tagged = join(__dirname, `sparrowdb.${process.platform}-${process.arch}.node`);
+if (existsSync(tagged)) return require(tagged);
+```
+
+Then either publish the `@sparrowdb/*` packages or drop them from
+`optionalDependencies` — as-is they are a promise the registry doesn't keep. Also
+worth gating step 2 so the generic `sparrowdb.node` is only tried when it
+plausibly matches the host, rather than being loaded blind.
+
+**Remaining coverage gap:** the tarball ships only `darwin-arm64` and
+`linux-x64-gnu`. There is no `linux-arm64` (Graviton, Docker on Apple Silicon),
+no `darwin-x64`, no `win32`, and no `linux-*-musl` (Alpine — relevant to any
+containerised consumer). The error message in step 4 is good; it just isn't
+reached, because step 2 throws first.
+
+---
+
+## Addendum — findings from the integration build
+
+These surfaced while building a real adapter against the library, after the
+initial probe. Split by whether I could reproduce them in isolation, because
+that distinction determines whether they're actionable.
+
+### Reproduced — treat as confirmed bugs
+
+**A1. Relationship direction is ignored in single-hop patterns.** *(silent wrong answers)*
+
+```js
+db.execute('MATCH (a:P {name:"A"}), (b:P {name:"B"}) CREATE (a)-[r:LIKES]->(b)');
+db.execute('MATCH (a:P {name:"A"})-[r:LIKES]->(b) RETURN b.name');  // → B   correct
+db.execute('MATCH (a:P {name:"A"})<-[r:LIKES]-(b) RETURN b.name');  // → B   WRONG
+```
+
+The inbound pattern should return zero rows — nothing points *at* A. Returning
+the outbound neighbour makes `<-` and `->` indistinguishable, so any consumer
+modelling a directed relationship (`SUPERSEDES`, `DEPENDS_ON`, `REPORTS_TO`) gets
+wrong answers with no error. Given S0, this is the highest-severity item in the
+addendum: direction is usually load-bearing semantics.
+
+**A2. `MERGE` on a relationship silently drops its properties.**
+
+```js
+db.execute('MATCH (a:P {name:"A"}), (b:P {name:"B"}) MERGE (a)-[r:M {w: 7}]->(b)');
+db.execute('MATCH (a:P)-[r:M]->(b) RETURN r.w');   // → { "r.w": null }
+```
+
+The edge is created; `w` is not. Combined with S2's "edge properties cannot be
+modified after creation", a property is unrecoverable once lost this way —
+there's no `SET` to repair it. Either honour the property map or reject the
+statement.
+
+### Reported but NOT reproduced — need a repro before acting
+
+Raised during the integration build; I could not reproduce them in isolation and
+I'd rather flag the disagreement than send someone chasing phantoms.
+
+| Claim | What I measured instead |
+|---|---|
+| "Numeric `ORDER BY` does not sort — rows come back in insertion order" | Sorts correctly in every form tried: `ORDER BY n.ts` → `[10,20,30,40,50]`; `DESC` → `[50,40,30,20,10]`; with `LIMIT 3` → `[10,20,30]`; ordering on a non-first column; string ordering. **Not reproduced.** One real oddity nearby: ordering a traversal result where some edges lack the property put `null` *between* `1` and `9`, so null-ordering may be undefined — worth pinning, but it is not "does not sort". |
+| "Property names must be unique across the whole ontology — a node `kind` and an edge `kind` collide" | `RETURN b.kind, r.kind` → `{"b.kind":"nodeval","r.kind":"edgeval"}`, correct in both column orders and with `a.kind`. **Not reproduced.** |
+| "`CREATE` on an edge is not idempotent — replaying appends duplicates that traversal returns N times while `count(r)` reports 1" | 3× identical `CREATE`, with and without edge properties: traversal returns 1 row, `count(r)` returns 1. Consistent, no duplication. **Not reproduced.** (The `MERGE` half of the same report *is* confirmed — see A2.) |
+
+If these are real, they likely depend on state the isolated probe doesn't build —
+larger graphs, post-`checkpoint()` reads, or the CSR base files rather than the
+delta log. A repro against a checkpointed database would be the thing to try
+next; all three probes here run against small, un-checkpointed graphs.
 
 ### S3-5. Transaction API is published but unusable
 
