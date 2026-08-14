@@ -292,3 +292,76 @@ Wave 1 is done when:
 Graph memory (MEM-30) is done when `graph_recall` answers a two-hop question
 that `memory_search` provably cannot, with the worker thread keeping event-loop
 block time under 5 ms per call.
+
+---
+
+## 6. Documentation freshness (DOC-11, DOC-12)
+
+**Runs last, after all code is merged and green.** Writing docs against a moving
+tree just produces a second generation of stale docs. The tracker enforces this:
+DOC-11 is `blocked_by` the in-flight code gaps.
+
+### The problem is not only staleness
+
+`SECURITY.md` currently asserts:
+
+> "Every tool call passes through a pipeline of six built-in hooks **before it
+> executes**. Hooks run in order; **any hook can abort the pipeline** and return
+> an error to the agent." *(line 320)*
+
+and, in the v0.12.0 implementation-status table (lines ~697–730):
+
+> "Path allow/deny enforcement | **Active**"
+> "Capability token enforcement | **Active**"
+> "6 built-in tool hooks | **Active**"
+
+Before Wave 1 **none of that was true on the main task path** — hooks were
+observational, denials were cosmetic, and `bypassPermissions` skipped the policy
+gate entirely. Wave 1 did not invalidate these claims; it made them true.
+
+That inverts the usual docs job. This is not "update the docs to match the new
+behaviour" — it is **verify each existing claim against the code and mark it
+Active only when a test proves it**. A security document that overstates
+enforcement is itself a security problem: it is the artifact operators use to
+decide what they can safely let the agent do.
+
+### DOC-11 scope
+
+Root docs are outside DOC-10's ownership and need their own pass:
+`README.md`, `SECURITY.md`, `CHANGELOG.md`, `QUICKSTART.md`, `SETUP_GUIDE.md`,
+`FAQ.md`, `WHAT_IS_ZORA.md`, `USE_CASES.md`, `PERSONAL_OS_COOKBOOK.md`,
+`ROUTINES_COOKBOOK.md`, `examples/`.
+
+Rules for the pass:
+
+1. **Every claim in `SECURITY.md` gets one of three verdicts:** verified against
+   code (cite the file), verified against a test (cite the test), or removed. No
+   claim survives on the strength of having been there already.
+2. The "Active" status tables become a **checklist backed by tests**, not prose.
+   If `tests/security/tool-enforcement.test.ts` doesn't cover it, it isn't Active.
+3. `CHANGELOG.md` gets a v0.13.0 entry that is honest about what Wave 1 fixed —
+   including that policy enforcement was previously bypassed. Users of prior
+   versions need to know their `policy.toml` was advisory.
+4. Literal drift sweep: model IDs, SDK versions, config keys, file paths, CLI
+   commands. (Current known literal drift is small — stale `claude-sonnet-4-6`
+   in `docs/configuration.md` only, already inside DOC-10's scope.)
+
+### DOC-12 — stop it recurring
+
+A one-time refresh decays. The durable fix is a cheap CI test that fails when
+docs and code disagree:
+
+- **Model IDs** — grep docs for `claude-*` / `gemini-*` strings; assert each
+  appears in the code's model constants.
+- **Config keys** — parse the TOML fences in `docs/configuration.md` and assert
+  every key exists in the config schema (and flag schema keys documented nowhere).
+- **SDK version** — assert any version string in docs matches `package.json`.
+- **Hook pipeline** — assert the count and names in `SECURITY.md`'s hook table
+  match what `sdk-hook-bridge.ts` actually registers, so "six hooks" cannot drift
+  to seven silently.
+- **CLI commands** — assert every `zora-agent <cmd>` in docs is a registered
+  commander command.
+
+This is the same principle the SparrowDB report recommends upstream: generate or
+verify capability docs from the test suite so they cannot drift. Cheap to build,
+and it converts "we won't want stale docs" from an intention into a build failure.

@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 80,
+    "total_gaps": 82,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -1920,6 +1920,56 @@
         "time_criticality": 8,
         "job_size": 5,
         "score": 3.6
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-11",
+      "category": "documentation",
+      "title": "Verify+refresh root docs: README, SECURITY.md claim-by-claim, CHANGELOG, guides",
+      "severity": "S1",
+      "files_affected": 12,
+      "impact": 5,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [
+        "PERF-01",
+        "MEM-30",
+        "DOC-10"
+      ],
+      "status": "open",
+      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "wsjf": {
+        "usability_value": 6,
+        "wiring_impact": 2,
+        "security_risk": 7,
+        "time_criticality": 6,
+        "job_size": 2,
+        "score": 10.5
+      },
+      "release_gate": false
+    },
+    {
+      "id": "DOC-12",
+      "category": "documentation",
+      "title": "CI drift guard: assert doc claims against code (models, config keys, hooks, SDK version)",
+      "severity": "S2",
+      "files_affected": 4,
+      "impact": 5,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [
+        "DOC-11"
+      ],
+      "status": "open",
+      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 3,
+        "security_risk": 5,
+        "time_criticality": 7,
+        "job_size": 2,
+        "score": 9
       },
       "release_gate": false
     }
