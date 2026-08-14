@@ -27,6 +27,8 @@ import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { QuarantineProcessor } from '../channels/quarantine-processor.js';
 import { ChannelAuditLog } from '../channels/channel-audit-log.js';
 import { ChannelManager } from '../channels/channel-manager.js';
+import { WebhookServer } from '../channels/webhook-server.js';
+import { WebhookValidatorRegistry, createTelegramValidator } from '../channels/webhook-signatures.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
@@ -262,6 +264,9 @@ async function main() {
 
   // Multi-channel secure architecture (IChannelAdapter + ChannelManager + Quarantine)
   let channelManager: ChannelManager | undefined;
+  // INVARIANT-10: only constructed when a platform delivers by webhook AND has
+  // a signature validator to authenticate it.
+  let webhookServer: WebhookServer | undefined;
 
   const channelPolicyPath = path.join(configDir, 'config', 'channel-policy.toml');
   if (fs.existsSync(channelPolicyPath)) {
@@ -293,10 +298,28 @@ async function main() {
       // 2. Telegram
       let telegramRegistered = false;
       const telegramConfig = config.steering.telegram;
+      // INVARIANT-10: webhook mode needs a secret token to authenticate
+      // deliveries. Resolved before the adapter is built so a misconfigured
+      // webhook setup fails at boot instead of starting a bot whose updates
+      // can never arrive.
+      const telegramWebhookMode = telegramConfig?.mode === 'webhook';
+      const telegramWebhookSecret =
+        telegramConfig?.webhook_secret || process.env['TELEGRAM_WEBHOOK_SECRET_TOKEN'];
+      if (telegramWebhookMode && !telegramWebhookSecret) {
+        throw new Error(
+          'steering.telegram.mode = "webhook" requires steering.telegram.webhook_secret ' +
+            '(or TELEGRAM_WEBHOOK_SECRET_TOKEN). Without it the webhook endpoint cannot tell a ' +
+            'genuine Telegram delivery from anyone who finds the URL, so Zora will not open one. ' +
+            'Use the same value in setWebhook. Set mode = "polling" if you do not want a webhook.',
+        );
+      }
+
       if (telegramConfig?.enabled) {
         const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
         if (token) {
-          const telegramAdapter = new TelegramAdapter(token);
+          const telegramAdapter = new TelegramAdapter(token, {
+            mode: telegramWebhookMode ? 'webhook' : 'polling',
+          });
           await channelManager.registerAdapter(telegramAdapter);
           telegramRegistered = true;
         } else {
@@ -305,6 +328,22 @@ async function main() {
       }
 
       await channelManager.start();
+
+      // 3. Webhook listener — INVARIANT-10.
+      // Started only for platforms that both deliver by webhook and have a
+      // signature validator. Registering a validator is what authorises a
+      // platform's route, so the server is never running with a route it
+      // cannot authenticate.
+      if (telegramRegistered && telegramWebhookMode) {
+        const validators = new WebhookValidatorRegistry();
+        validators.register(createTelegramValidator(telegramWebhookSecret!));
+        webhookServer = new WebhookServer(
+          channelManager,
+          validators,
+          telegramConfig?.webhook_port ?? 8080,
+        );
+        await webhookServer.start();
+      }
       const activeAdapters = [];
       if (signalPhone) activeAdapters.push('signal');
       if (telegramRegistered) activeAdapters.push('telegram');
@@ -352,6 +391,9 @@ async function main() {
         telegramGateway = undefined;
       }
       try {
+        if (webhookServer) {
+          await webhookServer.stop();
+        }
         if (channelManager) {
           await channelManager.stop();
         }

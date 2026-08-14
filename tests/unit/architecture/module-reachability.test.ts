@@ -47,16 +47,11 @@ const ENTRY_POINTS = [
  * is intentional. Prefer deleting the file to adding a line here.
  */
 const ALLOWED_UNREACHABLE: { file: string; rationale: string }[] = [
-  {
-    file: 'channels/webhook-server.ts',
-    rationale:
-      'Dead since v0.11.0. Never constructed, no tests, and channels/ is not re-exported ' +
-      'from src/index.ts, so it is not reachable as library API either. It is inert rather ' +
-      'than dangerous — the one route it defines returns 501 without dispatching, because ' +
-      'the INVARIANT-10 per-platform HMAC validation it documents was never implemented. ' +
-      'Kept only pending a decision to delete it; do not wire it up without implementing ' +
-      'that signature validation first.',
-  },
+  // channels/webhook-server.ts was here, dead since v0.11.0, with the standing
+  // condition "do not wire it up without implementing that signature validation
+  // first". INVARIANT-10 validation now exists in channels/webhook-signatures.ts
+  // and the server is constructed from cli/daemon.ts when a platform delivers
+  // by webhook, so the file is reachable and the exemption is gone.
   {
     file: 'hooks/index.ts',
     rationale:
