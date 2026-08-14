@@ -6,9 +6,22 @@
  *
  * EventTriggerManager uses polling (fs.stat + setInterval), not fs.watch.
  * We use a 30ms poll interval throughout to keep tests fast.
+ *
+ * TEST-20 follow-up: every "sleep 80ms, then assert" in this file was racing the
+ * disk. Detection is not instantaneous — it costs a poll tick plus a `stat`
+ * round trip — and the watcher only reports a change once it holds a *previous*
+ * mtime to compare against. Injecting 120ms of `fs.stat` latency reproduced the
+ * reported failure of `debounce coalesces …` exactly: the baseline poll landed
+ * after all five writes, so the final mtime silently became the baseline, no
+ * change was ever detected, and `expect(callCount).toBeGreaterThan(0)` saw zero.
+ * (90ms of injected latency still passed; the margin was under 100ms.)
+ *
+ * Every wait below is now either a condition polled against a deadline — so
+ * load makes a test slower rather than wrong — or an observation window for an
+ * invariant that no amount of waiting can change.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { RoutineManager } from '../../src/routines/routine-manager.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -21,27 +34,56 @@ async function makeTmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'zora-wiring-'));
 }
 
+const DEFAULT_TIMEOUT_MS = 10_000;
+
 /**
- * Wait for a condition to become true, polling every 20ms.
+ * Wait for a condition to become true, polling every 5ms.
  * Rejects after `timeoutMs` with a descriptive message.
+ *
+ * Uses `performance.now()`, not `Date.now()`: `debounce coalesces …` freezes
+ * `Date`, and a deadline measured against a frozen clock never expires.
  */
-function waitFor(
-  condition: () => boolean,
-  timeoutMs: number,
-  description = 'condition',
+async function until(
+  predicate: () => boolean | Promise<boolean>,
+  description: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
-    const check = setInterval(() => {
-      if (condition()) {
-        clearInterval(check);
-        resolve();
-      } else if (Date.now() >= deadline) {
-        clearInterval(check);
-        reject(new Error(`Timed out waiting for: ${description}`));
-      }
-    }, 20);
-  });
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    let ok = false;
+    try {
+      ok = await predicate();
+    } catch {
+      ok = false;
+    }
+    if (ok) return;
+    if (performance.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for: ${description}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+/**
+ * Rewrite `filePath` until the watcher reports the change.
+ *
+ * A watcher fires only once it has a previous mtime to compare against, and it
+ * records that baseline on its first poll. Writing once and trusting that the
+ * baseline poll already happened is the flake this file had: if the write won
+ * the race, its mtime *became* the baseline and no callback ever came. Writing
+ * until the callback arrives removes the ordering assumption entirely.
+ */
+async function touchUntilDetected(
+  filePath: string,
+  detected: () => boolean,
+  description: string,
+): Promise<void> {
+  let n = 0;
+  await until(async () => {
+    if (detected()) return true;
+    await fs.writeFile(filePath, `change-${n++}`);
+    return detected();
+  }, description);
 }
 
 // ─── Test state ───────────────────────────────────────────────────────────────
@@ -55,6 +97,8 @@ afterEach(async () => {
     m.stopAll();
   }
   managers.length = 0;
+
+  vi.useRealTimers();
 
   for (const dir of tmpDirs) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -73,7 +117,7 @@ describe('file_change trigger wiring', () => {
     await fs.writeFile(watchFile, 'initial');
 
     const calls: string[] = [];
-    const submitter = async (opts: { prompt: string }) => {
+    const submitter = async (opts: { prompt: string }): Promise<string> => {
       calls.push(opts.prompt);
       return 'ok';
     };
@@ -93,17 +137,14 @@ describe('file_change trigger wiring', () => {
 
     expect(manager.watchedCount).toBe(1);
 
-    // Let the poller baseline the initial mtime
-    await new Promise((r) => setTimeout(r, 80));
-
-    // Write to trigger a change
-    await fs.writeFile(watchFile, 'changed');
-
-    // Wait up to 2s for at least one callback
-    await waitFor(() => calls.length >= 1, 2000, 'callback to fire after file write');
+    await touchUntilDetected(
+      watchFile,
+      () => calls.length >= 1,
+      'the routine callback to fire after a file write',
+    );
 
     expect(calls).toContain('file-changed-callback');
-  });
+  }, 20_000);
 
   // ─── Test 2: Debounce coalesces rapid writes ────────────────────────────────
 
@@ -112,14 +153,30 @@ describe('file_change trigger wiring', () => {
     tmpDirs.push(tmpDir);
 
     const watchFile = path.join(tmpDir, 'debounce.txt');
+    const tracerFile = path.join(tmpDir, 'tracer.txt');
     await fs.writeFile(watchFile, 'v0');
+    await fs.writeFile(tracerFile, 'v0');
 
     let callCount = 0;
-    const submitter = async () => {
-      callCount++;
+    let tracerCount = 0;
+    const submitter = async (opts: { prompt: string }): Promise<string> => {
+      if (opts.prompt === 'debounced') callCount++;
+      else tracerCount++;
       return 'ok';
     };
 
+    // TEST-20: freeze the clock the debounce window is measured against. Only
+    // `Date` is faked — setInterval, setTimeout and the filesystem stay real, so
+    // this still drives the real polling loop and the real `_parseDebounceMs`
+    // path. What it removes is the load sensitivity: with `Date.now()` pinned, a
+    // write that lands inside the window is suppressed no matter how long the
+    // machine stalls, so "still exactly one call" can never be won or lost by
+    // scheduling luck. Opening the window becomes an explicit clock step.
+    const t0 = new Date('2026-01-01T00:00:00.000Z').getTime();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+
+    const debounceMs = 100;
     const manager = new RoutineManager(submitter, tmpDir, 30);
     managers.push(manager);
 
@@ -132,25 +189,45 @@ describe('file_change trigger wiring', () => {
       },
       task: { prompt: 'debounced' },
     });
+    // The tracer watches a second file with no debounce, so it fires on every
+    // change it sees. It exists to prove polling really happened during the
+    // suppression window — otherwise "still exactly one call" could pass simply
+    // because nothing was ever polled.
+    manager.watchRoutine({
+      routine: {
+        name: 'tracer',
+        trigger: 'file_change',
+        watch_path: tracerFile,
+      },
+      task: { prompt: 'tracer' },
+    });
 
-    // Baseline mtime
-    await new Promise((r) => setTimeout(r, 80));
+    // The first detected change fires and opens the debounce window at t0.
+    await touchUntilDetected(watchFile, () => callCount > 0, 'the first change to fire');
+    expect(callCount).toBe(1);
 
-    // Write 5 times within ~50ms total — all within the 100ms debounce window
+    // A burst of writes inside the frozen window must all be swallowed.
     for (let i = 1; i <= 5; i++) {
       await fs.writeFile(watchFile, `v${i}`);
-      await new Promise((r) => setTimeout(r, 10));
     }
 
-    // Wait for debounce window + buffer to flush
-    await new Promise((r) => setTimeout(r, 250));
+    // Two tracer changes after the burst guarantee full poll cycles elapsed
+    // while the burst was pending, so the suppression below is observed, not
+    // assumed.
+    await touchUntilDetected(tracerFile, () => tracerCount > 0, 'tracer change 1');
+    await touchUntilDetected(tracerFile, () => tracerCount > 1, 'tracer change 2');
 
-    // Debounce should coalesce: expect fewer calls than writes
-    // (In practice the poller may fire once per 30ms poll tick, but the
-    // debounce gate should block most of them.)
-    expect(callCount).toBeGreaterThan(0);
-    expect(callCount).toBeLessThan(5);
-  });
+    expect(callCount).toBe(1);
+
+    // Step past the debounce window: the next change is allowed through.
+    vi.setSystemTime(t0 + debounceMs + 1);
+    await touchUntilDetected(
+      watchFile,
+      () => callCount > 1,
+      'a change after the debounce window to fire',
+    );
+    expect(callCount).toBe(2);
+  }, 20_000);
 
   // ─── Test 3: stopAll() tears down watchers, no callbacks after stop ─────────
 
@@ -162,7 +239,7 @@ describe('file_change trigger wiring', () => {
     await fs.writeFile(watchFile, 'initial');
 
     let callCount = 0;
-    const submitter = async () => {
+    const submitter = async (): Promise<string> => {
       callCount++;
       return 'ok';
     };
@@ -181,22 +258,24 @@ describe('file_change trigger wiring', () => {
 
     expect(manager.watchedCount).toBe(1);
 
-    // Baseline
-    await new Promise((r) => setTimeout(r, 80));
+    // Only stop once the watcher is demonstrably live. Stopping a watcher that
+    // had not baselined yet would leave this test green even if stopAll() did
+    // nothing at all.
+    await touchUntilDetected(watchFile, () => callCount > 0, 'the watcher to fire before stopping');
 
-    // Stop before any file write
     manager.stopAll();
-
     expect(manager.watchedCount).toBe(0);
+    callCount = 0;
 
     // Write a file after stopping
     await fs.writeFile(watchFile, 'written-after-stop');
 
-    // Wait to confirm nothing fires
+    // Nothing is watching any more, so no amount of waiting can produce a
+    // callback — this observation window is safe to keep short.
     await new Promise((r) => setTimeout(r, 150));
 
     expect(callCount).toBe(0);
-  });
+  }, 20_000);
 
   // ─── Test 4: cron routine still works alongside file_change routine ──────────
 
@@ -208,7 +287,7 @@ describe('file_change trigger wiring', () => {
     await fs.writeFile(watchFile, 'init');
 
     const fileCallPrompts: string[] = [];
-    const submitter = async (opts: { prompt: string }) => {
+    const submitter = async (opts: { prompt: string }): Promise<string> => {
       fileCallPrompts.push(opts.prompt);
       return 'ok';
     };
@@ -236,17 +315,10 @@ describe('file_change trigger wiring', () => {
     expect(manager.scheduledCount).toBe(1);
     expect(manager.watchedCount).toBe(1);
 
-    // Baseline mtime
-    await new Promise((r) => setTimeout(r, 80));
-
-    // Trigger the file watcher
-    await fs.writeFile(watchFile, 'changed');
-
-    // Wait for the file callback to fire
-    await waitFor(
+    await touchUntilDetected(
+      watchFile,
       () => fileCallPrompts.includes('file-task'),
-      2000,
-      'file-task callback to fire',
+      'the file-task callback to fire',
     );
 
     // File task fired; cron task did NOT fire (schedule is 1 min away)
@@ -261,5 +333,5 @@ describe('file_change trigger wiring', () => {
 
     expect(manager.scheduledCount).toBe(0);
     expect(manager.watchedCount).toBe(0);
-  });
+  }, 20_000);
 });

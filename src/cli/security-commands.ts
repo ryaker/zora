@@ -160,6 +160,14 @@ const SECRET_PATTERNS: RegExp[] = [
   /^\s*(bot_token|api_key|token|secret|password|auth_token|access_token)\s*=\s*([^\s#"']{8,})/i,
 ];
 
+/**
+ * SEC-26: `bot_token = "env:ZORA_TELEGRAM_TOKEN"` is the fix this check tells
+ * people to apply. Without this exemption the remediated config still FAILs the
+ * scan — and FAILs block startup — which would push users back to the plaintext
+ * they just removed. An env reference holds a variable NAME, not a credential.
+ */
+const ENV_REFERENCE_VALUE = /^(?:env:|\$\{env:)[A-Za-z_][A-Za-z0-9_]*\}?$/;
+
 /** Recursively collect all .toml file paths under a directory. */
 function collectTomlFiles(dir: string): string[] {
   const results: string[] = [];
@@ -207,13 +215,15 @@ function checkPlaintextSecrets(zoraDir: string): CheckResult[] {
         const match = pattern.exec(line);
         if (match) {
           const keyName = match[1]!;
+          // Already remediated: the value is an env reference, not a secret.
+          if (ENV_REFERENCE_VALUE.test(match[2]!)) break;
           const lineNum = i + 1;
           const envVar = keyName.toUpperCase();
           results.push({
             id: `SECRET-PLAINTEXT-${file.replace(/[\./\\]/g, '-').toUpperCase()}-L${lineNum}`,
             label: `Plaintext secret in ${file}`,
             severity: 'FAIL',
-            message: `Plaintext ${keyName} found — move to env var ${envVar}`,
+            message: `Plaintext ${keyName} found — move it out of the file: set ${keyName} = "env:${envVar}" and export ${envVar}`,
             location: `${file}:${lineNum}`,
             fixable: false,
           });

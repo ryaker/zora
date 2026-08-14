@@ -39,7 +39,7 @@ Implement a three-tier memory architecture:
 ### Tier 3: Structured Items with Salience Scoring
 
 - **Format**: JSON files at ~/.zora/memory/items/<id>.json, one per MemoryItem.
-- **Types**: profile, event, knowledge, behavior, skill, tool (MemoryItemType, src/memory/memory-types.ts:8).
+- **Types**: profile, event, knowledge, behavior, skill, tool (MemoryItemType, src/memory/memory-types.ts).
 - **Salience scoring**: SalienceScorer combines access_count, recency decay, relevance to current task, and source trust bonus (src/memory/salience-scorer.ts). Scoring formula: `score = accessWeight * access_count_log + recencyDecay * days_since_access + relevanceScore + sourceTrustBonus`.
 - **Category organization**: CategoryOrganizer groups items into named categories with summaries (src/memory/category-organizer.ts). Category summaries are stored in memory/categories/<category>.json.
 - **Injection**: Top-K items by salience score are injected into task context.

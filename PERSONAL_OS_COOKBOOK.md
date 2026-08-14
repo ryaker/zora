@@ -43,7 +43,7 @@ Your agent's personality, priorities, and behavioral rules live in a single file
 ### Create your SOUL.md
 
 ```bash
-zora-agent edit soul
+zora-agent soul edit
 ```
 
 Or edit directly:
@@ -158,7 +158,7 @@ nano ~/.zora/memory/MEMORY.md
 ### Configure Memory Settings in config.toml
 
 ```bash
-zora-agent edit config
+zora-agent config edit
 ```
 
 Add or update the `[memory]` section:
@@ -172,7 +172,7 @@ categories_dir = "~/.zora/memory/categories"
 context_days = 7                    # How many days of daily notes to load
 max_context_items = 50              # Max memory items per task
 auto_extract = true                 # Auto-learn from conversations
-auto_extract_interval = "5m"        # How often to extract new facts
+auto_extract_interval = 5           # Minutes between extraction runs (a number, not "5m")
 ```
 
 ### Create the Project and Meeting Directories
@@ -210,10 +210,17 @@ Zora reads `MEMORY.md` on every task, so it will always know where to file thing
 
 This is where your operating system comes alive. Routines are cron-scheduled tasks that run automatically in the background.
 
-### Add Routines to config.toml
+### Add Routines
+
+Routines are **not** part of `config.toml`. Each one is its own TOML file in
+`~/.zora/routines/`, with a `[routine]` table and a `[task]` table. The daemon
+loads every `.toml` in that directory at boot.
 
 ```bash
-zora-agent edit config
+mkdir -p ~/.zora/routines
+$EDITOR ~/.zora/routines/morning-brief.toml
+# paste one of the blocks below, then restart:
+zora-agent daemon stop && zora-agent daemon start
 ```
 
 ### Routine 1: Morning Daily Brief (7:00 AM)
@@ -221,13 +228,13 @@ zora-agent edit config
 Creates a fresh daily brief every morning with your top priorities.
 
 ```toml
-[[routines]]
+[routine]
 name = "morning-brief"
 schedule = "0 7 * * *"
 model_preference = "claude"
 timeout = "10m"
 
-[routines.task]
+[task]
 prompt = """
 Good morning. Create today's daily brief:
 
@@ -248,14 +255,14 @@ Good morning. Create today's daily brief:
 Keeps the daily brief current as work gets done throughout the day.
 
 ```toml
-[[routines]]
+[routine]
 name = "brief-update"
 schedule = "0 */3 * * *"
 model_preference = "claude-haiku"
 max_cost_tier = "included"
 timeout = "5m"
 
-[routines.task]
+[task]
 prompt = """
 Update today's daily brief at ~/.zora/memory/daily/{today's date}.md:
 
@@ -272,14 +279,14 @@ Update today's daily brief at ~/.zora/memory/daily/{today's date}.md:
 Pull and categorize meeting notes at end of day.
 
 ```toml
-[[routines]]
+[routine]
 name = "meeting-import"
 schedule = "0 21 * * *"
 model_preference = "claude-haiku"
 max_cost_tier = "included"
 timeout = "15m"
 
-[routines.task]
+[task]
 prompt = """
 End-of-day meeting import:
 
@@ -299,14 +306,14 @@ End-of-day meeting import:
 System maintenance — archive old notes, summarize the day.
 
 ```toml
-[[routines]]
+[routine]
 name = "nightly-cleanup"
 schedule = "0 3 * * *"
 model_preference = "ollama"
 max_cost_tier = "free"
 timeout = "15m"
 
-[routines.task]
+[task]
 prompt = """
 End-of-day system cleanup:
 
@@ -324,13 +331,13 @@ End-of-day system cleanup:
 Draft all your content for the week.
 
 ```toml
-[[routines]]
+[routine]
 name = "weekly-content"
 schedule = "0 9 * * 0"
 model_preference = "claude"
 timeout = "30m"
 
-[routines.task]
+[task]
 prompt = """
 It's Sunday — time to draft this week's content.
 
@@ -351,14 +358,14 @@ It's Sunday — time to draft this week's content.
 Monitor for unanswered messages and pending items.
 
 ```toml
-[[routines]]
+[routine]
 name = "heartbeat-check"
 schedule = "*/30 * * * *"
 model_preference = "ollama"
 max_cost_tier = "free"
 timeout = "5m"
 
-[routines.task]
+[task]
 prompt = """
 Quick heartbeat check:
 
@@ -558,14 +565,14 @@ Update your API reference:
 Now your routines can update the dashboard:
 
 ```toml
-[[routines]]
+[routine]
 name = "sync-dashboard"
 schedule = "*/15 * * * *"
 model_preference = "ollama"
 max_cost_tier = "free"
 timeout = "5m"
 
-[routines.task]
+[task]
 prompt = """
 Sync tasks between Zora workspace and the Supabase dashboard:
 
@@ -708,7 +715,7 @@ zora-agent memory search "projects"
 cat ~/.zora/memory/daily/$(date +%Y-%m-%d).md
 
 # Verify the audit trail
-zora-agent audit verify
+zora-agent audit --verify
 ```
 
 ### Tune Routines Based on Results

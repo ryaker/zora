@@ -28,7 +28,7 @@ Key reasons for TOML:
 **Positive:**
 - Clean, minimal syntax for the provider array pattern.
 - Comments enable self-documenting config files.
-- `zora init` can generate annotated config with inline documentation.
+- `zora-agent init` can generate annotated config with inline documentation.
 - `smol-toml` has no native dependencies, so it works without compilation.
 
 **Negative:**

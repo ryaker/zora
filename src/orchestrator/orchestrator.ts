@@ -37,10 +37,14 @@ import { NegativeCache } from '../services/negative-cache.js';
 import { ErrorPatternDetector } from './error-pattern-detector.js';
 import { HookRunner } from '../hooks/hook-runner.js';
 import { ToolHookRunner } from '../hooks/tool-hook-runner.js';
+import { SdkHookBridge, buildSdkHooks } from '../hooks/sdk-hook-bridge.js';
+import { buildEnforcedSdkOptions } from '../security/enforced-sdk-options.js';
+// SEC-24: the one tool-name normaliser. Every tool-name comparison in src/ uses it.
+import { toolFilterMatches, DESTRUCTIVE_TOOL_NAMES } from '../security/tool-names.js';
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
-import { AuditLogger } from '../security/audit-logger.js';
+import { AuditLogger, securityAuditLogPath } from '../security/audit-logger.js';
 import { RateLimitHook } from '../hooks/built-in/rate-limit.js';
 import { SecretRedactHook } from '../hooks/built-in/secret-redact.js';
 import { SensitiveFileGuardHook } from '../hooks/built-in/sensitive-file-guard.js';
@@ -56,6 +60,8 @@ import { FlagManager } from '../steering/flag-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
+import { createGraphTools } from '../tools/graph-tools.js';
+import { GraphMemoryClient, graphConfigFromEnv } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -91,6 +97,18 @@ import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js
 import { SignalResponseGateway } from '../channels/signal/signal-response-gateway.js';
 
 const log = createLogger('orchestrator');
+
+/**
+ * PERF-01: in-flight tool_call bookkeeping for one provider execution.
+ * Keyed by toolCallId so a tool_result resolves its call in O(1) instead of
+ * rescanning the (unbounded) task history.
+ */
+interface PendingToolCall {
+  /** Wall-clock ms when the tool_call was observed — hook timing bookkeeping. */
+  startedAt: number;
+  /** The tool_call payload (tool name + arguments) awaiting its result. */
+  call: ToolCallEventContent;
+}
 
 export interface OrchestratorOptions {
   config: ZoraConfig;
@@ -166,6 +184,10 @@ export class Orchestrator {
 
   // Tool-level lifecycle hooks
   private _toolHookRunner: ToolHookRunner = new ToolHookRunner();
+  /** SEC-21: per-job SDK hook bridges, so the log path can see hook arg rewrites. */
+  private readonly _hookBridges: Map<string, SdkHookBridge> = new Map();
+  /** ERR-20: jobId → the provider currently executing it, for cancelTask(). */
+  private readonly _activeJobProviders: Map<string, LLMProvider> = new Map();
 
   // ERR-07: Error normalizer for safe error replay
   private readonly _errorNormalizer: ErrorNormalizer = new ErrorNormalizer();
@@ -191,6 +213,23 @@ export class Orchestrator {
   private _memoryExtractIntervalTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private _booted = false;
+
+  // PERF-06: custom tool definitions, built once per boot rather than per task.
+  private _customTools: CustomToolDefinition[] | null = null;
+
+  // MEM-34: the graph memory tier's main-thread façade. Null until boot, and
+  // inert (every call a no-op) whenever the tier is disabled or degraded, so
+  // nothing downstream needs to branch on it beyond tool registration.
+  private _graphClient: GraphMemoryClient | null = null;
+
+  // PERF-03: SOUL.md identity cache. The file used to be existsSync'd and
+  // readFileSync'd on every submitTask(), blocking the event loop per task.
+  // It is read once and served from memory; an fs.watch on the containing
+  // directory invalidates it when the file changes.
+  private _soulPath: string | null = null;
+  private _soulContent = '';
+  private _soulLoaded = false;
+  private _soulWatcher: fs.FSWatcher | null = null;
 
   // TLCI: lazy-initialized dispatcher and plan cache (additive — does not affect submitTask)
   private _planCache?: PlanCache;
@@ -239,6 +278,132 @@ export class Orchestrator {
    * but no flagCallback is registered. Must be called BEFORE boot().
    * After boot(), use policyEngine.setApprovalQueue() directly.
    */
+  /**
+   * PERF-04: Schedules a background timer that never keeps the process alive.
+   *
+   * All five self-rescheduling background loops (auth check, retry poll, daily
+   * consolidation, integrity check, memory extraction) go through here. They are
+   * housekeeping: a process with nothing else to do should exit rather than sit
+   * in the event loop waiting for the next tick. The daemon stays alive on its
+   * dashboard HTTP listener and cron handles, not on these.
+   *
+   * @param fn Callback to run when the timer fires.
+   * @param ms Delay in milliseconds.
+   * @returns The timer handle, so callers can still clearTimeout() it on shutdown.
+   */
+  private _scheduleBackground(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(fn, ms);
+    // unref() is Node-only; the optional call keeps this safe under other typings.
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  }
+
+  /**
+   * PERF-05: Floor on retry-poll wakeups. Matches the old fixed 30s tick, so an
+   * entry that is already overdue — a retry that failed and stayed queued, or a
+   * queue restored from disk after downtime — is re-attempted at exactly the old
+   * cadence rather than spinning the event loop.
+   */
+  private static readonly RETRY_POLL_MIN_MS = 30 * 1000;
+
+  /**
+   * PERF-05: Ceiling on retry-poll sleep. Backoff caps at 24h, but re-checking at
+   * least this often means a suspend/resume or a wall-clock jump cannot strand an
+   * entry, and a `retry_after_cooldown` flip is picked up within one window.
+   */
+  private static readonly RETRY_POLL_MAX_MS = 15 * 60 * 1000;
+
+  /**
+   * PERF-05: Arms the retry poll for the earliest entry's ready time.
+   *
+   * Replaces a fixed 30s tick that fired 2,880 times a day whether or not
+   * anything was due. An empty queue schedules nothing at all; the enqueue path
+   * (_enqueueRetry) re-arms, and every poll re-arms itself from the finally
+   * block, so add and remove both re-derive the next wake.
+   *
+   * Idempotent: an existing timer is cleared first, so callers can re-arm freely.
+   */
+  private _armRetryPoll(): void {
+    if (this._retryPollTimeout) {
+      clearTimeout(this._retryPollTimeout);
+      this._retryPollTimeout = null;
+    }
+    // Shutdown may have raced an in-flight poll; do not resurrect the timer.
+    if (this._shuttingDown) return;
+
+    const nextRunAt = this._retryQueue.nextRunAt();
+    if (nextRunAt === null) {
+      // Nothing queued — sleep indefinitely. _enqueueRetry() wakes us.
+      return;
+    }
+
+    const waitMs = nextRunAt - Date.now();
+    const delay = waitMs <= 0
+      // Already due: floor the wake so a permanently-failing entry retries at the
+      // old 30s cadence instead of busy-looping on a task that never leaves the queue.
+      ? Orchestrator.RETRY_POLL_MIN_MS
+      : Math.min(waitMs, Orchestrator.RETRY_POLL_MAX_MS);
+
+    this._retryPollTimeout = this._scheduleBackground(() => {
+      void this._pollRetryQueue();
+    }, delay);
+  }
+
+  /**
+   * PERF-05: One retry-queue pass. Body is unchanged from the old fixed-tick
+   * poll — including the `retry_after_cooldown` guard and the ERR-08 error-budget
+   * accounting — only the scheduling around it moved.
+   */
+  private async _pollRetryQueue(): Promise<void> {
+    this._retryPollTimeout = null;
+    try {
+      // Guard: skip all retries if retry_after_cooldown is disabled
+      if (!this._failoverController.shouldRetryAfterCooldown()) {
+        return;
+      }
+      const readyEntries = this._retryQueue.getReadyEntries();
+      for (const entry of readyEntries) {
+        try {
+          // ERR-08: Increment budgetConsumed before re-executing to track retry depth
+          if (entry.task.errorBudget) {
+            entry.task.errorBudget.budgetConsumed += 1;
+            // Skip tasks with exhausted budget
+            if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
+              log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
+              await this._retryQueue.remove(entry.task.jobId);
+              continue;
+            }
+          }
+          await this._resumeTask(entry.task);
+          await this._retryQueue.remove(entry.task.jobId);
+        } catch (err) {
+          log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
+          // Leave task in queue for next poll cycle
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'RetryQueue poll failed');
+    } finally {
+      // Re-derive the next wake from whatever is left in the queue.
+      this._armRetryPoll();
+    }
+  }
+
+  /**
+   * PERF-05: Enqueues a failed task and re-arms the poll so the new entry is
+   * woken at its own ready time rather than on the next fixed tick.
+   *
+   * Rethrows exactly as RetryQueue.enqueue() does (notably "max retries
+   * exceeded"), so callers keep their existing swallow-and-continue behaviour.
+   */
+  private async _enqueueRetry(task: TaskContext, error: string): Promise<void> {
+    try {
+      await this._retryQueue.enqueue(task, error, this._config.failover.max_retries);
+    } finally {
+      this._armRetryPoll();
+    }
+  }
+
   setApprovalQueue(queue: ApprovalQueue): void {
     this._approvalQueue = queue;
     // If already booted, propagate immediately
@@ -337,7 +502,7 @@ export class Orchestrator {
     // cause _parseIntervalMinutes to receive a number and silently return the default.
     const integrityIntervalMs = this._parseIntervalMinutes(String(sec.integrity_interval ?? '5m')) * 60 * 1000;
     const scheduleIntegrityCheck = () => {
-      this._integrityCheckTimeout = setTimeout(async () => {
+      this._integrityCheckTimeout = this._scheduleBackground(async () => {
         try {
           const result = await this._integrityGuardian.checkIntegrity();
           if (!result.valid) {
@@ -469,7 +634,7 @@ export class Orchestrator {
     // R4: Schedule periodic auth checks (every 5 minutes) using self-rescheduling
     // setTimeout to avoid overlapping async executions
     const scheduleAuthCheck = () => {
-      this._authCheckTimeout = setTimeout(async () => {
+      this._authCheckTimeout = this._scheduleBackground(async () => {
         try {
           await this._authMonitor.checkAll();
         } catch (err) {
@@ -480,48 +645,42 @@ export class Orchestrator {
     };
     scheduleAuthCheck();
 
-    // R5 / ERR-08: Poll RetryQueue (every 30 seconds) — use _resumeTask to preserve full
-    // TaskContext (state continuity) instead of re-submitting just the original prompt.
-    // retry_after_cooldown: if false, skip the retry poll entirely.
-    const scheduleRetryPoll = () => {
-      this._retryPollTimeout = setTimeout(async () => {
-        // Guard: skip all retries if retry_after_cooldown is disabled
-        if (!this._failoverController.shouldRetryAfterCooldown()) {
-          scheduleRetryPoll();
-          return;
-        }
-        try {
-          const readyEntries = this._retryQueue.getReadyEntries();
-          for (const entry of readyEntries) {
-            try {
-              // ERR-08: Increment budgetConsumed before re-executing to track retry depth
-              if (entry.task.errorBudget) {
-                entry.task.errorBudget.budgetConsumed += 1;
-                // Skip tasks with exhausted budget
-                if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
-                  log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
-                  await this._retryQueue.remove(entry.task.jobId);
-                  continue;
-                }
-              }
-              await this._resumeTask(entry.task);
-              await this._retryQueue.remove(entry.task.jobId);
-            } catch (err) {
-              log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
-              // Leave task in queue for next poll cycle
-            }
-          }
-        } catch (err) {
-          log.error({ err }, 'RetryQueue poll failed');
-        }
-        scheduleRetryPoll();
-      }, 30 * 1000);
-    };
-    scheduleRetryPoll();
+    // R5 / ERR-08 / PERF-05: RetryQueue polling is demand-driven — see _armRetryPoll().
+    this._armRetryPoll();
+
+    // MEM-34: start the graph tier before the tool list is built, because
+    // `createGraphTools` returns `[]` for an inert client and the list is
+    // cached for the life of the boot — starting it afterwards would register
+    // nothing. `create()` never throws and never blocks past
+    // `startupTimeoutMs`: a disabled flag, a missing native module, an
+    // unopenable database or a failed spawn all yield an inert client.
+    this._graphClient = await GraphMemoryClient.create(graphConfigFromEnv());
+    if (this._graphClient.available) {
+      log.info('Graph memory tier live — graph_recall registered');
+    } else {
+      log.debug(
+        { reason: this._graphClient.unavailableReason },
+        'Graph memory tier inert — graph_recall not registered',
+      );
+    }
+
+    // PERF-06: build the custom tool definitions once, now that every subsystem
+    // their handlers close over exists. submitTask() reuses this list; only the
+    // per-job canUseTool closure is rebuilt per task. Assigned (not ??=) so a
+    // re-boot rebinds the tools to the freshly constructed subsystems.
+    this._customTools = this._buildCustomTools();
 
     // R9: Start HeartbeatSystem and RoutineManager — daemon-only.
     // Skip in one-shot ask mode (skipChannels=true) so node-cron handles
     // don't keep the event loop alive after the task completes.
+    //
+    // PERF-04: this gate is NOT redundant now that the five background timers
+    // above are unref'd. Those are ours to unref; node-cron's are not — it
+    // schedules its own internal setTimeout in scheduler/runner and exposes no
+    // handle on ScheduledTask, so there is nothing here to unref. Until that
+    // changes, skipping the cron systems entirely is the only way one-shot
+    // `ask` mode exits. The gate is also semantically right for the Signal
+    // channel below: a one-shot ask should not open a channel listener at all.
     if (!this._skipChannels) {
       // Use heartbeat_provider if set (typically a free/local Ollama) to keep
       // background routine costs at zero. Falls back to rank-1 if not set.
@@ -529,18 +688,9 @@ export class Orchestrator {
         ? this._config.agent.workspace.replace(/^~/, os.homedir())
         : process.cwd();
       const agentTimeoutMs = this._parseIntervalMs(this._config.agent.default_timeout ?? '2h');
-      const defaultLoop = new ExecutionLoop({
-        systemPrompt: 'You are Zora, a helpful autonomous agent.',
-        permissionMode: 'default',
-        cwd: agentWorkspace,
-        canUseTool: this._policyEngine.createCanUseTool(),
-        customTools: this._createCustomTools(),
-        model: this._config.agent.heartbeat_provider,
-        streamTimeout: agentTimeoutMs,
-      });
 
       this._heartbeatSystem = new HeartbeatSystem({
-        loop: defaultLoop,
+        loop: this._buildHeartbeatLoop(agentWorkspace, agentTimeoutMs),
         baseDir: this._baseDir,
         intervalMinutes: this._parseIntervalMinutes(this._config.agent.heartbeat_interval),
       });
@@ -559,7 +709,7 @@ export class Orchestrator {
 
     // Schedule daily note consolidation (check once per day)
     const scheduleConsolidation = () => {
-      this._consolidationTimeout = setTimeout(async () => {
+      this._consolidationTimeout = this._scheduleBackground(async () => {
         try {
           const reflectFn = this._reflectorWorker
             ? async (content: string): Promise<void> => {
@@ -577,7 +727,7 @@ export class Orchestrator {
       }, 24 * 60 * 60 * 1000); // 24 hours
     };
     // Run first check shortly after boot (30 seconds), then daily
-    this._consolidationTimeout = setTimeout(async () => {
+    this._consolidationTimeout = this._scheduleBackground(async () => {
       try {
         const reflectFn = this._reflectorWorker
           ? async (content: string): Promise<void> => {
@@ -597,7 +747,7 @@ export class Orchestrator {
     if (this._config.memory.auto_extract && this._config.memory.auto_extract_interval > 0) {
       const extractIntervalMs = this._config.memory.auto_extract_interval * 60 * 1000; // minutes → ms
       const scheduleExtractInterval = () => {
-        this._memoryExtractIntervalTimeout = setTimeout(async () => {
+        this._memoryExtractIntervalTimeout = this._scheduleBackground(async () => {
           try {
             // Interval-based extraction: consolidate recent daily notes as a fallback
             // for sessions that completed without triggering per-task extraction.
@@ -698,7 +848,9 @@ export class Orchestrator {
     this._toolHookRunner.register(new AuditLogHook(auditLogPath));
     // AuditLogger: structured hash-chained security event log (boot/shutdown/auth events).
     // audit_hash_chain and audit_single_writer config fields take effect here.
-    this._auditLogger = new AuditLogger(auditLogPath.replace('.jsonl', '-security.jsonl'), {
+    // SEC-25: the `-security` derivation lives in securityAuditLogPath() so the
+    // `audit --verify` reader resolves the same file this writer writes.
+    this._auditLogger = new AuditLogger(securityAuditLogPath(auditLogPath), {
       hashChain: sec.audit_hash_chain ?? true,
       singleWriter: sec.audit_single_writer ?? true,
     });
@@ -711,6 +863,10 @@ export class Orchestrator {
       parameters: { agentName: this._config.agent.name },
       result: {},
     });
+    // SEC-24: these limits are written in Zora's lowercase vocabulary and the
+    // SDK calls the tool `Bash`. Until RateLimitHook started matching through
+    // toolFilterMatches(), `l.tool === ctx.tool` was false on every real call
+    // and the 60-shell-calls-per-minute ceiling had never once been applied.
     this._toolHookRunner.register(new RateLimitHook([
       { tool: 'bash', maxCalls: 60, windowMs: 60_000 },
       { tool: 'http_request', maxCalls: 100, windowMs: 60_000 },
@@ -723,6 +879,11 @@ export class Orchestrator {
       scores: this._policy.actions.scores ?? DEFAULT_IRREVERSIBILITY_SCORES,
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
     }));
+
+    // PERF-03: warm the SOUL.md identity cache and start its watch here, so no
+    // task ever pays a synchronous read for it.
+    this._soulLoaded = false;
+    this._loadSoulIdentity();
 
     // Eagerly initialize TLCI so CostTracker is available immediately after boot()
     // (daemon.ts reads getTLCICostTracker() synchronously when constructing DashboardServer)
@@ -885,6 +1046,28 @@ export class Orchestrator {
       this._memoryExtractIntervalTimeout = null;
     }
 
+    // PERF-06: drop the cached tool list so a re-boot rebuilds it against the
+    // newly constructed subsystems rather than the ones being torn down here.
+    this._customTools = null;
+
+    // MEM-34: stop the graph worker. `close()` flushes queued writes and is
+    // safe on an inert client. Dropped to null with the tool list so a re-boot
+    // starts a fresh worker rather than handing tools a terminated one.
+    if (this._graphClient) {
+      try {
+        await this._graphClient.close();
+      } catch (err) {
+        log.warn({ err }, 'Graph memory tier failed to close cleanly');
+      }
+      this._graphClient = null;
+    }
+
+    // PERF-03: stop watching SOUL.md
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
     // Stop heartbeat and routines
     if (this._heartbeatSystem) {
       this._heartbeatSystem.stop();
@@ -902,6 +1085,87 @@ export class Orchestrator {
     }
 
     this._booted = false;
+  }
+
+  /**
+   * PERF-03: Returns the cached SOUL.md identity text, reading it from disk only
+   * on the first call (or after a watch-triggered invalidation).
+   *
+   * Behaviour on a miss is identical to the old per-task read: a missing or
+   * unreadable SOUL.md yields the empty string, and the caller substitutes the
+   * default identity. The empty result is cached too, so an absent file does not
+   * re-stat on every task.
+   *
+   * @returns The trimmed SOUL.md contents, or '' when the file is absent/unreadable.
+   */
+  private _loadSoulIdentity(): string {
+    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
+
+    // A config reload can repoint soul_file; treat a changed path as a cache miss.
+    if (this._soulLoaded && this._soulPath === soulPath) {
+      return this._soulContent;
+    }
+
+    const previousPath = this._soulPath;
+    this._soulPath = soulPath;
+    this._soulContent = '';
+    try {
+      if (fs.existsSync(soulPath)) {
+        this._soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
+      }
+    } catch {
+      // SOUL.md missing or unreadable — use default identity
+    }
+    this._soulLoaded = true;
+
+    if (previousPath !== soulPath || !this._soulWatcher) {
+      this._watchSoulFile(soulPath);
+    }
+    return this._soulContent;
+  }
+
+  /**
+   * PERF-03: Watches SOUL.md so an edit invalidates the cache.
+   *
+   * Watches the *containing directory* rather than the file: fs.watch on a path
+   * that does not exist throws, and editors (plus every atomic write) replace the
+   * inode, which a file-level watch stops following. A directory watch survives
+   * create, replace and delete.
+   *
+   * Watches are unreliable on some filesystems (network mounts, some containers).
+   * Every failure path here degrades to "keep serving the cached value" rather
+   * than throwing — a stale identity string is far better than a broken boot.
+   */
+  private _watchSoulFile(soulPath: string): void {
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
+    const dir = path.dirname(soulPath);
+    const base = path.basename(soulPath);
+    try {
+      const watcher = fs.watch(dir, (_eventType, filename) => {
+        // filename is null on some platforms — invalidate conservatively.
+        if (!filename || path.basename(filename.toString()) === base) {
+          this._soulLoaded = false;
+        }
+      });
+      // Never hold the process open: one-shot `ask` mode must still exit.
+      watcher.unref?.();
+      // An error after the watch is established (dir removed, inotify exhausted)
+      // must not become an unhandled 'error' event.
+      watcher.on('error', (err) => {
+        log.debug({ err, soulPath }, 'SOUL.md watch failed — serving cached identity');
+        try { watcher.close(); } catch { /* already closed */ }
+        if (this._soulWatcher === watcher) this._soulWatcher = null;
+      });
+      this._soulWatcher = watcher;
+    } catch (err) {
+      // e.g. the directory does not exist, or the platform/filesystem refuses
+      // watches. Cached value stands until restart.
+      log.debug({ err, soulPath }, 'SOUL.md watch unavailable — identity cached until restart');
+    }
   }
 
   /**
@@ -939,16 +1203,9 @@ export class Orchestrator {
       log.warn({ err, jobId }, 'Memory context injection failed, continuing without memory');
     }
 
-    // Load SOUL.md for agent identity (fixes bug: file was created but never read)
-    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
-    let soulContent = '';
-    try {
-      if (fs.existsSync(soulPath)) {
-        soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
-      }
-    } catch {
-      // SOUL.md missing or unreadable — use default identity
-    }
+    // Load SOUL.md for agent identity (fixes bug: file was created but never read).
+    // PERF-03: served from cache — no sync filesystem I/O on the task path.
+    const soulContent = this._loadSoulIdentity();
 
     // Create per-task context compressor if compression is enabled
     let compressor: ContextCompressor | null = null;
@@ -1016,8 +1273,16 @@ export class Orchestrator {
     // Classify task for routing
     const classification = this._router.classifyTask(sanitizedPrompt);
 
-    // Build custom tools (permissions + memory tools + recall_context)
-    const customTools = this._createCustomTools();
+    // Custom tools (permissions + memory tools + recall_context).
+    // PERF-06: built once at boot — nothing in the definitions is per-task. The
+    // per-job binding is canUseTool below, which stays per task.
+    const customTools = this._getCustomTools();
+
+    // SEC-21: bind the tool-hook chain to this job and expose it to the SDK as
+    // PreToolUse/PostToolUse. This is the pre-execution enforcement point; the
+    // stream-observation path below only logs.
+    const hookBridge = new SdkHookBridge(this._toolHookRunner, jobId);
+    this._hookBridges.set(jobId, hookBridge);
 
     // ERR-09: Build initial error budget — maxBudget from failover config, maxTurns from options
     const maxRetries = this._config.failover.max_retries ?? 3;
@@ -1045,6 +1310,7 @@ export class Orchestrator {
       errorBudget,
       customTools,
       canUseTool: this._buildTokenAwareCanUseTool(jobId),
+      sdkHooks: hookBridge.hooks,
     };
 
     // Channel capability enforcement (INVARIANT-1, INVARIANT-2)
@@ -1062,15 +1328,12 @@ export class Orchestrator {
       const existingCanUseTool = taskContext.canUseTool;
       const allowedTools = new Set(capability.allowedTools);
       taskContext.canUseTool = async (toolName, input, opts) => {
-        // Normalize: SDK tool names may be prefixed (e.g. "Read", "Bash")
-        // Match against allowedTools by base name (case-insensitive)
-        const baseName = toolName.split('__').pop() ?? toolName;
-        const isAllowed =
-          allowedTools.has(toolName) ||
-          allowedTools.has(baseName) ||
-          allowedTools.has(baseName.toLowerCase()) ||
-          allowedTools.has(toolName.toLowerCase());
-        if (!isAllowed) {
+        // SEC-24: this was a hand-rolled four-way match — a fifth private
+        // convention for comparing tool names, written here because the shared
+        // one did not exist yet. It happened to be right; the identical
+        // improvisations in RateLimitHook and IrreversibilityScorerHook were
+        // not. One normaliser, used everywhere, is the whole point.
+        if (!toolFilterMatches(allowedTools, toolName)) {
           log.warn(
             { tool: toolName, channelId: capability.channelId, role: capability.role },
             'Tool blocked by channel capability set'
@@ -1079,8 +1342,11 @@ export class Orchestrator {
         }
         // Apply additional destructive ops check
         if (!capability.destructiveOpsAllowed) {
-          const destructiveTools = new Set(['Bash', 'bash', 'Write', 'write_file', 'Edit', 'edit_file']);
-          if (destructiveTools.has(baseName) || destructiveTools.has(toolName)) {
+          // SEC-24: the inline set spelled `Bash`/`bash` and `Write`/`write_file`
+          // twice each to work around the missing normaliser — and still let
+          // `MultiEdit` and `NotebookEdit` through, so an untrusted channel could
+          // modify files with them. The shared list covers every alias once.
+          if (toolFilterMatches(DESTRUCTIVE_TOOL_NAMES, toolName)) {
             log.warn({ tool: toolName }, 'Destructive op blocked — capability.destructiveOpsAllowed=false');
             return { behavior: 'deny', message: `Destructive operation '${toolName}' not permitted for your access level.` };
           }
@@ -1102,6 +1368,7 @@ export class Orchestrator {
       selectedProvider = await this._router.selectProvider(hookedContext);
     } catch (err) {
       this._activeTokens.delete(jobId);
+      this._hookBridges.delete(jobId);
       // on_all_providers_down notification — gated by notifications.on_all_providers_down
       this._notifications.notifyAllProvidersDown().catch(e => {
         log.debug({ e }, 'notifyAllProvidersDown failed (non-critical)');
@@ -1133,6 +1400,8 @@ export class Orchestrator {
       execResult = await this._executeWithProvider(selectedProvider, hookedContext, _skillOnEvent, 0, 0, compressor);
     } finally {
       this._activeTokens.delete(jobId);
+      this._hookBridges.delete(jobId);
+      this._activeJobProviders.delete(jobId);
     }
 
     // Post-session: await skill synthesis so CLI mode doesn't exit before confirmation/write
@@ -1152,6 +1421,31 @@ export class Orchestrator {
     });
 
     return execResult;
+  }
+
+  /**
+   * ERR-20: Cancel a running task.
+   *
+   * `LLMProvider.abort(jobId)` has been part of the interface all along and
+   * nothing ever called it, so a task could only be stopped by killing the
+   * daemon. Aborting the provider's AbortController makes its generator finish,
+   * which unwinds `_executeWithProvider` through its normal paths.
+   *
+   * @returns false when the job is not running (already finished, or never existed).
+   */
+  async cancelTask(jobId: string): Promise<boolean> {
+    const provider = this._activeJobProviders.get(jobId);
+    if (!provider) return false;
+
+    log.info({ jobId, provider: provider.name }, 'Cancelling task');
+    await provider.abort(jobId);
+    this._activeJobProviders.delete(jobId);
+    return true;
+  }
+
+  /** Job IDs currently executing. */
+  get activeJobIds(): string[] {
+    return [...this._activeJobProviders.keys()];
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -1217,12 +1511,36 @@ export class Orchestrator {
     let consecutiveNonToolTurns = 0;
     const STALE_LOOP_THRESHOLD = 3;
 
-    // Tool-level hook tracking: map toolCallId → call start timestamp
-    const _toolCallStartTimes = new Map<string, number>();
+    // PERF-01: Tool-level bookkeeping, keyed by toolCallId.
+    // Replaces the old `[...history].reverse().find(...)` scan that ran on every
+    // tool_result — that was O(history) per event, i.e. O(n²) over a session, with
+    // a full array copy each time. One entry object carries both the call start
+    // timestamp (hook timing) and the tool_call content (name + args), so there is
+    // a single map to keep consistent: set on tool_call, deleted on tool_result.
+    const pendingToolCalls = new Map<string, PendingToolCall>();
+
+    // Seed from prior history so a failover hop still resolves tool_calls emitted
+    // before the hop, exactly as the history scan did. Replaying in order and
+    // deleting on tool_result leaves only the still-unresolved calls.
+    for (const prior of taskContext.history) {
+      if (prior.type === 'tool_call') {
+        const c = prior.content as ToolCallEventContent;
+        if (c?.toolCallId) {
+          pendingToolCalls.set(c.toolCallId, { startedAt: prior.timestamp?.getTime?.() ?? Date.now(), call: c });
+        }
+      } else if (prior.type === 'tool_result') {
+        const c = prior.content as ToolResultEventContent;
+        if (c?.toolCallId) pendingToolCalls.delete(c.toolCallId);
+      }
+    }
 
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
     const bufferedWriter = new BufferedSessionWriter(this._sessionManager, taskContext.jobId, 500);
+
+    // ERR-20: remember which provider is running this job so cancelTask(jobId)
+    // has something to abort. Rebound on every failover hop.
+    this._activeJobProviders.set(taskContext.jobId, provider);
 
     try {
       try {
@@ -1327,46 +1645,29 @@ export class Orchestrator {
             toolCalledThisTurn = true;
             consecutiveNonToolTurns = 0;
 
-            // Tool-level before-hooks: record start time and run before-hooks.
-            // Logging happens AFTER hooks so SecretRedactHook can redact args
-            // before they are written to disk or the session log.
-            _toolCallStartTimes.set(toolCallContent.toolCallId, Date.now());
-            try {
-              const hookBefore = await this._toolHookRunner.runBefore({
-                jobId: taskContext.jobId,
-                tool: toolCallContent.tool,
-                arguments: toolCallContent.arguments as Record<string, unknown> ?? {},
-              });
+            // SEC-21: this path only observes and logs. Enforcement moved to the
+            // SDK's PreToolUse hook (src/hooks/sdk-hook-bridge.ts), which runs
+            // before the tool executes. Running the hook chain here as well
+            // would double-count rate limits and double-write audit entries —
+            // and the old `!allow` branch here could not stop anything anyway,
+            // it only wrote a synthetic "blocked" tool_result into Zora's own
+            // transcript while the real tool ran.
+            pendingToolCalls.set(toolCallContent.toolCallId, { startedAt: Date.now(), call: toolCallContent });
 
-              // Log the event now (with potentially-redacted args from hooks)
-              const hookedArgs = hookBefore.args;
-              const loggedEvent: AgentEvent = hookedArgs !== (toolCallContent.arguments ?? {})
-                ? { ...event, content: { ...toolCallContent, arguments: hookedArgs } }
-                : event;
-              bufferedWriter.append(loggedEvent);
-              log.debug({ jobId: taskContext.jobId, tool: toolCallContent.tool, arguments: hookedArgs }, 'tool call');
-
-              if (!hookBefore.allow) {
-                // Inject a synthetic tool_result indicating the tool was blocked
-                const blockedEvent: AgentEvent = {
-                  type: 'tool_result',
-                  timestamp: new Date(),
-                  source: 'tool-hook-runner',
-                  content: {
-                    toolCallId: toolCallContent.toolCallId,
-                    result: null,
-                    error: `Tool call blocked by hook: ${toolCallContent.tool}`,
-                  } satisfies ToolResultEventContent,
-                };
-                bufferedWriter.append(blockedEvent);
-                taskContext.history.push(blockedEvent);
-                if (onEvent) onEvent(blockedEvent);
-              }
-            } catch (err) {
-              // If hooks fail, still log the original event so the call isn't lost
-              bufferedWriter.append(event);
-              log.error({ err, tool: toolCallContent.tool, jobId: taskContext.jobId }, 'tool-hook runBefore error (non-critical)');
-            }
+            // Secrets still must not reach disk: SecretRedactHook's rewrite
+            // already happened pre-execution, so read it back rather than
+            // re-running the chain.
+            const rewrittenArgs = this._hookBridges
+              .get(taskContext.jobId)
+              ?.takeRewrittenInput(toolCallContent.toolCallId);
+            const loggedEvent: AgentEvent = rewrittenArgs
+              ? { ...event, content: { ...toolCallContent, arguments: rewrittenArgs } }
+              : event;
+            bufferedWriter.append(loggedEvent);
+            log.debug(
+              { jobId: taskContext.jobId, tool: toolCallContent.tool, arguments: rewrittenArgs ?? toolCallContent.arguments },
+              'tool call',
+            );
           }
 
           // ERR-10: Pattern detection on tool results + ERR-12: record failures/successes
@@ -1374,14 +1675,12 @@ export class Orchestrator {
             const toolResultContent = event.content as ToolResultEventContent;
             const hasFailed = Boolean(toolResultContent.error);
 
-            // Find the matching tool_call in history to get name + args
-            const matchingCall = [...taskContext.history].reverse().find(
-              e => e.type === 'tool_call' &&
-                (e.content as ToolCallEventContent).toolCallId === toolResultContent.toolCallId,
-            );
+            // PERF-01: O(1) lookup of the matching tool_call (name + args) instead of
+            // copying and reverse-scanning the whole history on every tool_result.
+            const matchingCall = pendingToolCalls.get(toolResultContent.toolCallId);
 
             if (matchingCall) {
-              const callContent = matchingCall.content as ToolCallEventContent;
+              const callContent = matchingCall.call;
               const args = callContent.arguments ?? {};
 
               // ERR-12: Record failure/success in persistent negative cache
@@ -1422,20 +1721,10 @@ export class Orchestrator {
             // ERR-09: Stale-state — tool_result is a "turn", but only counts if no tool call followed
             // (tracked by text events below)
 
-            // Tool-level after-hooks: run after every tool result
-            const _startMs = _toolCallStartTimes.get(toolResultContent.toolCallId);
-            _toolCallStartTimes.delete(toolResultContent.toolCallId);
-            const _matchingCallForHook = matchingCall;
-            if (_matchingCallForHook) {
-              const _callContentForHook = _matchingCallForHook.content as ToolCallEventContent;
-              await this._toolHookRunner.runAfter({
-                jobId: taskContext.jobId,
-                tool: _callContentForHook.tool,
-                arguments: _callContentForHook.arguments as Record<string, unknown> ?? {},
-                result: toolResultContent.result,
-                durationMs: _startMs !== undefined ? Date.now() - _startMs : undefined,
-              });
-            }
+            // SEC-21: after-hooks now run from the SDK's PostToolUse hook, which
+            // sees the real tool response rather than one reconstructed from a
+            // streamed event. Only the timing bookkeeping remains here.
+            pendingToolCalls.delete(toolResultContent.toolCallId);
           }
 
           // (ERR-09: stale-state tracking is done on 'done' events below)
@@ -1581,7 +1870,7 @@ export class Orchestrator {
               errorContent.message ?? 'provider error',
             ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
             try {
-              await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+              await this._enqueueRetry(taskContext, error.message);
             } catch {
               // Max retries exceeded or enqueue failed
             }
@@ -1621,7 +1910,7 @@ export class Orchestrator {
             err.message,
           ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
           try {
-            await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
+            await this._enqueueRetry(taskContext, err.message);
           } catch {
             // Max retries exceeded
           }
@@ -1900,7 +2189,20 @@ export class Orchestrator {
     const extractFn = async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
         systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
-        permissionMode: 'default',
+        // SEC-23: a single-shot text call over conversation content that may
+        // itself be attacker-influenced. It has no business calling a tool, and
+        // until now it silently inherited ExecutionLoop's DEFAULT_TOOLS —
+        // Read/Write/Edit/Bash/Glob/Grep/WebSearch/WebFetch/Task — with no
+        // canUseTool and no hook chain. The right fix here is not "add the
+        // hooks" but "remove the tool surface": toolSurface 'none' pins
+        // allowedTools to []. The rest of the chain rides along so that adding
+        // a tool back is gated rather than unguarded.
+        ...buildEnforcedSdkOptions({
+          policy: this._policy,
+          toolSurface: 'none',
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => `extract-${taskContext.jobId}`),
+        }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
       });
@@ -1979,10 +2281,35 @@ export class Orchestrator {
   }
 
   /**
+   * PERF-06: Returns the shared custom-tool list, building it on first use.
+   *
+   * The definitions used to be rebuilt — ~12 objects, their JSON schemas and all
+   * their closures — on every submitTask(). Nothing in them is per-task: every
+   * handler closes over long-lived orchestrator state (policy engine, memory
+   * manager, validation pipeline) or over `this`, so one list serves every job.
+   * The per-job binding lives entirely in `canUseTool`, which submitTask() still
+   * builds per task via _buildTokenAwareCanUseTool(jobId).
+   *
+   * boot() warms this so the subsystems the handlers close over are the current
+   * ones; shutdown() drops it so a re-boot cannot serve tools bound to the
+   * previous generation of subsystems.
+   *
+   * The array is never mutated downstream (providers only map over it), so
+   * sharing one instance across concurrent tasks is safe.
+   */
+  private _getCustomTools(): CustomToolDefinition[] {
+    this._customTools ??= this._buildCustomTools();
+    return this._customTools;
+  }
+
+  /**
    * Creates custom tools available to the agent during execution.
    * Includes: permission tools, memory tools (search/save/forget), recall_context.
+   *
+   * PERF-06: call _getCustomTools() instead — this is the uncached builder and
+   * is meant to run once per boot.
    */
-  private _createCustomTools(): CustomToolDefinition[] {
+  private _buildCustomTools(): CustomToolDefinition[] {
     const permissionTools: CustomToolDefinition[] = [
       {
         name: 'check_permissions',
@@ -2087,7 +2414,12 @@ export class Orchestrator {
       (opts) => this.submitTask({ prompt: opts.prompt }),
     );
 
-    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances
+    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances.
+    // PERF-06 note: this is the one tool with closure state (live child PIDs and
+    // the per-project spawn lock). Building it once per boot rather than once per
+    // task is what it was always written for — the max_children cap and the
+    // duplicate-launch lock are process-wide guards, and rebuilding them per task
+    // silently reset both.
     const pmConfig = (this._config as unknown as Record<string, unknown>)['pm'] as
       | { projects?: Array<{ name: string; port: number; icon?: string; color?: string; project_dir: string }>; max_children?: number }
       | undefined;
@@ -2095,7 +2427,12 @@ export class Orchestrator {
       ? [createSpawnZoraTool({ projects: pmConfig.projects, maxChildren: pmConfig.max_children ?? 5 })]
       : [];
 
-    return [...permissionTools, ...memoryTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
+    // MEM-34: graph_recall — relational recall alongside the BM25 memory_search.
+    // Yields [] when the tier is inert, so the model is never offered a tool
+    // whose backing store is not there.
+    const graphTools = this._graphClient ? createGraphTools(this._graphClient) : [];
+
+    return [...permissionTools, ...memoryTools, ...graphTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
   }
 
   /**
@@ -2185,6 +2522,17 @@ export class Orchestrator {
     return this._steeringManager;
   }
 
+  /**
+   * FlagManager — human-in-the-loop approval flags, wired from
+   * steering.flag_timeout and steering.notify_on_flag. Exposed so the CLI
+   * (`zora steer` commands) and dashboard can raise and resolve flags against
+   * the same instance the orchestrator constructed.
+   */
+  get flagManager(): FlagManager {
+    this._assertBooted();
+    return this._flagManager;
+  }
+
   get memoryManager(): MemoryManager {
     this._assertBooted();
     return this._memoryManager;
@@ -2265,6 +2613,45 @@ export class Orchestrator {
   // ── Private helpers ──────────────────────────────────────────────
 
   /**
+   * SEC-23: build the ExecutionLoop the heartbeat runs on.
+   *
+   * Extracted from `boot()` for two reasons. The first is that it is the
+   * least-supervised execution path in the system — scheduled routines, fired
+   * on a timer, with nobody reading the output — and until SEC-23 it had the
+   * *weakest* tool gate: `canUseTool` and nothing else. No `PreToolUse` bridge
+   * meant `ShellSafetyHook`, `SensitiveFileGuardHook`, `RateLimitHook`,
+   * `SecretRedactHook` and `IrreversibilityScorerHook` never ran here at all.
+   * That is worth naming in one place rather than burying inside boot().
+   *
+   * The second is testability: the loop can now be built and its enforcement
+   * chain exercised without starting node-cron and a Signal listener, so
+   * `tests/security/tool-enforcement.test.ts` can assert that a
+   * SensitiveFileGuard-blocked path and a ShellSafety-blocked command are
+   * actually denied *on this path*, not only on the main task path.
+   */
+  private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): ExecutionLoop {
+    return new ExecutionLoop({
+      systemPrompt: 'You are Zora, a helpful autonomous agent.',
+      // Routed through the one shared builder so this path cannot drift away
+      // from the provider path again.
+      ...buildEnforcedSdkOptions({
+        policy: this._policy,
+        canUseTool: this._policyEngine.createCanUseTool(),
+        // The heartbeat is not a submitTask() job, so there is no per-task
+        // jobId to bind to; a stable synthetic one keeps the audit log and
+        // rate-limit accounting attributable.
+        hooks: buildSdkHooks(this._toolHookRunner, () => 'heartbeat'),
+      }),
+      cwd,
+      customTools: this._getCustomTools(),
+      // Use heartbeat_provider if set (typically a free/local Ollama) to keep
+      // background routine costs at zero. Falls back to rank-1 if not set.
+      model: this._config.agent.heartbeat_provider,
+      streamTimeout: streamTimeoutMs,
+    });
+  }
+
+  /**
    * MEM-20: Build the compressFn used by ContextCompressor and ReflectorWorker.
    * Extracted so it can be reused in boot() (for ReflectorWorker) and submitTask().
    */
@@ -2275,7 +2662,15 @@ export class Orchestrator {
     return async (prompt: string): Promise<string> => {
       const compressLoop = new ExecutionLoop({
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
-        permissionMode: 'default',
+        // SEC-23: same reasoning as the extraction loop above — a maxTurns:1
+        // summarisation call over untrusted conversation text gets no tool
+        // surface at all rather than DEFAULT_TOOLS by omission.
+        ...buildEnforcedSdkOptions({
+          policy: this._policy,
+          toolSurface: 'none',
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => 'compress'),
+        }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
         model: this._config.memory?.compression?.model,

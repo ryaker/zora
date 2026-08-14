@@ -32,8 +32,24 @@ export class StructuredMemory {
   private readonly _itemsDir: string;
   private readonly _indexDir: string;
   private _searchIndex: MiniSearch<IndexedDoc>;
+  /**
+   * Bounded in-memory item cache, keyed by item id.
+   *
+   * MEM/PERF: `listItems()` -> `_readAllItems()` used to be one `readFile` +
+   * `JSON.parse` per item on every call, and `CategoryOrganizer` calls it
+   * repeatedly (`getDualModeContext`, `getItemsByCategory`). The cache turns the
+   * steady state into a single `readdir` plus cache lookups.
+   *
+   * It is an accelerator, not a source of truth: `readdir` always decides which
+   * items exist, so creations and deletions made by anything else are picked up,
+   * and a cache miss (cold start, or an entry evicted by the size cap) simply
+   * falls back to reading the file.
+   */
   private _itemCache: Map<string, MemoryItem> = new Map();
   private _indexReady = false;
+
+  /** Cap on cached items — bounds memory for very large stores. Insertion-ordered eviction. */
+  private static readonly MAX_CACHED_ITEMS = 5000;
 
   constructor(itemsDir: string, indexDir?: string) {
     this._itemsDir = itemsDir;
@@ -65,6 +81,7 @@ export class StructuredMemory {
     };
     await this._writeItem(item);
     this._addToIndex(item);
+    this._cacheItem(item);
     // Persist index so cold starts don't need full rebuild
     await this._saveIndex();
     return item;
@@ -78,7 +95,7 @@ export class StructuredMemory {
       item.access_count += 1;
       item.last_accessed = new Date().toISOString();
       await this._writeItem(item);
-      this._itemCache.set(item.id, item);
+      this._cacheItem(item);
       return item;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -98,7 +115,9 @@ export class StructuredMemory {
     const cached = this._itemCache.get(id);
     if (cached) return cached;
     // Read from disk without side effects
-    return this._readItemFile(id);
+    const item = await this._readItemFile(id);
+    if (item) this._cacheItem(item);
+    return item;
   }
 
   async updateItem(id: string, updates: Partial<MemoryItem>): Promise<MemoryItem | null> {
@@ -179,7 +198,7 @@ export class StructuredMemory {
       } else {
         const item = await this._readItemFile(result.id);
         if (item) {
-          this._itemCache.set(item.id, item);
+          this._cacheItem(item);
           items.push(item);
         }
       }
@@ -215,7 +234,7 @@ export class StructuredMemory {
       const cached = this._itemCache.get(result.id);
       const item = cached ?? await this._readItemFile(result.id);
       if (item) {
-        this._itemCache.set(item.id, item);
+        this._cacheItem(item);
         searchResults.push({ item, bm25Score: result.score });
       }
     }
@@ -231,7 +250,7 @@ export class StructuredMemory {
 
     const items = await this._readAllItems();
     for (const item of items) {
-      this._itemCache.set(item.id, item);
+      this._cacheItem(item);
       this._addToIndex(item);
     }
 
@@ -277,7 +296,7 @@ export class StructuredMemory {
         // Already exists, ignore
       }
     }
-    this._itemCache.set(item.id, item);
+    this._cacheItem(item);
   }
 
   private _removeFromIndex(id: string): void {
@@ -352,6 +371,27 @@ export class StructuredMemory {
     }
   }
 
+  /**
+   * Insert into the bounded cache, evicting the oldest entry when over the cap.
+   * Re-inserting an existing key refreshes its position so hot items survive.
+   */
+  private _cacheItem(item: MemoryItem): void {
+    if (this._itemCache.has(item.id)) {
+      this._itemCache.delete(item.id);
+    }
+    this._itemCache.set(item.id, item);
+    while (this._itemCache.size > StructuredMemory.MAX_CACHED_ITEMS) {
+      const oldest = this._itemCache.keys().next();
+      if (oldest.done) break;
+      this._itemCache.delete(oldest.value);
+    }
+  }
+
+  /**
+   * Read every item. `readdir` remains authoritative for which items exist —
+   * only the per-item `readFile` + `JSON.parse` is served from cache. Corrupt
+   * or unreadable files are still skipped rather than being fatal.
+   */
   private async _readAllItems(): Promise<MemoryItem[]> {
     let files: string[];
     try {
@@ -364,9 +404,21 @@ export class StructuredMemory {
     const items: MemoryItem[] = [];
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
+
+      const id = file.slice(0, -'.json'.length);
+      const cached = this._itemCache.get(id);
+      if (cached) {
+        items.push(cached);
+        continue;
+      }
+
       try {
         const data = await fs.readFile(path.join(this._itemsDir, file), 'utf8');
-        items.push(JSON.parse(data) as MemoryItem);
+        const item = JSON.parse(data) as MemoryItem;
+        // Only cache when the file name matches the item's own id, so a
+        // hand-written or renamed file can never be served under the wrong key.
+        if (item && item.id === id) this._cacheItem(item);
+        items.push(item);
       } catch {
         // Skip corrupt/unreadable files
       }

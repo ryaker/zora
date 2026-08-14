@@ -22,7 +22,7 @@
 
 | Package | Version | Purpose | Used In |
 |---|---|---|---|
-| @anthropic-ai/claude-agent-sdk | ^0.2.39 | Claude LLM execution and streaming | src/providers/claude-provider.ts |
+| @anthropic-ai/claude-agent-sdk | ^0.3.232 | Claude LLM execution, streaming, in-process MCP tool server, PreToolUse/PostToolUse hooks | src/providers/claude-provider.ts, src/tools/zora-mcp-server.ts, src/hooks/sdk-hook-bridge.ts |
 | commander | ^14.0.3 | CLI argument parsing | src/cli/index.ts |
 | express | ^4.21.2 | Dashboard REST API server | src/dashboard/server.ts |
 | pino | ^10.3.1 | Structured JSON logger | src/utils/logger.ts |
@@ -32,6 +32,10 @@
 | minisearch | ^7.2.0 | In-memory full-text search for memory retrieval | src/memory/ |
 | node-cron | ^4.2.1 | Cron expression scheduler for routines | src/routines/routine-manager.ts |
 | @clack/prompts | ^1.0.1 | Interactive CLI prompts for init | src/cli/init-command.ts |
+| casbin | ^5.49.0 | Channel authorization model (per-channel policy gate) | src/channels/channel-policy-gate.ts |
+| @nodesecure/js-x-ray | ^13.0.0 | Static supply-chain analysis of installed skills | src/skills/skill-scanner.ts |
+| adm-zip | ^0.5.16 | Skill archive extraction | src/skills/skill-installer.ts |
+| @chat-adapter/telegram | ^4.19.0 | Telegram channel adapter | src/channels/telegram/telegram-adapter.ts |
 
 ### 1.3 Peer / Optional Dependencies
 
@@ -56,8 +60,12 @@
 | Provider | Type | Authentication | Protocol | Cost Tier | Key Capabilities | Source File |
 |---|---|---|---|---|---|---|
 | **Claude (Anthropic)** | claude-sdk | Existing Claude Code session (no API key) | Embedded SDK + streaming events | included | reasoning, coding, creative, structured-data, large-context | src/providers/claude-provider.ts |
-| **Gemini (Google)** | gemini-cli | Google Workspace account (gcloud auth) | gemini CLI subprocess + stdout parsing | free | reasoning, search, large-context | src/providers/gemini-provider.ts |
+| **Gemini (Google)** | gemini-cli | Google Workspace account (gcloud auth) | gemini CLI subprocess; prompt written to child stdin (SEC-22), stdout parsed | free | reasoning, search, large-context | src/providers/gemini-provider.ts |
 | **Ollama (Local)** | ollama | None (local service) | REST HTTP /api/chat streaming | free | coding, fast, creative | src/providers/ollama-provider.ts |
+| **Echo (test stub)** | echo | None | In-process; deterministic replies | free | -- | src/providers/echo-provider.ts |
+
+The `echo` provider exists for the e2e scenario harness and CI. It is not a
+production backend; see `docs/testing/e2e-cross-llm-evaluation.md`.
 
 ### 2.1 Provider Failover Technology Stack
 
@@ -74,8 +82,8 @@
 
 | Security Control | Technology | Algorithm / Standard | Source File |
 |---|---|---|---|
-| **Audit Chain Integrity** | AuditLogger | SHA-256 (node:crypto createHash) per entry + GENESIS_HASH seed | src/security/audit-logger.ts:10 |
-| **Intent Signing** | IntentCapsuleManager | HMAC-SHA256 (node:crypto createHmac) over capsule payload | src/security/intent-capsule.ts:10 |
+| **Audit Chain Integrity** | AuditLogger | SHA-256 (node:crypto createHash) per entry + GENESIS_HASH seed | src/security/audit-logger.ts |
+| **Intent Signing** | IntentCapsuleManager | HMAC-SHA256 (node:crypto createHmac) over capsule payload | src/security/intent-capsule.ts |
 | **File Integrity** | IntegrityGuardian | SHA-256 (node:crypto createHash) baselines for SOUL.md, MEMORY.md, policy.toml, config.toml | src/security/integrity-guardian.ts |
 | **Secret Detection** | LeakDetector | Regex patterns: OpenAI/Anthropic keys (sk-), Google keys (AIza), GitHub tokens (ghp_), JWT, AWS keys (AKIA/ASIA), private key headers, password assignments | src/security/leak-detector.ts |
 | **Prompt Injection Defense** | sanitizeInput / validateOutput | Pattern matching: ignore previous instructions, you are now, INST, <<SYS>>, encoded variants (base64/hex) | src/security/prompt-defense.ts |
@@ -83,6 +91,9 @@
 | **Policy Serialization** | writePolicyFile / getPolicySummary | TOML via smol-toml | src/security/policy-serializer.ts |
 | **Capability Scoping** | createCapabilityToken / enforceCapability | 30-minute expiring scoped tokens derived from ZoraPolicy | src/security/capability-tokens.ts |
 | **Bearer Token Auth** | createAuthMiddleware | HTTP Authorization: Bearer <token> header validation | src/dashboard/auth-middleware.ts |
+| **Pre-execution Tool Gate (1)** | SdkHookBridge -> ToolHookRunner | SDK `PreToolUse` hook; deny short-circuits ahead of `canUseTool`; fails closed; may rewrite arguments via `updatedInput` | src/hooks/sdk-hook-bridge.ts, src/hooks/tool-hook-runner.ts |
+| **Pre-execution Tool Gate (2)** | PolicyEngine.createCanUseTool + capability tokens | SDK `canUseTool` under `permissionMode: 'default'` | src/security/policy-engine.ts, src/security/capability-tokens.ts |
+| **Post-execution Observation** | ToolHookRunner.runAfter | SDK `PostToolUse` hook; audit, leak scan, negative cache | src/hooks/sdk-hook-bridge.ts |
 
 ---
 

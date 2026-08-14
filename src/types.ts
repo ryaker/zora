@@ -329,6 +329,12 @@ export interface TaskContext {
     input: Record<string, unknown>,
     options: { signal: AbortSignal },
   ) => Promise<{ behavior: 'allow' | 'deny'; message?: string; updatedInput?: Record<string, unknown> }>;
+  /**
+   * SEC-21: SDK hook matchers (PreToolUse / PostToolUse) built from the
+   * ToolHookRunner. Per-task because the hooks are bound to this jobId.
+   * See `src/hooks/sdk-hook-bridge.ts`.
+   */
+  sdkHooks?: import('./hooks/sdk-hook-bridge.js').ZoraSdkHooks;
 }
 
 // ─── LLM Provider Interface ─────────────────────────────────────────
@@ -449,6 +455,18 @@ export interface ProviderConfig {
   enabled: boolean;
   auth_method?: string;
   model?: string;
+  /**
+   * SDK-04: reasoning effort. The main intelligence/latency/cost dial on the
+   * current model family, and previously unexposed — nothing in Zora set it, so
+   * every task ran at the default ('high') whether it was a heartbeat or a
+   * refactor.
+   *
+   * Reaches the API as `output_config.effort`; the Agent SDK takes it as a
+   * top-level `effort` option and does that mapping itself.
+   *
+   * 'xhigh' requires Opus 4.7+ / Sonnet 5; 'max' requires Opus 4.6+ / Sonnet 4.6+.
+   */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   max_turns?: number;
   max_concurrent_jobs?: number;
   cli_path?: string;

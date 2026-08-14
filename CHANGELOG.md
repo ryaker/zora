@@ -2,6 +2,137 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security — read this before upgrading
+
+**Your `policy.toml` was not being enforced on the path that runs your tasks.**
+
+`ClaudeProvider` defaulted `permissionMode` to the SDK's permission-bypass
+mode, and neither factory passed anything else. The SDK does not call
+`canUseTool` in that mode. Everything downstream of that callback was therefore
+inert on the main task path: the PolicyEngine's path and shell allow/deny
+lists, the SEC-10 capability-token checks, and the channel capability allowlist
+and `destructiveOpsAllowed` gate — Signal included. Filesystem and shell
+restrictions you had configured did not stop anything. `policy.toml` was
+advisory.
+
+This was not total. `ExecutionLoop` already used `'default'`, so the heartbeat,
+memory-extraction and context-compression paths *were* enforced. Only the path
+that runs user-submitted tasks was not — which is to say, the path that
+matters.
+
+**Separately, the tool hooks were cosmetic.** The whole `ToolHookRunner` chain —
+`SensitiveFileGuard`, `ShellSafety`, `AuditLog`, `RateLimit`, `SecretRedact`,
+`IrreversibilityScorer` — ran when the orchestrator *observed* a `tool_call`
+event streamed back from the SDK. The SDK owns tool execution, so by then the
+tool had already run. On a denial the code synthesised a `tool_result` into
+Zora's own history and told nobody: the real command executed and only Zora's
+transcript claimed otherwise. `SensitiveFileGuardHook`'s "hard-coded,
+non-bypassable layer" comment was aspirational. So was `SecretRedactHook` — its
+redaction applied only to what Zora wrote to its own log, while the SDK ran the
+original, unredacted arguments.
+
+**If you ran a prior version**, assume that any tool call the model chose to
+make was executed, regardless of what your policy said, and audit accordingly.
+The audit log is the record of what actually ran.
+
+#### Fixed
+
+- **`permissionMode` is `'default'` everywhere (SEC-20).** Passed explicitly
+  from both factories. The bypass mode is removed from the type union rather
+  than made configurable — `grep -rn bypassPermissions src/` returns nothing,
+  and a test asserts it stays that way.
+- **Hook denials are real denials (SEC-21).** `src/hooks/sdk-hook-bridge.ts`
+  adapts the same `ToolHookRunner` onto the SDK's `PreToolUse` hook, which is
+  the actual pre-execution seam: a deny short-circuits ahead of `canUseTool` and
+  the tool is never invoked. Two behaviour changes fall out of this:
+  - The chain **fails closed**. A hook that throws now denies. Previously the
+    exception was caught, logged as non-critical, and the tool ran.
+  - `SecretRedactHook`'s argument rewrite reaches execution via `updatedInput`,
+    so redacted arguments are what actually run.
+- **All twelve Zora tools were missing from the main task path (SDK-01).**
+  `ClaudeProvider` set `sdkOptions['customTools']`, which is not an option the
+  SDK has — it destructures its options explicitly, so the key was dropped
+  silently while the system prompt kept instructing the model to call those
+  tools. Both `ExecutionLoop` and `ClaudeProvider` now build their MCP server
+  through one shared `buildZoraMcpServer()`. Tool input schemas are JSON Schema
+  in Zora and are converted to Zod before reaching `createSdkMcpServer()`;
+  without that conversion 0.3.x throws and 0.2.x silently advertised every tool
+  with an empty parameter list.
+- **Gemini prompts go on stdin, not argv (SEC-22).**
+- **Providers run in the configured workspace (PROV-10)**, not the daemon's
+  working directory.
+- **Stream timeouts abort the stream** instead of throwing from inside a timer
+  (ERR-20).
+
+`tests/security/tool-enforcement.test.ts` is the permanent regression guard for
+all of the above.
+
+### Changed
+
+- **Claude Agent SDK upgraded from 0.2.76 to 0.3.232 (SDK-02).** The
+  `package.json` caret range was pinned to the 0.2 line, so the dependency would
+  never have picked up 0.3 on its own.
+- **Default model is `claude-opus-5` (SDK-04).** The provider fallback and the
+  config `zora-agent init` generates are now the same exported constant, so
+  which model you got no longer depends on whether `model` was written into
+  `config.toml`.
+- **`effort` is exposed per provider** (`low` | `medium` | `high` | `xhigh` |
+  `max`), forwarded only when configured. Previously nothing in the codebase set
+  it, so a heartbeat and a refactor ran at identical depth.
+
+### Added
+
+- **Graph memory tier (MEM-30) — experimental, off by default.** An optional
+  graph over SparrowDB answering relational questions that lexical search
+  cannot, exposed to the model as a `graph_recall` tool alongside the BM25
+  `memory_search`. Enable with `ZORA_GRAPH_MEMORY=1`; `ZORA_GRAPH_MEMORY_PATH`
+  overrides the database location. `sparrowdb` is an optional dependency loaded
+  lazily. A missing module, unsupported platform, unopenable database, failed
+  worker spawn or startup timeout each produce an inert client and one warning
+  rather than a throw, and `graph_recall` is simply not registered. Runs on a
+  worker thread — the measured main-thread block is 0.007 ms/call versus
+  3.853 ms/call in-process.
+- **`graph_recall` reaches the model (MEM-34).** The tier above was built,
+  tested and documented, but `createGraphTools` was called from nowhere in
+  `src/` — the graph was reachable only from its own test suite, and the claim
+  above that it was "exposed to the model" was false. Wired into
+  `Orchestrator._buildCustomTools()`, with the client started before the tool
+  list is cached and closed on shutdown. `tests/unit/tools/tool-registration.test.ts`
+  is the guard: every tool factory must be invoked in `_buildCustomTools()` and
+  its result must reach the returned array, because a tool that is never
+  registered is indistinguishable from a tool that is never chosen.
+- **Documentation drift guard (DOC-12).** `tests/unit/docs/` fails the build
+  when the docs and the code disagree on model IDs, config keys, SDK versions,
+  the hook pipeline, or CLI commands.
+
+### Performance
+
+- Session listing uses a maintained index instead of reading every file
+  (PERF-02); bounded item cache for `StructuredMemory.listItems()`; per-request
+  disk I/O and static bodies hoisted out of dashboard hot paths.
+- `O(1)` `tool_result` → `tool_call` lookup (PERF-01); `SOUL.md` cached and
+  watched rather than read per task (PERF-03); five background timers unref'd
+  so they no longer hold the event loop open (PERF-04); retry polling is
+  demand-driven (PERF-05); custom tool definitions built once at boot (PERF-06).
+
+### Documentation
+
+- **`SECURITY.md` re-verified claim by claim (DOC-11).** Every claim is now
+  cited to a file, cited to a test, or removed. Removed: a `decodeAndCheck()`
+  encoding defense that does not exist anywhere in the repository, eleven audit
+  event types that appear nowhere in the codebase, and a subagent restriction
+  level documented as requiring approval when the code logs and allows. Three
+  mechanisms that read as always-on — ApprovalQueue, MemoryRiskForecaster,
+  AgentCooldown — are opt-in and inactive on a default install, and are now
+  marked as such.
+- **Docs said `zora` where the binary is `zora-agent`** — 39 occurrences across
+  `README.md`, `SECURITY.md` and `docs/`. Every one of them was "command not
+  found" on a clean install.
+- `CLAUDE.md` rewritten against v0.12.0 reality (DOC-10). `docs/reviews/` and
+  `docs/research/` marked as dated records that are not updated.
+
 ## [0.9.1] — 2026-03-12
 
 ### Documentation

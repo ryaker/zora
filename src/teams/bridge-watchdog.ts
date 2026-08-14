@@ -10,6 +10,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { GeminiBridge } from './gemini-bridge.js';
 import { createLogger } from '../utils/logger.js';
+import { writeAtomic } from '../utils/fs.js';
 
 const log = createLogger('bridge-watchdog');
 
@@ -142,8 +143,25 @@ export class BridgeWatchdog {
     }
   }
 
+  /**
+   * TEST-20: writes the health file atomically (temp file + rename).
+   *
+   * A plain `fs.writeFile` here is a real corruption hazard, not a theoretical
+   * one: nothing serialises the writers. `writeHeartbeat()` is called from the
+   * bridge's poll-completion callback while `_check()` runs on its own
+   * interval and writes the same file from its restart path, so two writes can
+   * be in flight at once. When they interleave, the file ends up with one
+   * document spliced into another — observed in a test run as
+   * `{ "lastHeartbeat": ..., "restartCount": 0 } "lastRestart": ... }`.
+   *
+   * That is unrecoverable rather than transient, because `_readState()` treats
+   * any read or parse failure as "no state yet" and returns a *fresh*
+   * heartbeat: once the file is invalid, every health check sees an elapsed
+   * time of ~0 and the watchdog never restarts the bridge again. It fails
+   * open, silently. A rename is atomic, so a reader now sees either the whole
+   * previous document or the whole new one.
+   */
   private async _writeState(state: HealthState): Promise<void> {
-    await fs.mkdir(path.dirname(this._healthFilePath), { recursive: true });
-    await fs.writeFile(this._healthFilePath, JSON.stringify(state, null, 2), 'utf8');
+    await writeAtomic(this._healthFilePath, JSON.stringify(state, null, 2));
   }
 }

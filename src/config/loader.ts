@@ -15,6 +15,7 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('config-loader');
 import { DEFAULT_CONFIG, validateConfig } from './defaults.js';
+import { resolveConfigEnvRefs } from './env-resolver.js';
 
 export class ConfigError extends Error {
   constructor(
@@ -128,6 +129,12 @@ export function parseConfig(raw: Record<string, unknown>): ZoraConfig {
         script: h['script'] as string | undefined,
       }));
   }
+
+  // SEC-26: resolve `env:VAR` credential references here — the single funnel
+  // every loader below passes through — so no consumer has to remember to do it
+  // and none can disagree about whether it was done. Throws ConfigEnvError when
+  // a referenced variable is unset; that is a deliberate hard startup failure.
+  resolveConfigEnvRefs(config);
 
   return config;
 }

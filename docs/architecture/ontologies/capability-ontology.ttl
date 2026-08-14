@@ -28,46 +28,46 @@
 zora:Capability
     a owl:Class ;
     rdfs:label "Capability" ;
-    rdfs:comment "A capability tag that can be asserted by or required of an LLM provider. Derived from ProviderCapability type in src/types.ts:14." .
+    rdfs:comment "A capability tag that can be asserted by or required of an LLM provider. Derived from ProviderCapability type in src/types.ts." .
 
 zora:Provider
     a owl:Class ;
     rdfs:label "LLM Provider" ;
-    rdfs:comment "An LLM backend implementing the LLMProvider interface (src/types.ts:347). Subclasses correspond to KnownProviderType values." .
+    rdfs:comment "An LLM backend implementing the LLMProvider interface (src/types.ts). Subclasses correspond to KnownProviderType values." .
 
 zora:RoutingMode
     a owl:Class ;
     rdfs:label "Routing Mode" ;
-    rdfs:comment "Strategy for selecting among available providers. Derived from RoutingMode type in src/types.ts:32." .
+    rdfs:comment "Strategy for selecting among available providers. Derived from RoutingMode type in src/types.ts." .
 
 zora:CostTier
     a owl:Class ;
     rdfs:label "Cost Tier" ;
-    rdfs:comment "Cost classification for a provider. Derived from CostTier type in src/types.ts:27." .
+    rdfs:comment "Cost classification for a provider. Derived from CostTier type in src/types.ts." .
 
 zora:MemoryType
     a owl:Class ;
     rdfs:label "Memory Item Type" ;
-    rdfs:comment "Classification of a structured memory item. Derived from MemoryItemType in src/memory/memory-types.ts:8." .
+    rdfs:comment "Classification of a structured memory item. Derived from MemoryItemType in src/memory/memory-types.ts." .
 
 zora:AgentRole
     a owl:Class ;
     rdfs:label "Agent Role" ;
-    rdfs:comment "Role of an agent in a multi-agent team. Derived from AgentMember in src/teams/team-types.ts:9." .
+    rdfs:comment "Role of an agent in a multi-agent team. Derived from AgentMember in src/teams/team-types.ts." .
 
 zora:AuditEventType
     a owl:Class ;
     rdfs:label "Audit Event Type" ;
-    rdfs:comment "Classification of an audit log entry. Derived from AuditEntryEventType in src/security/security-types.ts:15." .
+    rdfs:comment "Classification of an audit log entry. Derived from AuditEntryEventType in src/security/security-types.ts." .
 
 zora:PolicySection
     a owl:Class ;
     rdfs:label "Policy Section" ;
-    rdfs:comment "A section of the ZoraPolicy configuration. Derived from ZoraPolicy interface in src/types.ts:682." .
+    rdfs:comment "A section of the ZoraPolicy configuration. Derived from ZoraPolicy interface in src/types.ts." .
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider Capability Individuals
-# Derived from src/types.ts:14-25 ProviderCapability
+# Derived from src/types.ts ProviderCapability
 # ─────────────────────────────────────────────────────────────────────────────
 
 zora:ReasoningCapability
@@ -119,7 +119,7 @@ zora:FastCapability
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider Individuals
-# Derived from KnownProviderType in src/types.ts:341
+# Derived from KnownProviderType in src/types.ts
 # ─────────────────────────────────────────────────────────────────────────────
 
 zora:ClaudeSDKProvider
@@ -149,9 +149,17 @@ zora:OllamaProvider
     zora:costTier zora:FreeTier ;
     zora:typeName "ollama" .
 
+zora:EchoProvider
+    a owl:NamedIndividual, zora:Provider ;
+    rdfs:label "Echo (echo)" ;
+    rdfs:comment "Deterministic test stub for the e2e scenario harness. No network, no API keys. Not a production backend. Implementation: src/providers/echo-provider.ts" ;
+    zora:implementedIn "src/providers/echo-provider.ts" ;
+    zora:costTier zora:FreeTier ;
+    zora:typeName "echo" .
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cost Tier Individuals
-# Derived from CostTier in src/types.ts:27
+# Derived from CostTier in src/types.ts
 # ─────────────────────────────────────────────────────────────────────────────
 
 zora:FreeTier
@@ -180,7 +188,7 @@ zora:PremiumTier
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Routing Mode Individuals
-# Derived from RoutingMode in src/types.ts:32
+# Derived from RoutingMode in src/types.ts
 # ─────────────────────────────────────────────────────────────────────────────
 
 zora:RespectRankingMode
@@ -205,7 +213,7 @@ zora:RoundRobinMode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Memory Item Type Individuals
-# Derived from MemoryItemType in src/memory/memory-types.ts:8
+# Derived from MemoryItemType in src/memory/memory-types.ts
 # ─────────────────────────────────────────────────────────────────────────────
 
 zora:ProfileMemoryType

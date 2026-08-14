@@ -26,6 +26,20 @@ import os from 'node:os';
 import fs from 'node:fs';
 import type { ToolHook, ToolCallContext, ToolHookResult } from '../tool-hook-runner.js';
 import { createLogger } from '../../utils/logger.js';
+import { toolFilterMatches, SHELL_TOOL_ALIASES } from '../../security/tool-names.js';
+
+/**
+ * Tools whose arguments name a file directly.
+ *
+ * SEC-24: `NotebookEdit` and `create_file` were missing — the set was written
+ * before either existed, and nothing noticed because the comparison was a
+ * private lowercase `Set.has()` that no test exercised with real SDK names.
+ */
+const FILE_TOOL_NAMES = [
+  'read', 'read_file', 'grep', 'glob',
+  'write', 'write_file', 'create_file',
+  'edit', 'edit_file', 'multiedit', 'notebookedit',
+] as const;
 
 const log = createLogger('sensitive-file-guard');
 
@@ -142,16 +156,16 @@ export const SensitiveFileGuardHook: ToolHook = {
   // No tools filter — applies to ALL tools so it catches Read, Grep, Glob, Bash, etc.
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
-    const tool = ctx.tool.toLowerCase();
-
-    // ── File tools: Read, Grep, Glob, Write, Edit ──────────────────────────
-    const FILE_TOOLS = new Set(['read', 'read_file', 'grep', 'glob', 'write', 'edit', 'multiedit']);
-
-    if (FILE_TOOLS.has(tool)) {
+    // SEC-24: was `ctx.tool.toLowerCase()` — a fourth private normalisation.
+    // Lowercasing alone happened to cover the SDK's `Read`/`Write`/`Edit`, but
+    // not an MCP-qualified `mcp__zora-tools__read_file`, which slipped past the
+    // guard entirely. Route through the shared normaliser like every other gate.
+    if (toolFilterMatches(FILE_TOOL_NAMES, ctx.tool)) {
       // Collect candidate path arguments
       const pathArgs = [
         ctx.arguments['file_path'],
         ctx.arguments['path'],
+        ctx.arguments['notebook_path'],  // SEC-24: NotebookEdit's path argument
         ctx.arguments['pattern'],   // Glob pattern may include directory
       ]
         .filter((v): v is string => typeof v === 'string')
@@ -173,9 +187,7 @@ export const SensitiveFileGuardHook: ToolHook = {
     }
 
     // ── Shell tools: Bash, shell, execute_bash ─────────────────────────────
-    const SHELL_TOOLS = new Set(['bash', 'shell', 'run_command', 'execute_bash']);
-
-    if (SHELL_TOOLS.has(tool)) {
+    if (toolFilterMatches(SHELL_TOOL_ALIASES, ctx.tool)) {
       const cmd = String(ctx.arguments['command'] ?? ctx.arguments['cmd'] ?? '');
 
       // Only check commands that involve reading file contents

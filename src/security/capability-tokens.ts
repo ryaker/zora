@@ -9,6 +9,7 @@
 
 import path from 'node:path';
 import type { WorkerCapabilityToken, ZoraPolicy } from '../types.js';
+import { toolFilterMatches } from './tool-names.js';
 
 const DEFAULT_EXPIRATION_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -121,7 +122,11 @@ function _enforceTool(token: WorkerCapabilityToken, toolName: string): Enforceme
     return { allowed: true };
   }
 
-  if (!token.allowedTools.includes(toolName)) {
+  // SEC-24: was a case-sensitive `Array.includes(toolName)`. This one fails
+  // closed rather than open — a token scoped to `['bash']` denied the SDK's
+  // `Bash` — so it never showed up as a hole, only as a worker that mysteriously
+  // could not run anything it was granted. Same normaliser as every other gate.
+  if (!toolFilterMatches(token.allowedTools, toolName)) {
     return { allowed: false, reason: `Tool '${toolName}' is not in token's allowed tools` };
   }
 

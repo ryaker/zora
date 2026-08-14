@@ -5,7 +5,7 @@ Zora uses two TOML files for configuration:
 - **`config.toml`** -- Agent behavior, providers, routing, memory, steering, and notifications.
 - **`policy.toml`** -- Security policy: filesystem access, shell commands, network, budgets, and dry-run mode.
 
-Both files live in `~/.zora/` by default and are created by `zora init`.
+Both files live in `~/.zora/` by default and are created by `zora-agent init`.
 
 ---
 
@@ -45,12 +45,13 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique identifier (e.g. `"claude"`, `"gemini"`, `"ollama"`). |
-| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, or `"ollama"`. |
+| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, `"ollama"`, or `"echo"` (a deterministic stub used by the e2e harness — not for production). |
 | `rank` | integer | yes | Priority for routing. Lower rank = preferred. |
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
 | `enabled` | boolean | yes | Whether this provider is active. |
-| `model` | string | no | Model identifier (e.g. `"claude-sonnet-4-6"`, `"gemini-2.5-flash"`). Provider-specific default if omitted. |
+| `model` | string | no | Model identifier (e.g. `"claude-opus-5"`, `"gemini-2.5-pro"`). Provider-specific default if omitted -- `claude-opus-5` for `claude-sdk`. `zora-agent init` writes `gemini-2.5-pro` for `gemini-cli`. |
+| `effort` | string | no | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. The main intelligence/latency/cost dial. Left unset by default so the SDK's own default applies. `"xhigh"` requires Opus 4.7+ / Sonnet 5; `"max"` requires Opus 4.6+ / Sonnet 4.6+. Claude only. |
 | `max_turns` | integer | no | Maximum conversation turns per task. Default: `200`. |
 | `max_concurrent_jobs` | integer | no | Concurrency limit for this provider. |
 
@@ -85,7 +86,7 @@ rank = 1
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
-model = "claude-sonnet-4-6"
+model = "claude-opus-5"
 auth_method = "mac_session"
 
 [[providers]]
@@ -150,7 +151,7 @@ Persistent memory system for context across sessions. Zora's memory operates in 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file (Tier 1). Loaded into every session's system prompt. Only editable by humans via `zora memory edit`. |
+| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file (Tier 1). Loaded into every session's system prompt. Only editable by humans via `zora-agent memory edit`. |
 | `daily_notes_dir` | string | `"~/.zora/memory/daily"` | Directory for daily note files (Tier 2). Each day produces a `YYYY-MM-DD.md` file. |
 | `items_dir` | string | `"~/.zora/memory/items"` | Directory for structured memory items (Tier 3). Each item stored as a JSON file. |
 | `categories_dir` | string | `"~/.zora/memory/categories"` | Directory for category summary files. Auto-generated from item categories. |
@@ -168,9 +169,14 @@ Persistent memory system for context across sessions. Zora's memory operates in 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `auto_extract` | boolean | `true` | Enable automatic memory extraction after task completion. When enabled, the agent is prompted to extract key facts from completed work. |
-| `auto_extract_interval` | integer | `10` | Number of completed tasks between automatic extraction runs. Only applies when `auto_extract = true`. |
-| `salience_half_life_days` | integer | `14` | Half-life in days for the recency decay function. After this many days without access, a memory item's recency score drops to 50%. Lower values make the agent forget faster. |
-| `salience_reinforcement_weight` | float | `0.3` | Weight multiplied by `access_count` in the salience formula. Higher values make frequently accessed items score higher. |
+| `auto_extract_interval` | integer | `10` | **Minutes** between interval-based extraction runs — the orchestrator multiplies this by 60,000 ms. Only applies when `auto_extract = true`; a value of `0` or less disables the interval schedule. |
+
+Salience scoring itself is not configurable. `SalienceScorer`
+(`src/memory/salience-scorer.ts`) is constructed with no arguments by
+`MemoryManager`, so its recency half-life is fixed at 14 days, and the frequency
+term is a fixed function of `access_count` rather than a weighted one. Keys for
+tuning either of those are not read by anything — setting them in `config.toml`
+has no effect.
 
 #### Example
 
@@ -185,11 +191,33 @@ max_context_items = 5
 max_category_summaries = 3
 auto_extract = true
 auto_extract_interval = 10
-salience_half_life_days = 14
-salience_reinforcement_weight = 0.3
 ```
 
-Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora init`.
+Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora-agent init`.
+
+#### Graph memory (experimental, off by default)
+
+The graph tier is the one memory setting that is **not** in `config.toml` — it is
+env-gated, because it is experimental and depends on an optional native module.
+
+| Variable | Effect |
+|---|---|
+| `ZORA_GRAPH_MEMORY` | `1`, `true`, `on` or `yes` starts the tier. Anything else, including unset, leaves it off. |
+| `ZORA_GRAPH_MEMORY_PATH` | Database location. Default `~/.zora/memory/graph.db`. |
+
+When it is on, the agent gains a `graph_recall` tool alongside `memory_search`.
+The two answer different questions: `memory_search` is BM25 over item summaries
+and finds a memory by its *wording*; `graph_recall` traverses *relationships*
+— what else involved this project, what earlier work touched the same entities
+as the current job, what a decision superseded, whether a tool has failed this
+way before. The two-hop case is the one lexical search cannot reach at all,
+since the summaries need share no words.
+
+The tier degrades to nothing rather than failing. A missing `sparrowdb` module,
+an unsupported platform, an unopenable database, a failed worker spawn or a
+startup timeout each produce one warning and an inert client, and `graph_recall`
+is simply not registered — the agent keeps running with lexical memory alone.
+It runs on a worker thread, so the native calls do not block the main loop.
 
 ### `[security]`
 
@@ -229,7 +257,7 @@ Optional Telegram bot integration for remote steering.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable the Telegram gateway. |
-| `bot_token` | string | -- | Telegram bot token (from BotFather). |
+| `bot_token` | string | -- | Telegram bot token (from BotFather). Use `"env:VAR"` to read it from the environment instead of storing it here — see [Secrets in config](#secrets-in-config). |
 | `allowed_users` | string[] | `[]` | Telegram usernames allowed to steer the agent. |
 | `rate_limit_per_min` | integer | `30` | Maximum messages per minute from Telegram. |
 
@@ -262,6 +290,44 @@ Each key under `mcp.servers` defines an MCP server connection.
 | `args` | string[] | Command arguments (for `stdio` transport). |
 | `env` | object | Environment variables to pass to the server. |
 | `headers` | object | HTTP headers for server connections. |
+
+---
+
+## Secrets in config
+
+Any credential-bearing field may hold `"env:NAME"` instead of the credential
+itself. The reference is resolved once, when config is loaded
+(`src/config/env-resolver.ts`), so every consumer sees the real value and none
+of them has to remember to do the lookup.
+
+```toml
+[steering.telegram]
+bot_token = "env:ZORA_TELEGRAM_TOKEN"
+
+[mcp.servers.mem0]
+env = { MEM0_API_KEY = "env:MEM0_API_KEY" }
+```
+
+**Which fields.** Any field whose key ends in `token`, `secret`, `password`,
+`passwd`, `pwd`, `api_key`, `apikey`, `access_key`, `private_key`, `credential`,
+`credentials` or `authorization` — plus every value under
+`[mcp.servers.<name>.env]` and `[mcp.servers.<name>.headers]`, which is where
+API keys live regardless of what the key is called. The `${env:NAME}` spelling
+works as well as `env:NAME`.
+
+**A missing variable stops startup.** If the named variable is unset or set to
+an empty string, config loading fails with an error naming both the variable and
+the field. Zora never falls back to the literal `"env:NAME"` string and never
+substitutes an empty credential — silently doing either is what made this
+mechanism worth nothing before v0.12.0.
+
+**Not resolved:** `api_key_env` on a provider. That field is *defined* as the
+name of an environment variable; the provider reads the variable itself.
+Resolving it would put a secret where a name is expected.
+
+**Not covered:** an `env:` reference in a non-credential field is left as the
+literal string, and a warning naming the field is logged. Nothing else in the
+TOML is substituted.
 
 ---
 

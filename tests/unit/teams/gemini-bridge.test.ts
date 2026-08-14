@@ -15,8 +15,40 @@ import { GeminiBridge } from '../../../src/teams/gemini-bridge.js';
 
 const mockSpawn = vi.mocked(spawn);
 
+/**
+ * TEST-20: wait for an observable condition instead of sleeping a fixed span.
+ *
+ * The bridge reaches every observable state through a chain of asynchronous
+ * work — one poll tick, then `Mailbox.receive()`, which is readFile + mkdir +
+ * writeFile + rename. On an idle machine that chain completes ~66 ms after
+ * `start()`; under filesystem contention it can take several times that, while
+ * a `setTimeout` in the test keeps running on the wall clock regardless. A
+ * fixed sleep therefore races the filesystem. Polling a condition against a
+ * deadline cannot: a slow machine only makes the wait longer, never wrong.
+ */
+async function until(
+  predicate: () => boolean | Promise<boolean>,
+  label: string,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let ok = false;
+    try {
+      ok = await predicate();
+    } catch {
+      ok = false; // e.g. the file we poll for does not exist yet
+    }
+    if (ok) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for: ${label}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 describe('GeminiBridge', () => {
-  const testDir = path.join(os.tmpdir(), `zora-bridge-test-${Date.now()}`);
+  const testDir = path.join(os.tmpdir(), `zora-bridge-test-${process.pid}-${Date.now()}`);
   const teamName = 'bridge-team';
 
   beforeEach(async () => {
@@ -27,22 +59,6 @@ describe('GeminiBridge', () => {
   afterEach(async () => {
     await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
   });
-
-  function createMockProcess(stdout: string, exitCode: number) {
-    const proc = new EventEmitter() as any;
-    const stdoutStream = new EventEmitter() as Readable;
-    const stderrStream = new EventEmitter() as Readable;
-    proc.stdout = stdoutStream;
-    proc.stderr = stderrStream;
-    proc.kill = vi.fn();
-
-    setTimeout(() => {
-      if (stdout) stdoutStream.emit('data', Buffer.from(stdout));
-      proc.emit('close', exitCode);
-    }, 5);
-
-    return proc;
-  }
 
   it('starts and stops polling', async () => {
     const mailbox = new Mailbox(testDir, 'gemini-agent');
@@ -113,27 +129,25 @@ describe('GeminiBridge', () => {
     });
 
     bridge.start();
-    // Wait for poll + process + result posting
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait for the poll to spawn the CLI and for the mocked process to close.
+    await until(() => closeFired, 'mocked gemini process to close');
     bridge.stop();
 
-    // Verify spawn was called and close fired
     expect(mockSpawn).toHaveBeenCalled();
     expect(closeFired).toBe(true);
 
-    // Wait a bit more for async operations to settle
-    await new Promise((r) => setTimeout(r, 200));
-
-    // Check the coordinator inbox directly
+    // The result is written to the coordinator inbox asynchronously after close.
     const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
-    const rawContent = await fs.readFile(inboxPath, 'utf8');
-    const inboxData = JSON.parse(rawContent) as any[];
-    expect(inboxData.length).toBeGreaterThan(0);
+    let inboxData: any[] = [];
+    await until(async () => {
+      inboxData = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as any[];
+      return inboxData.some((m: any) => m.type === 'result');
+    }, 'result message in the coordinator inbox');
 
     const resultMsg = inboxData.find((m: any) => m.type === 'result');
     expect(resultMsg).toBeDefined();
     expect(resultMsg.text).toBe('Analysis complete');
-  });
+  }, 20_000);
 
   it('handles process errors gracefully', async () => {
     const geminiMailbox = new Mailbox(testDir, 'gemini-agent');
@@ -146,6 +160,7 @@ describe('GeminiBridge', () => {
       text: 'fail please',
     });
 
+    let errorFired = false;
     mockSpawn.mockImplementation(() => {
       const proc = new EventEmitter() as any;
       proc.stdout = new EventEmitter() as Readable;
@@ -154,6 +169,7 @@ describe('GeminiBridge', () => {
 
       setTimeout(() => {
         proc.emit('error', new Error('spawn failed'));
+        errorFired = true;
       }, 5);
 
       return proc;
@@ -165,12 +181,20 @@ describe('GeminiBridge', () => {
     });
 
     bridge.start();
-    await new Promise((r) => setTimeout(r, 200));
+    await until(() => errorFired, 'mocked spawn to emit an error');
+
+    // The failure is reported back to the requesting agent, not swallowed.
+    const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
+    await until(async () => {
+      const inbox = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as any[];
+      return inbox.some((m: any) => m.type === 'result' && m.text.includes('spawn failure'));
+    }, 'spawn-failure result posted back to the coordinator');
+
     bridge.stop();
 
     // Should not crash
     expect(bridge.isRunning()).toBe(false);
-  });
+  }, 20_000);
 
   it('kills active process on stop', async () => {
     const mailbox = new Mailbox(testDir, 'gemini-agent');
@@ -196,9 +220,12 @@ describe('GeminiBridge', () => {
     });
 
     bridge.start();
-    await new Promise((r) => setTimeout(r, 150));
+    // TEST-20: stop() can only kill a process that has already been spawned, so
+    // wait for the spawn itself rather than for a fixed span that has to be long
+    // enough to cover a poll tick plus four filesystem syscalls.
+    await until(() => mockSpawn.mock.calls.length > 0, 'the CLI subprocess to be spawned');
 
     bridge.stop();
     expect(killFn).toHaveBeenCalled();
-  });
+  }, 20_000);
 });

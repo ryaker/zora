@@ -20,6 +20,7 @@ import { OllamaProvider } from '../providers/ollama-provider.js';
 import { EchoProvider } from '../providers/echo-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger, initLogger } from '../utils/logger.js';
+import { expandHome } from '../utils/fs.js';
 import { ChannelIdentityRegistry } from '../channels/channel-identity-registry.js';
 import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
@@ -57,16 +58,26 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 
 const log = createLogger('daemon');
 
-function createProviders(config: ZoraConfig): LLMProvider[] {
+/**
+ * SEC-23: `policy` is required — see the matching comment in cli/index.ts. It
+ * is the source of the static `disallowedTools` ban that sits ahead of the
+ * dynamic gates.
+ */
+function createProviders(config: ZoraConfig, policy: ZoraPolicy): LLMProvider[] {
   const providers: LLMProvider[] = [];
+  // PROV-10: see the matching comment in cli/index.ts. The daemon is the worse
+  // case — it is typically started from whatever shell the user happened to be
+  // in, or from a service manager's root directory.
+  const workspace = expandHome(config.agent.workspace);
   for (const pConfig of config.providers) {
     if (!pConfig.enabled) continue;
     switch (pConfig.type) {
       case 'claude-sdk':
-        providers.push(new ClaudeProvider({ config: pConfig }));
+        // SEC-20 / SEC-23: explicit — see the matching comment in cli/index.ts.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace, policy }));
         break;
       case 'gemini-cli':
-        providers.push(new GeminiProvider({ config: pConfig }));
+        providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));
@@ -205,7 +216,7 @@ async function main() {
     approvalQueue.setSessionBlanketAllow(flagThreshold);
   }
 
-  const providers = createProviders(config);
+  const providers = createProviders(config, policy);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });
 
   // SEC-FIX-2: Register ApprovalQueue before boot() so PolicyEngine has an enforcement

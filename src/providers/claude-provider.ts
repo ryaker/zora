@@ -25,11 +25,15 @@ import type {
   ProviderCapability,
   CostTier,
   ProviderConfig,
+  ZoraPolicy,
 } from '../types.js';
 import {
   isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent,
 } from '../types.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+import { buildZoraMcpServer } from '../tools/zora-mcp-server.js';
+import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
+import { buildEnforcedSdkOptions } from '../security/enforced-sdk-options.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -109,6 +113,15 @@ export type QueryFn = (params: {
   options?: Record<string, unknown>;
 }) => SDKQuery;
 
+/**
+ * SDK-04: default model for the Claude provider.
+ *
+ * Kept as a named constant so the CLI's generated config and the runtime
+ * fallback cannot drift apart — they did, and a new install got a different
+ * model depending on whether `model` was written into config.toml.
+ */
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
+
 // ─── Provider Options ───────────────────────────────────────────────
 
 export interface ClaudeProviderOptions {
@@ -127,8 +140,40 @@ export interface ClaudeProviderOptions {
   /** Allowed tools list for the SDK. */
   allowedTools?: string[];
 
-  /** Permission mode. Defaults to 'bypassPermissions' for autonomous operation. */
-  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  /**
+   * SEC-20: Permission mode. Defaults to 'default', which is the only mode in
+   * which the SDK consults `canUseTool`.
+   *
+   * The SDK's permission-bypass mode is deliberately not offered here: it skips
+   * every permission check, the SDK does not invoke `canUseTool` under it, and
+   * it requires `allowDangerouslySkipPermissions` which Zora never sets. While
+   * it was the default, PolicyEngine, the SEC-10 capability tokens, and the
+   * channel allowlist were all inert on the main task path and policy.toml was
+   * advisory. Anyone who genuinely wants that mode can set the SDK flag
+   * themselves and own the consequences.
+   *
+   * SEC-23: narrowed to the single literal `'default'`. It was a three-member
+   * union whose other two members no call site used and neither of which
+   * consults `canUseTool` for every tool. The invariant "permissionMode is
+   * 'default' everywhere" is now checked by the compiler rather than by a grep.
+   */
+  permissionMode?: 'default';
+
+  /**
+   * SEC-21: provider-level SDK hooks. Per-task hooks arrive on
+   * `TaskContext.sdkHooks` and take precedence for the events they define.
+   */
+  hooks?: ZoraSdkHooks;
+
+  /**
+   * SEC-23: the resolved policy, so the provider can put layer [1] of the
+   * enforcement chain — the static `disallowedTools` ban — in front of the
+   * dynamic gates. Both CLI factories pass it. When absent the provider still
+   * runs (the dynamic gates are unaffected) but with no static bans, so leaving
+   * it out is a real, if quiet, weakening; the coverage test asserts the
+   * factories supply it.
+   */
+  policy?: ZoraPolicy;
 }
 
 // ─── Claude Provider ────────────────────────────────────────────────
@@ -144,7 +189,9 @@ export class ClaudeProvider implements LLMProvider {
   private readonly _cwd: string;
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
-  private readonly _permissionMode: string;
+  private readonly _hooks: ZoraSdkHooks;
+  /** SEC-23: source for the policy-derived static tool bans. */
+  private readonly _policy: ZoraPolicy | undefined;
 
   /** Active queries indexed by jobId for abort support */
   private readonly _activeQueries: Map<string, { abort: AbortController; query: SDKQuery }> = new Map();
@@ -175,7 +222,8 @@ export class ClaudeProvider implements LLMProvider {
     this._cwd = options.cwd ?? process.cwd();
     this._systemPrompt = options.systemPrompt ?? '';
     this._allowedTools = options.allowedTools ?? [];
-    this._permissionMode = options.permissionMode ?? 'bypassPermissions';
+    this._hooks = options.hooks ?? {};
+    this._policy = options.policy;
     this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK
@@ -264,33 +312,69 @@ export class ClaudeProvider implements LLMProvider {
     const queryFn = await this._resolveQueryFn();
     const abortController = new AbortController();
 
+    // SDK-01: register Zora's tools as an in-process MCP server. The previous
+    // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
+    // so every Zora tool was dropped before it reached the model (and the .map()
+    // stripped `handler`, so even a passthrough could not have executed).
+    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
+
+    // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
+    // ahead of canUseTool and a deny there is a real deny — the SDK never
+    // invokes the tool. Per-task hooks win over provider-level ones per event.
+    const hooks: ZoraSdkHooks = { ...this._hooks, ...(task.sdkHooks ?? {}) };
+
+    // SEC-23: the whole enforcement half of the options comes from one builder,
+    // shared with every ExecutionLoop path. This used to be four independent
+    // hand-assembled objects that each decided which defenses to include, which
+    // is precisely how the heartbeat path ended up without a hook chain.
+    //
+    // An allowlist is a filter, not a registry: when `_allowedTools` is empty the
+    // builder returns `undefined` and the key stays unset, so the SDK permits its
+    // built-ins and the zora-tools MCP server alike. When it is set, Zora's own
+    // tools have to be named explicitly or the filter would drop them — hence
+    // `extraAllowedTools`.
+    const enforced = buildEnforcedSdkOptions({
+      // No policy supplied (library embedding, tests) means no *static* bans;
+      // canUseTool and the hook chain are unaffected.
+      policy: this._policy,
+      canUseTool: task.canUseTool,
+      hooks,
+      baseAllowedTools: this._allowedTools.length > 0 ? this._allowedTools : undefined,
+      extraAllowedTools: zoraToolNames,
+    });
+
     // Build SDK options
     const sdkOptions: Record<string, unknown> = {
       abortController,
-      model: this._config.model ?? 'claude-sonnet-4-6',
+      // SDK-04: default to the current Opus generation. 'claude-sonnet-4-6' is
+      // two generations back — it still works, but new installs were getting a
+      // previous-generation default.
+      model: this._config.model ?? DEFAULT_CLAUDE_MODEL,
       cwd: this._cwd,
-      permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
       // Prefer the per-task system prompt, falling back to the provider default.
       systemPrompt: task.systemPrompt || this._systemPrompt,
+      permissionMode: enforced.permissionMode,
+      disallowedTools: enforced.disallowedTools,
     };
 
-    if (this._allowedTools.length > 0) {
-      sdkOptions['allowedTools'] = this._allowedTools;
+    if (Object.keys(mcpServers).length > 0) {
+      sdkOptions['mcpServers'] = mcpServers;
+    }
+    if (enforced.allowedTools) {
+      sdkOptions['allowedTools'] = enforced.allowedTools;
+    }
+    if (enforced.canUseTool) {
+      sdkOptions['canUseTool'] = enforced.canUseTool;
+    }
+    if (Object.keys(enforced.hooks).length > 0) {
+      sdkOptions['hooks'] = enforced.hooks;
     }
 
-    // Wire policy enforcement into the SDK
-    if (task.canUseTool) {
-      sdkOptions['canUseTool'] = task.canUseTool;
-    }
-
-    // Forward custom tools from TaskContext (memory tools, permissions, etc.)
-    if (task.customTools && task.customTools.length > 0) {
-      sdkOptions['customTools'] = task.customTools.map(t => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema,
-      }));
+    // SDK-04: reasoning effort, when configured. Left unset otherwise so the
+    // SDK's own default applies rather than Zora pinning one.
+    if (this._config.effort) {
+      sdkOptions['effort'] = this._config.effort;
     }
 
     // Build the prompt from task context

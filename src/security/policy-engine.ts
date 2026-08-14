@@ -40,6 +40,7 @@ import {
   writePolicyFile,
 } from './policy-serializer.js';
 import { createLogger } from '../utils/logger.js';
+import { normalizeToolName, toolFilterMatches } from './tool-names.js';
 
 const log = createLogger('policy-engine');
 
@@ -84,7 +85,21 @@ export class PolicyEngine {
   // ─── Dry Run (ASI02) ────────────────────────────────────────────
   private _dryRunLog: DryRunResult[] = [];
 
-  private static readonly WRITE_TOOLS = new Set(['Write', 'Edit', 'Bash']);
+  /**
+   * SEC-24: normalised tool names (see `src/security/tool-names.ts`). These sets
+   * are only ever probed with `normalizeToolName()` output, so a PascalCase
+   * entry here would be dead.
+   */
+  private static readonly WRITE_TOOLS = new Set([
+    'write', 'edit', 'multiedit', 'notebookedit', 'bash',
+    'write_file', 'edit_file', 'create_file',
+  ]);
+
+  /** Tools whose argument names a single file the policy must validate. */
+  private static readonly FILE_PATH_TOOLS = new Set([
+    'read', 'write', 'edit', 'multiedit', 'notebookedit',
+    'read_file', 'write_file', 'edit_file', 'create_file',
+  ]);
 
   // ─── Intent Capsule (ASI01) ─────────────────────────────────────
   private _intentCapsuleManager?: IntentCapsuleManager;
@@ -287,14 +302,21 @@ export class PolicyEngine {
     const dryRun = this._policy.dry_run;
     if (!dryRun?.enabled) return null;
 
+    // SEC-24: `dry_run.tools` is a user-written policy.toml list — realistically
+    // `["bash", "write_file"]` — and this compared it to the SDK's `Bash` with a
+    // case-sensitive includes(). A configured dry run intercepted nothing, and
+    // reported nothing, because "no tool matched" and "dry run disabled" look
+    // identical from outside.
+    const tool = normalizeToolName(toolName);
+
     // If specific tools listed, only intercept those
-    if (dryRun.tools.length > 0 && !dryRun.tools.includes(toolName)) return null;
+    if (dryRun.tools.length > 0 && !toolFilterMatches(dryRun.tools, toolName)) return null;
 
     // If no specific tools listed, intercept all write operations
-    if (dryRun.tools.length === 0 && !PolicyEngine.WRITE_TOOLS.has(toolName)) return null;
+    if (dryRun.tools.length === 0 && !PolicyEngine.WRITE_TOOLS.has(tool)) return null;
 
     // For Bash: only intercept if command modifies state (not read-only commands)
-    if (toolName === 'Bash') {
+    if (tool === 'bash') {
       const command = (input['command'] as string) ?? '';
       if (isReadOnlyCommand(command)) return null;
     }
@@ -329,12 +351,20 @@ export class PolicyEngine {
    * Human-readable description of what a tool would do.
    */
   private _describeAction(toolName: string, input: Record<string, unknown>): string {
-    switch (toolName) {
-      case 'Write':
+    // SEC-24: switch on the normalised name — `case 'Write':` never fired for a
+    // provider reporting `write_file`, so the dry-run preview degraded to the
+    // generic JSON dump.
+    switch (normalizeToolName(toolName)) {
+      case 'write':
+      case 'write_file':
+      case 'create_file':
         return `Would write to file: ${input['file_path']}`;
-      case 'Edit':
-        return `Would edit file: ${input['file_path']}`;
-      case 'Bash':
+      case 'edit':
+      case 'edit_file':
+      case 'multiedit':
+      case 'notebookedit':
+        return `Would edit file: ${input['file_path'] ?? input['notebook_path']}`;
+      case 'bash':
         return `Would execute shell command: ${input['command']}`;
       default:
         return `Would invoke ${toolName} with: ${JSON.stringify(input).slice(0, 200)}`;
@@ -525,8 +555,17 @@ export class PolicyEngine {
       input: Record<string, unknown>,
       _options: { signal: AbortSignal },
     ) => {
+      // SEC-24: every comparison below reads the normalised name. They were
+      // written against the SDK's PascalCase spellings and were correct *for the
+      // SDK* — but they were a fourth private convention, and the identical
+      // pattern in RateLimitHook, IrreversibilityScorerHook and _checkDryRun()
+      // was silently inert. Anything reaching canUseTool through a non-SDK path
+      // (an MCP-qualified name, a provider that reports `bash`) used to skip the
+      // path and command validation entirely.
+      const tool = normalizeToolName(toolName);
+
       // Bash / shell commands
-      if (toolName === 'Bash') {
+      if (tool === 'bash') {
         const command = input['command'] as string | undefined;
         if (!command) {
           return {
@@ -543,9 +582,12 @@ export class PolicyEngine {
         }
       }
 
-      // File operations: Read, Write, Edit
-      if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
-        const filePath = input['file_path'] as string | undefined;
+      // File operations: Read, Write, Edit, MultiEdit, NotebookEdit
+      if (PolicyEngine.FILE_PATH_TOOLS.has(tool)) {
+        // NotebookEdit names its target `notebook_path`; everything else uses
+        // `file_path`. Both are checked so adding NotebookEdit to the gate does
+        // not deny it for a missing argument it never had.
+        const filePath = (input['file_path'] ?? input['notebook_path']) as string | undefined;
         if (!filePath) {
           return {
             behavior: 'deny' as const,
@@ -562,7 +604,7 @@ export class PolicyEngine {
       }
 
       // Glob — validate the search path if provided
-      if (toolName === 'Glob') {
+      if (tool === 'glob') {
         const globPath = input['path'] as string | undefined;
         if (!globPath) {
           return {
@@ -580,7 +622,7 @@ export class PolicyEngine {
       }
 
       // Grep — validate the search path if provided
-      if (toolName === 'Grep') {
+      if (tool === 'grep') {
         const grepPath = input['path'] as string | undefined;
         if (!grepPath) {
           return {
@@ -616,7 +658,7 @@ export class PolicyEngine {
       // Check always_flag for actions that require approval
       const action = this._classifyAction(toolName, input);
       if (action && this._shouldFlag(action)) {
-        const detail = toolName === 'Bash'
+        const detail = tool === 'bash'
           ? `Command: ${input['command']}`
           : `${toolName}: ${input['file_path'] ?? JSON.stringify(input)}`;
 
@@ -658,7 +700,7 @@ export class PolicyEngine {
       // ─── Intent capsule drift check (ASI01) ────────────────────────
       if (this._intentCapsuleManager) {
         const driftAction = this._classifyAction(toolName, input) ?? 'unknown';
-        const detail = toolName === 'Bash'
+        const detail = tool === 'bash'
           ? (input['command'] as string) ?? ''
           : `${toolName}: ${input['file_path'] ?? JSON.stringify(input)}`;
         const driftResult = this._intentCapsuleManager.checkDrift(driftAction, detail);
@@ -709,7 +751,8 @@ export class PolicyEngine {
    * Maps a tool call to an action category for always_flag matching.
    */
   private _classifyAction(toolName: string, input: Record<string, unknown>): string | null {
-    if (toolName === 'Bash') {
+    const tool = normalizeToolName(toolName);
+    if (tool === 'bash') {
       const command = (input['command'] as string | undefined) ?? '';
       const base = extractBaseCommand(command);
 
@@ -725,8 +768,10 @@ export class PolicyEngine {
       return 'shell_exec';
     }
 
-    if (toolName === 'Write') return 'write_file';
-    if (toolName === 'Edit') return 'edit_file';
+    if (tool === 'write' || tool === 'write_file' || tool === 'create_file') return 'write_file';
+    if (tool === 'edit' || tool === 'edit_file' || tool === 'multiedit' || tool === 'notebookedit') {
+      return 'edit_file';
+    }
 
     return null;
   }

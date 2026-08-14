@@ -14,8 +14,8 @@ Common issues and their solutions when running Zora.
 
 **Fix:**
 1. Open a terminal and run `claude` to start a new interactive Claude session. This refreshes the session token.
-2. Restart the Zora daemon: `zora daemon stop && zora daemon start`.
-3. Verify auth status on the dashboard at `http://localhost:7070`.
+2. Restart the Zora daemon: `zora-agent daemon stop && zora-agent daemon start`.
+3. Verify auth status on the dashboard at `http://localhost:8070`.
 
 If using `auth_method = "api_key"`:
 1. Verify the environment variable specified in `api_key_env` is set and contains a valid key.
@@ -73,7 +73,7 @@ If using `auth_method = "api_key"`:
 [filesystem]
 allowed_paths = ["~/.zora", "~/my-project"]
 ```
-Or re-run `zora init` to regenerate the policy for your workspace.
+Or re-run `zora-agent init` to regenerate the policy for your workspace.
 
 ### "Access to <path> is explicitly denied by security policy"
 
@@ -134,18 +134,18 @@ enabled = false
 
 ## Daemon Won't Start
 
-### `zora daemon start` does nothing or exits immediately
+### `zora-agent daemon start` does nothing or exits immediately
 
 **Possible causes:**
 
-1. **Port conflict.** The dashboard port (default `7070`) is already in use.
-   - Fix: Change `steering.dashboard_port` in `config.toml`, or stop the process using the port: `lsof -i :7070`.
+1. **Port conflict.** The dashboard port (default `8070`) is already in use.
+   - Fix: Change `steering.dashboard_port` in `config.toml`, or stop the process using the port: `lsof -i :8070`.
 
 2. **Config file missing or invalid.** The daemon cannot parse `config.toml`.
-   - Fix: Run `zora init` to generate a fresh config, or validate your TOML syntax.
+   - Fix: Run `zora-agent init` to generate a fresh config, or validate your TOML syntax.
 
 3. **Policy file missing.** The `security.policy_file` path doesn't exist.
-   - Fix: Run `zora init` to generate the policy file, or create it manually.
+   - Fix: Run `zora-agent init` to generate the policy file, or create it manually.
 
 4. **No providers enabled.** The daemon boots but cannot do anything without at least one enabled provider.
    - Fix: Enable at least one provider in `config.toml`.
@@ -166,16 +166,16 @@ If the daemon didn't shut down cleanly, a stale PID file may prevent restart.
 **Fix:** Remove the PID file and restart:
 ```bash
 rm ~/.zora/daemon.pid
-zora daemon start
+zora-agent daemon start
 ```
 
 ---
 
 ## Dashboard Not Loading
 
-### Browser shows "connection refused" at localhost:7070
+### Browser shows "connection refused" at localhost:8070
 
-1. **Daemon not running.** Start it: `zora daemon start`.
+1. **Daemon not running.** Start it: `zora-agent daemon start`.
 2. **Wrong port.** Check `steering.dashboard_port` in `config.toml`.
 3. **Firewall blocking.** Ensure localhost connections are allowed.
 
@@ -195,12 +195,15 @@ The dashboard polls provider status periodically. If a provider's auth/quota sta
 ### Bot doesn't respond to messages
 
 1. **Telegram not enabled.** Set `steering.telegram.enabled = true` in `config.toml`.
-2. **Missing bot token.** Set `steering.telegram.bot_token` to your BotFather token.
+2. **Missing bot token.** Set `steering.telegram.bot_token` to your BotFather
+   token, or to `"env:VAR"` and export the token as `VAR`. If the daemon exits
+   at startup naming a variable, that variable is not exported in the
+   environment the daemon runs in.
 3. **User not allowed.** Add your Telegram username to `steering.telegram.allowed_users`:
    ```toml
    [steering.telegram]
    enabled = true
-   bot_token = "123456:ABC-DEF..."
+   bot_token = "env:ZORA_TELEGRAM_TOKEN"
    allowed_users = ["your_username"]
    ```
 4. **Rate limited.** If you're sending messages faster than `rate_limit_per_min`, messages are dropped.
@@ -229,17 +232,21 @@ Your Telegram username is not in `allowed_users`. Add it and restart the daemon.
 
 ```bash
 # Check if the daemon is running
-zora daemon status
+zora-agent daemon status
 
-# View recent audit events
-zora audit tail
+# View recent audit events (default window is 24h)
+zora-agent audit --last 1h
+
+# Verify the audit hash chain has not been tampered with
+zora-agent audit --verify
 
 # Check provider auth status
-zora doctor
+zora-agent doctor
 
-# Validate config and policy files
-zora init --check
+# Re-check the installation's security posture (config/policy permissions,
+# plaintext secrets, bind address)
+zora-agent security
 
 # View memory state
-zora memory show
+zora-agent memory stats
 ```

@@ -55,13 +55,13 @@ Zora establishes a resident agent layer on the user machine that:
 ## 4. Architecture Principles
 
 ### P1: Security by Policy, Not by Trust
-Every tool call is intercepted by PolicyEngine.canUseTool() (src/security/policy-engine.ts:488) before execution. The policy is declarative (TOML), user-editable, and loaded at boot. No LLM output can bypass the policy gate. See ADR-002.
+Every tool call passes two pre-execution gates: the SDK `PreToolUse` hook, which runs Zora's tool-hook chain and fails closed (src/hooks/sdk-hook-bridge.ts), and then PolicyEngine.createCanUseTool() under `permissionMode: 'default'` (src/security/policy-engine.ts). The policy is declarative (TOML), user-editable, and loaded at boot. No LLM output can bypass either gate. See ADR-002 and its 2026-08 update.
 
 ### P2: Auditability as an Invariant
-Every significant event (task start/end, tool call, policy decision, memory extraction, failover) is written to audit/audit.jsonl via AuditLogger.log() (src/security/audit-logger.ts:50). Entries form a SHA-256 hash chain. Any tampering is detectable via AuditLogger.verifyChain() (src/security/audit-logger.ts:113).
+Every significant event (task start/end, tool call, policy decision, memory extraction, failover) is written to audit/audit.jsonl via AuditLogger.log() (src/security/audit-logger.ts). Entries form a SHA-256 hash chain. Any tampering is detectable via AuditLogger.verifyChain() (src/security/audit-logger.ts).
 
 ### P3: Provider Neutrality
-The LLMProvider interface (src/types.ts:347) is the sole contract between the orchestration layer and any LLM backend. Adding a new provider requires implementing five methods (isAvailable, checkAuth, getQuotaStatus, execute, abort) and one factory case. No orchestrator changes. Defined in ADR-001.
+The LLMProvider interface (src/types.ts) is the sole contract between the orchestration layer and any LLM backend. Adding a new provider requires implementing five methods (isAvailable, checkAuth, getQuotaStatus, execute, abort) and one factory case. No orchestrator changes. Defined in ADR-001.
 
 ### P4: Fail-Safe Defaults
 Default policy presets are conservative. The safe preset allows read-only filesystem access and no shell commands. Destructive commands (rm -rf, sudo) are blocked by default in all presets. DEFAULT_DRIFT_BLOCKING_MODE (src/config/defaults.ts) is log_only in development.
@@ -118,7 +118,7 @@ Zora implements a layered orchestration architecture (see also docs/architecture
 | Metric | Target | Measurement |
 |---|---|---|
 | Policy enforcement coverage | 100% of tool calls gated | AuditLogger policy.allow + policy.deny event counts |
-| Audit chain integrity | 0 broken links | zora-agent audit verify exit code 0 |
+| Audit chain integrity | 0 broken links | zora-agent audit --verify exit code 0 |
 | Provider failover latency | < 2s for handoff | Session event timestamps: task.start to first token on failover |
 | Memory retrieval relevance | Top-3 items match task context | Salience score > 0.6 for retrieved items |
 | Cold boot time | < 5s from zora-agent start to ready | Orchestrator.boot() duration log entry |

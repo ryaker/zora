@@ -171,7 +171,7 @@ Phase 3 — Daemon wiring:
 **Description:** Add a `spawn_zora_agent` tool to Zora's orchestrator tool registry. When PM Zora invokes this tool, it:
 1. Resolves the project's config directory from `~/.zora/projects/<name>/`
 2. Checks if an instance is already running on that project's port (via `GET http://localhost:<port>/api/health`)
-3. If not running: spawns `zora start --config-dir ~/.zora/projects/<name>/` as a child process
+3. If not running: spawns `zora-agent start --config-dir ~/.zora/projects/<name>/` as a child process
 4. Registers the new instance with AgentBus (`POST /api/bus/register`)
 5. Returns the instance's URL and port to PM Zora
 
@@ -421,7 +421,7 @@ For each work item, success is defined as:
 
 **WI-1:** `launchctl list | grep zora-pm` shows the service loaded; kill the process and verify it restarts within 10 seconds; check `~/Library/Logs/zora-pm.log` for boot sequence.
 
-**WI-2:** `zora start --config-dir ~/.zora/projects/AgentDev/` boots cleanly; `zora start --config-dir ~/.zora/projects/Trading/` boots on a different port without conflict.
+**WI-2:** `zora-agent start --config-dir ~/.zora/projects/AgentDev/` boots cleanly; `zora-agent start --config-dir ~/.zora/projects/Trading/` boots on a different port without conflict.
 
 **WI-3:** Two browser tabs open to ports 8071 and 8072 show visually distinct header colors and tab titles simultaneously. `curl localhost:8071/api/project` returns `{"name":"AgentDev","color":"#6b9fff"}`.
 

@@ -1,23 +1,36 @@
 # Routines Cookbook: Ready-to-Use Templates
 
-Zora routines run on a schedule (like cron jobs) and execute AI-powered workflows automatically. Here are five copy-paste templates you can add to your `~/.zora/config.toml`.
+Zora routines run on a schedule (like cron jobs) and execute AI-powered workflows automatically. Here are five copy-paste templates.
 
 ---
 
 ## How to Install a Routine
 
-1. Open `~/.zora/config.toml` in a text editor
-2. Copy the entire `[[routines]]` block from below
-3. Paste it at the end of your config file
-4. Save and run `zora-agent routines list` to verify
+Each routine is **its own TOML file** in `~/.zora/routines/`. They do not go in
+`config.toml`. `RoutineManager` creates that directory at boot and loads every
+`.toml` file in it (`src/routines/routine-manager.ts`).
+
+A routine file has exactly two tables: `[routine]` (the schedule and metadata)
+and `[task]` (the prompt).
+
+1. Create a file: `~/.zora/routines/<name>.toml`
+2. Paste one of the blocks below into it
+3. Restart the daemon so it picks the file up
 
 **Example:**
 ```bash
-nano ~/.zora/config.toml  # or vim, VS Code, etc.
-# Paste routine below
-# Save and exit
-zora-agent routines list
+mkdir -p ~/.zora/routines
+nano ~/.zora/routines/daily-standup.toml   # or vim, VS Code, etc.
+# Paste a routine below, save and exit
+
+zora-agent daemon stop && zora-agent daemon start
 ```
+
+There is no `zora-agent routines` command. To confirm a routine loaded, check
+the daemon log for its name — an invalid definition is logged and skipped
+rather than failing the boot.
+
+Set `enabled = false` in `[routine]` to keep a file in place without scheduling it.
 
 ---
 
@@ -28,13 +41,13 @@ zora-agent routines list
 **When to use:** Start your day knowing what you and your team accomplished yesterday.
 
 ```toml
-[[routines]]
+[routine]
 name = "daily-standup"
 schedule = "0 8 * * *"
 model_preference = "claude"
 timeout = "10m"
 
-[routines.task]
+[task]
 prompt = """
 Generate a daily standup summary:
 
@@ -50,7 +63,7 @@ Format: "Yesterday: [commits], Today: [open work], Blockers: [issues]"
 **What each field means:**
 - `name` — Internal identifier (use lowercase-with-dashes)
 - `schedule` — Cron expression (`0 8 * * *` = 8:00 AM daily)
-- `model_preference` — Which provider to use (e.g. `claude-opus`, `claude-haiku`, `gemini`, `ollama`)
+- `model_preference` — Which provider to use. This is a **provider `name` from your `config.toml`**, not a model ID. `zora-agent init` generates providers named `claude` and `gemini`; add more (e.g. an `ollama` entry) and their names become valid here.
 - `max_cost_tier` — Cost ceiling: `free`, `included`, `metered`, or `premium` (optional)
 - `timeout` — Max runtime before the routine is killed
 - `prompt` — The task Zora will execute
@@ -78,13 +91,13 @@ Blockers: None
 **When to use:** Keep your Downloads folder from becoming a disaster.
 
 ```toml
-[[routines]]
+[routine]
 name = "weekly-cleanup"
 schedule = "0 9 * * 1"
 model_preference = "gemini"
 timeout = "15m"
 
-[routines.task]
+[task]
 prompt = """
 Organize my Downloads folder:
 
@@ -123,13 +136,13 @@ If a file doesn't fit a category, leave it in ~/Downloads.
 **When to use:** End your day knowing what needs attention tomorrow.
 
 ```toml
-[[routines]]
+[routine]
 name = "nightly-review"
 schedule = "0 18 * * *"
 model_preference = "claude"
 timeout = "10m"
 
-[routines.task]
+[task]
 prompt = """
 Run a nightly code review:
 
@@ -172,13 +185,13 @@ Format: "TODOs: N, Uncommitted: N repos, Behind: N repos"
 **When to use:** Track long-term progress or generate reports for stakeholders.
 
 ```toml
-[[routines]]
+[routine]
 name = "monthly-report"
 schedule = "0 10 1 * *"
 model_preference = "gemini"
 timeout = "20m"
 
-[routines.task]
+[task]
 prompt = """
 Generate a monthly report:
 
@@ -232,13 +245,13 @@ Format: Executive summary (3 sentences), detailed breakdown, metrics.
 **When to use:** Automate a weekly content workflow (blogging, newsletters, social media).
 
 ```toml
-[[routines]]
+[routine]
 name = "content-pipeline"
 schedule = "0 8 * * 2"
 model_preference = "claude"
 timeout = "30m"
 
-[routines.task]
+[task]
 prompt = """
 It's Tuesday — time for the weekly content pipeline.
 
@@ -299,13 +312,31 @@ Use cron syntax:
 - `0 10 1 * *` — 10:00 AM on the 1st of every month
 - `*/15 * * * *` — Every 15 minutes (use sparingly!)
 
-### Switch the AI Model
+### Switch the Provider
 
-- `model_preference = "claude-opus"` — Best for complex reasoning, architecture, difficult tasks
-- `model_preference = "claude-sonnet"` — Good balance of quality and cost for coding, writing
-- `model_preference = "claude-haiku"` — Fast and cheap for simple tasks, content generation, summaries
-- `model_preference = "gemini"` — Best for large context (e.g., reading months of notes), search, speed
-- `model_preference = "ollama"` — Local models (Llama, Mistral, etc.) — free, no API limits, fully offline
+`model_preference` names a provider from your `config.toml`. On a fresh install
+`zora-agent init` writes at most two, depending on which CLIs it detects:
+
+- `model_preference = "claude"` — the `claude-sdk` provider. Best for reasoning, architecture, coding. Runs `claude-opus-5` by default.
+- `model_preference = "gemini"` — the `gemini-cli` provider. Best for large context (e.g. reading months of notes), search, structured data.
+
+To route a routine at a cheaper or local model, add a provider for it in
+`config.toml` and use that entry's `name`. A second Claude entry pointed at a
+smaller model, or an `ollama` entry for local models (Llama, Mistral — free, no
+API limits, fully offline), both work:
+
+```toml
+[[providers]]
+name = "claude-fast"
+type = "claude-sdk"
+rank = 2
+capabilities = ["fast"]
+cost_tier = "included"
+enabled = true
+model = "claude-haiku-4-5-20251001"
+```
+
+Then `model_preference = "claude-fast"`.
 
 ### Limit Cost per Routine
 
@@ -347,23 +378,24 @@ This lets you verify the output before committing to a schedule.
 
 ## Viewing Routine Logs
 
-Check the audit log to see when routines ran and what they did:
+Routines submit ordinary tasks, so their tool calls land in the audit log like
+any other:
 
 ```bash
-cat ~/.zora/audit/audit.jsonl | grep "routine:"
+zora-agent audit --last 24h
 ```
 
-Or list all routines:
+To list what is installed, list the directory — there is no CLI command for it:
 
 ```bash
-zora-agent routines list
+ls ~/.zora/routines/
 ```
 
 ---
 
 ## Next Steps
 
-- **Copy a routine** from above and add it to `~/.zora/config.toml`
+- **Copy a routine** from above into its own file under `~/.zora/routines/`
 - **Test it manually** with `zora-agent ask "..."`
 - **Let it run on schedule** and check `~/.zora/workspace/` for output
 - **Iterate** — adjust the prompt, schedule, or timeout based on results

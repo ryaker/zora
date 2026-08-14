@@ -39,6 +39,7 @@ import { registerSecretCommands } from './secret-commands.js';
 import { registerSecurityCommands } from './security-commands.js';
 import { runDoctorChecks } from './doctor.js';
 import { createLogger } from '../utils/logger.js';
+import { expandHome } from '../utils/fs.js';
 import { createRequire } from 'node:module';
 
 const log = createLogger('cli');
@@ -54,9 +55,20 @@ program
 
 /**
  * Creates LLMProvider instances from config.
+ *
+ * SEC-23: `policy` is required, not optional. It is what
+ * `buildEnforcedSdkOptions()` compiles into the static `disallowedTools` ban —
+ * layer [1] of the enforcement chain — and making it a required parameter means
+ * a new call site cannot construct a provider with a weaker gate by omission.
  */
-function createProviders(config: ZoraConfig): LLMProvider[] {
+function createProviders(config: ZoraConfig, policy: ZoraPolicy): LLMProvider[] {
   const providers: LLMProvider[] = [];
+
+  // PROV-10: the agent's filesystem tools must operate in the configured
+  // workspace, not wherever the process was launched from. Both ExecutionLoop
+  // call sites already resolved this; the provider path never did, so `zora ask`
+  // from a random directory pointed the agent at that directory.
+  const workspace = expandHome(config.agent.workspace);
 
   for (const pConfig of config.providers) {
     if (!pConfig.enabled) continue;
@@ -68,10 +80,14 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 
     switch (providerType) {
       case 'claude-sdk':
-        providers.push(new ClaudeProvider({ config: pConfig }));
+        // SEC-20: permissionMode is passed explicitly rather than left to the
+        // provider default, so the enforcement mode is visible at the call site
+        // where someone might otherwise be tempted to loosen it.
+        // SEC-23: policy too — it is the source of the static tool bans.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace, policy }));
         break;
       case 'gemini-cli':
-        providers.push(new GeminiProvider({ config: pConfig }));
+        providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));
@@ -174,7 +190,7 @@ program
 
     const { config, policy } = await setupContext();
 
-    const providers = createProviders(config);
+    const providers = createProviders(config, policy);
     if (providers.length === 0) {
       log.error('No enabled providers found in config.');
       process.exit(1);

@@ -122,9 +122,9 @@ Zora targets individual knowledge workers, small development teams, and call cen
 |---|---|---|
 | **Agent Operator** | Installs, configures, and monitors Zora | CLI (zora-agent init, start, status, audit), Dashboard |
 | **End User** | Submits tasks, reviews results, steers in-flight | CLI, Dashboard, Telegram |
-| **Security Administrator** | Defines policy, reviews audit logs, manages capability tokens | policy.toml, zora-agent audit, zora-agent check-permissions |
+| **Security Administrator** | Defines policy, reviews audit logs, manages capability tokens | policy.toml, zora-agent audit, zora-agent security |
 | **Integration Engineer** | Adds MCP servers, custom tools, hooks, routines | config.toml, routine .toml files, hook scripts |
-| **Compliance Officer** | Reviews audit exports, verifies chain integrity | zora-agent audit verify, SIEM integration |
+| **Compliance Officer** | Reviews audit exports, verifies chain integrity | zora-agent audit --verify, SIEM integration |
 
 ---
 

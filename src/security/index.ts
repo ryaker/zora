@@ -2,12 +2,45 @@
  * Security barrel exports.
  */
 
+// SEC-24: the one tool-name normaliser. Every tool-name comparison in src/
+// routes through these; see the module doc for the bug class they close.
+export {
+  normalizeToolName,
+  toolNameEquals,
+  toolFilterMatches,
+  SDK_TOOL_NAMES,
+  SHELL_TOOL_ALIASES,
+  READ_TOOL_ALIASES,
+  WRITE_TOOL_ALIASES,
+  DESTRUCTIVE_TOOL_NAMES,
+} from './tool-names.js';
 export { PolicyEngine } from './policy-engine.js';
 export type { ValidationResult } from './policy-engine.js';
 
+// SEC-23: the single place SDK enforcement options are assembled.
+export {
+  buildEnforcedSdkOptions,
+  deriveDisallowedTools,
+  ENFORCEMENT_OPTION_KEYS,
+  SHELL_TOOL_NAMES,
+  NETWORK_TOOL_NAMES,
+} from './enforced-sdk-options.js';
+export type {
+  BuildEnforcedSdkOptionsInput,
+  EnforcedSdkOptions,
+  EnforcedCanUseTool,
+  EnforcedPermissionMode,
+  EnforcementOptionKey,
+} from './enforced-sdk-options.js';
+
 export { SecretsManager } from './secrets-manager.js';
-export { AuditLogger } from './audit-logger.js';
-export type { AuditEntryInput, AuditFilter, ChainVerificationResult } from './audit-logger.js';
+export { AuditLogger, securityAuditLogPath } from './audit-logger.js';
+export type {
+  AuditEntryInput,
+  AuditFilter,
+  ChainVerificationResult,
+  ChainVerificationStatus,
+} from './audit-logger.js';
 export { IntegrityGuardian } from './integrity-guardian.js';
 export type { IntegrityCheckResult } from './integrity-guardian.js';
 export { sanitizeInput, validateOutput, sanitizeToolOutput } from './prompt-defense.js';
