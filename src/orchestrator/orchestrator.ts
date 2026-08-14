@@ -209,6 +209,15 @@ export class Orchestrator {
 
   private _booted = false;
 
+  // PERF-03: SOUL.md identity cache. The file used to be existsSync'd and
+  // readFileSync'd on every submitTask(), blocking the event loop per task.
+  // It is read once and served from memory; an fs.watch on the containing
+  // directory invalidates it when the file changes.
+  private _soulPath: string | null = null;
+  private _soulContent = '';
+  private _soulLoaded = false;
+  private _soulWatcher: fs.FSWatcher | null = null;
+
   // TLCI: lazy-initialized dispatcher and plan cache (additive — does not affect submitTask)
   private _planCache?: PlanCache;
   private _tlciDispatcher?: TLCIDispatcher;
@@ -741,6 +750,11 @@ export class Orchestrator {
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
     }));
 
+    // PERF-03: warm the SOUL.md identity cache and start its watch here, so no
+    // task ever pays a synchronous read for it.
+    this._soulLoaded = false;
+    this._loadSoulIdentity();
+
     // Eagerly initialize TLCI so CostTracker is available immediately after boot()
     // (daemon.ts reads getTLCICostTracker() synchronously when constructing DashboardServer)
     await this._ensureTLCI();
@@ -902,6 +916,12 @@ export class Orchestrator {
       this._memoryExtractIntervalTimeout = null;
     }
 
+    // PERF-03: stop watching SOUL.md
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
     // Stop heartbeat and routines
     if (this._heartbeatSystem) {
       this._heartbeatSystem.stop();
@@ -919,6 +939,87 @@ export class Orchestrator {
     }
 
     this._booted = false;
+  }
+
+  /**
+   * PERF-03: Returns the cached SOUL.md identity text, reading it from disk only
+   * on the first call (or after a watch-triggered invalidation).
+   *
+   * Behaviour on a miss is identical to the old per-task read: a missing or
+   * unreadable SOUL.md yields the empty string, and the caller substitutes the
+   * default identity. The empty result is cached too, so an absent file does not
+   * re-stat on every task.
+   *
+   * @returns The trimmed SOUL.md contents, or '' when the file is absent/unreadable.
+   */
+  private _loadSoulIdentity(): string {
+    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
+
+    // A config reload can repoint soul_file; treat a changed path as a cache miss.
+    if (this._soulLoaded && this._soulPath === soulPath) {
+      return this._soulContent;
+    }
+
+    const previousPath = this._soulPath;
+    this._soulPath = soulPath;
+    this._soulContent = '';
+    try {
+      if (fs.existsSync(soulPath)) {
+        this._soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
+      }
+    } catch {
+      // SOUL.md missing or unreadable — use default identity
+    }
+    this._soulLoaded = true;
+
+    if (previousPath !== soulPath || !this._soulWatcher) {
+      this._watchSoulFile(soulPath);
+    }
+    return this._soulContent;
+  }
+
+  /**
+   * PERF-03: Watches SOUL.md so an edit invalidates the cache.
+   *
+   * Watches the *containing directory* rather than the file: fs.watch on a path
+   * that does not exist throws, and editors (plus every atomic write) replace the
+   * inode, which a file-level watch stops following. A directory watch survives
+   * create, replace and delete.
+   *
+   * Watches are unreliable on some filesystems (network mounts, some containers).
+   * Every failure path here degrades to "keep serving the cached value" rather
+   * than throwing — a stale identity string is far better than a broken boot.
+   */
+  private _watchSoulFile(soulPath: string): void {
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
+    const dir = path.dirname(soulPath);
+    const base = path.basename(soulPath);
+    try {
+      const watcher = fs.watch(dir, (_eventType, filename) => {
+        // filename is null on some platforms — invalidate conservatively.
+        if (!filename || path.basename(filename.toString()) === base) {
+          this._soulLoaded = false;
+        }
+      });
+      // Never hold the process open: one-shot `ask` mode must still exit.
+      watcher.unref?.();
+      // An error after the watch is established (dir removed, inotify exhausted)
+      // must not become an unhandled 'error' event.
+      watcher.on('error', (err) => {
+        log.debug({ err, soulPath }, 'SOUL.md watch failed — serving cached identity');
+        try { watcher.close(); } catch { /* already closed */ }
+        if (this._soulWatcher === watcher) this._soulWatcher = null;
+      });
+      this._soulWatcher = watcher;
+    } catch (err) {
+      // e.g. the directory does not exist, or the platform/filesystem refuses
+      // watches. Cached value stands until restart.
+      log.debug({ err, soulPath }, 'SOUL.md watch unavailable — identity cached until restart');
+    }
   }
 
   /**
@@ -956,16 +1057,9 @@ export class Orchestrator {
       log.warn({ err, jobId }, 'Memory context injection failed, continuing without memory');
     }
 
-    // Load SOUL.md for agent identity (fixes bug: file was created but never read)
-    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
-    let soulContent = '';
-    try {
-      if (fs.existsSync(soulPath)) {
-        soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
-      }
-    } catch {
-      // SOUL.md missing or unreadable — use default identity
-    }
+    // Load SOUL.md for agent identity (fixes bug: file was created but never read).
+    // PERF-03: served from cache — no sync filesystem I/O on the task path.
+    const soulContent = this._loadSoulIdentity();
 
     // Create per-task context compressor if compression is enabled
     let compressor: ContextCompressor | null = null;
