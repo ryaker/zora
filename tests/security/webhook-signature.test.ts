@@ -187,7 +187,9 @@ describe('INVARIANT-10 — fail-closed defaults', () => {
       body: JSON.stringify({ spoofed: true }),
     });
 
-    expect(res.status).toBe(501);
+    // 401, not a distinguishable "not configured" — see the indistinguishability
+    // test below. The invariant that matters is unchanged: nothing dispatched.
+    expect(res.status).toBe(401);
     expect(signal.deliveries, 'a platform with no validator dispatched anyway').toEqual([]);
   });
 
@@ -209,10 +211,12 @@ describe('INVARIANT-10 — fail-closed defaults', () => {
       body: '{}',
     });
 
-    expect(unknown.status).toBe(501);
+    // Review finding on #179: these used to be 501 and 401, so an
+    // unauthenticated caller could walk the validator registry one platform at
+    // a time and learn which are configured. Identical now — status and body.
+    expect(unknown.status).toBe(401);
     expect(badToken.status).toBe(401);
-    // Neither reveals an adapter; the authenticated 404 path is unreachable
-    // without the secret.
+    expect(await unknown.text()).toBe(await badToken.text());
   });
 
   it('answers 501 when an authenticated platform cannot take webhook delivery', async () => {

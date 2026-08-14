@@ -126,20 +126,28 @@ export class WebhookServer {
 
       // ── INVARIANT-10 gate. Nothing below this point runs for a request that
       // does not authenticate. Signature is checked before the adapter is even
-      // looked up, so an unauthenticated caller cannot probe which platforms
-      // are registered by reading the status code.
+      // looked up, and every rejection answers with the same status and body,
+      // so an unauthenticated caller learns neither which adapters are
+      // registered nor which platforms have a validator.
       const verdict = this._validators.validate(platform, ctx);
       if (!verdict.valid) {
+        // Every rejection here answers identically. Review finding on #179:
+        // returning 501 "not configured" for an unregistered platform and 401
+        // for a bad signature let an unauthenticated caller walk the validator
+        // registry one platform at a time — configuration disclosure, not a
+        // bypass, but it made the claim above false as written. The operator
+        // still needs the distinction, so it goes to the log, which is where
+        // operators look and attackers do not.
+        //
+        // Fail closed either way: a platform without a validator is refused,
+        // not waved through. That is the state Signal is in — signal-cli
+        // delivers over a local intake process and has no webhook mechanism at
+        // all, so there is no signature that could authenticate one.
         if ('unconfigured' in verdict) {
-          // Fail closed: a platform without a validator is refused, not waved
-          // through. This is the state Signal is in — signal-cli delivers over
-          // a local intake process and has no webhook mechanism at all, so
-          // there is no signature that could authenticate one.
           log.warn({ platform }, 'Webhook rejected: no signature validator registered for platform');
-          res.status(501).json({ error: 'Webhook signature validation not configured for this platform' });
-          return;
+        } else {
+          log.warn({ platform, reason: verdict.reason }, 'Webhook rejected: signature validation failed');
         }
-        log.warn({ platform, reason: verdict.reason }, 'Webhook rejected: signature validation failed');
         res.status(401).json({ error: 'Unauthenticated' });
         return;
       }

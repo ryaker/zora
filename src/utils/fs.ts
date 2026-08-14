@@ -23,12 +23,8 @@ import path from 'node:path';
  *
  * Stale locks: a holder that crashes leaves its lock behind, and a mailbox that
  * deadlocks forever because an agent died is worse than the race this fixes. A
- * lock older than `staleMs` is therefore stolen. That steal is best-effort and
- * not race-free — two waiters can both judge the same lock stale, and the
- * second's `rm` can remove a lock the first has just legitimately taken. It is
- * narrowed by re-checking the holder's identity immediately before removing it,
- * and it only happens at all once a lock is `staleMs` old, which is orders of
- * magnitude beyond how long any operation here holds it.
+ * lock older than `staleMs` is therefore stolen — see `stealStaleLock`, which
+ * serialises that removal so two waiters cannot both steal and both acquire.
  */
 export async function withFileLock<T>(
   targetPath: string,
@@ -65,12 +61,12 @@ export async function withFileLock<T>(
       if (observed !== null) {
         const age = await lockAge(lockPath);
         if (age !== null && age > staleMs) {
-          // Re-read immediately before removing: if the holder changed, the
-          // lock we judged stale is not the lock that is there now.
-          if ((await readLockHolder(lockPath)) === observed) {
-            await fs.promises.rm(lockPath, { force: true }).catch(() => { /* lost the race; retry */ });
-          }
-          continue;
+          await stealStaleLock(lockPath, observed, staleMs);
+          // Deliberately falls through to the deadline check and the poll
+          // below rather than retrying immediately. The steal is not
+          // guaranteed to have removed anything — another waiter may hold the
+          // recovery marker — and looping straight back would spin on the
+          // filesystem without ever consulting the deadline.
         }
       }
 
@@ -91,6 +87,72 @@ export async function withFileLock<T>(
     if ((await readLockHolder(lockPath)) === holderId) {
       await fs.promises.rm(lockPath, { force: true }).catch(() => { /* already gone */ });
     }
+  }
+}
+
+/**
+ * Removes a stale lock, with the decision to remove it serialised.
+ *
+ * ERR-22 follow-up: the first version of this was a check-then-delete —
+ * re-read the holder, and if unchanged, `rm`. Re-reading narrows the window
+ * but does not close it, because nothing stops a second waiter from deleting
+ * between the first waiter's delete and its acquire. With waiters A and B on
+ * one stale lock:
+ *
+ *   1. A and B both judge the lock stale and both re-read the same holder.
+ *   2. A removes it and wins `open(wx)` — A now holds a *fresh* lock.
+ *   3. B, still acting on its earlier read, removes A's lock and wins `wx` too.
+ *
+ * Both then run the critical section, which is exactly the lost update this
+ * lock exists to prevent — `Mailbox.send` does a read-append-write inside
+ * `fn()`, so a message disappears with neither side seeing an error. It needs a
+ * genuinely crashed holder and two waiters interleaving, which is narrow, but
+ * this is the crash-recovery path and a crash is precisely when waiters have
+ * piled up.
+ *
+ * A plain `rename` does not fix it either: rename is atomic, so only one racer
+ * moves the file, but nothing binds that rename to the *stale* file. Delay B
+ * past step 2 and its rename moves A's live lock instead.
+ *
+ * So the check and the delete are serialised behind a recovery marker created
+ * with `wx`, which is atomic. Only one waiter is ever inside, and it re-reads
+ * the holder *under that exclusion* — so a waiter arriving after step 2 sees
+ * A's id rather than the stale one and leaves the lock alone.
+ *
+ * The marker guards a handful of syscalls, so a waiter that dies holding it is
+ * far less likely than one dying inside a critical section. If it happens,
+ * recovery is blocked until the marker itself ages out, and blocked recovery
+ * means waiters time out loudly rather than double-acquire silently — the
+ * failure direction this whole gap is about.
+ */
+async function stealStaleLock(lockPath: string, observedHolder: string, staleMs: number): Promise<void> {
+  const recoveryPath = `${lockPath}.recover`;
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(recoveryPath, 'wx');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    // Someone else is recovering, or died while doing so. Clear an aged marker
+    // and let the caller loop; do not touch the lock itself from out here.
+    const age = await lockAge(recoveryPath);
+    if (age !== null && age > staleMs) {
+      await fs.promises.rm(recoveryPath, { force: true }).catch(() => { /* lost the race */ });
+    }
+    return;
+  }
+
+  try {
+    // Exclusive. Re-read under the marker, not before it: if the lock was
+    // stolen and re-acquired while we were getting here, the holder has
+    // changed and it is not ours to remove.
+    const current = await readLockHolder(lockPath);
+    const age = await lockAge(lockPath);
+    if (current === observedHolder && age !== null && age > staleMs) {
+      await fs.promises.rm(lockPath, { force: true }).catch(() => { /* already gone */ });
+    }
+  } finally {
+    await handle.close();
+    await fs.promises.rm(recoveryPath, { force: true }).catch(() => { /* already gone */ });
   }
 }
 
