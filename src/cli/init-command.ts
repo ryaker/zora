@@ -103,7 +103,10 @@ capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
 auth_method = "mac_session"
-model = "claude-sonnet-4-6"
+model = "claude-opus-5"
+# Reasoning effort: low | medium | high | xhigh | max.
+# The main intelligence/latency/cost dial — omit to use the model's default.
+# effort = "high"
 max_turns = 200`);
     rank++;
   }

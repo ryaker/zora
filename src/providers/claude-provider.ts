@@ -111,6 +111,15 @@ export type QueryFn = (params: {
   options?: Record<string, unknown>;
 }) => SDKQuery;
 
+/**
+ * SDK-04: default model for the Claude provider.
+ *
+ * Kept as a named constant so the CLI's generated config and the runtime
+ * fallback cannot drift apart — they did, and a new install got a different
+ * model depending on whether `model` was written into config.toml.
+ */
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
+
 // ─── Provider Options ───────────────────────────────────────────────
 
 export interface ClaudeProviderOptions {
@@ -289,7 +298,10 @@ export class ClaudeProvider implements LLMProvider {
     // Build SDK options
     const sdkOptions: Record<string, unknown> = {
       abortController,
-      model: this._config.model ?? 'claude-sonnet-4-6',
+      // SDK-04: default to the current Opus generation. 'claude-sonnet-4-6' is
+      // two generations back — it still works, but new installs were getting a
+      // previous-generation default.
+      model: this._config.model ?? DEFAULT_CLAUDE_MODEL,
       cwd: this._cwd,
       permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
@@ -312,6 +324,12 @@ export class ClaudeProvider implements LLMProvider {
     // named explicitly or the filter would drop them.
     if (this._allowedTools.length > 0) {
       sdkOptions['allowedTools'] = [...this._allowedTools, ...zoraToolNames];
+    }
+
+    // SDK-04: reasoning effort, when configured. Left unset otherwise so the
+    // SDK's own default applies rather than Zora pinning one.
+    if (this._config.effort) {
+      sdkOptions['effort'] = this._config.effort;
     }
 
     // Wire policy enforcement into the SDK
