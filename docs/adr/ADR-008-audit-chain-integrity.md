@@ -54,6 +54,8 @@ On first call to log(), AuditLogger reads the existing file to find the last ent
 
 AuditLogger.verifyChain() (src/security/audit-logger.ts) reads the entire log, recomputes each hash, and returns a ChainVerificationResult indicating whether the chain is valid and at which entry it broke (if any). Available via CLI: zora-agent audit --verify.
 
+The result is three-state (SEC-25): verified, broken, or unverifiable. "Unverifiable" covers an absent log, an empty log, a file whose entries carry no hash fields, and a logger with hash chaining disabled — cases the earlier two-state result reported as valid, which meant the CLI could print "verified" over a file that carried no tamper evidence at all. verify targets the -security sibling of security.audit_log, derived by securityAuditLogPath() so the writer and the reader resolve the same file.
+
 ### Filtering
 
 AuditLogger.readEntries(filter) (src/security/audit-logger.ts) reads and filters entries by jobId, eventType, startTime, and endTime. No indexing; linear scan is acceptable at single-user scale.

@@ -540,10 +540,18 @@ the codebase. They have been removed rather than corrected, because there is no
 corrected version — those events are logged through the ordinary logger, not the
 audit chain.
 
-**Known mismatch.** `zora-agent audit --verify` runs the hash-chain verifier
-against the *tool* log (file 1), not the chained security log (file 2) — see
-`src/cli/index.ts:536` versus `src/orchestrator/orchestrator.ts`. Until that is
-reconciled, verify the chain by reading `audit-security.jsonl` directly.
+**Which file `--verify` reads.** `zora-agent audit --verify` runs the hash-chain
+verifier against the *security event log* (file 2) — the only one of the two
+that has a chain. Both writer and reader derive that path through
+`securityAuditLogPath()` in `src/security/audit-logger.ts`, so they cannot drift
+apart. The same run also reports file 1, explicitly labelled as not
+chain-verifiable, so "verified" is never mistaken for a statement about the tool
+log. Use `--file <path>` to verify some other log instead.
+
+Before SEC-25 the verifier ran against file 1, which has no chain — and on an
+install where that file did not exist yet it printed
+`Audit chain verified: 0 entries, all valid.` If you relied on that output
+before v0.12.0, it told you nothing.
 
 ---
 
@@ -566,7 +574,15 @@ If malware (or a rogue AI) tries to hide its tracks by deleting log entries, you
 zora-agent audit --verify
 ```
 
-`verify` is a flag on the `audit` command, not a subcommand. On success it prints `Audit chain verified: N entries, all valid.`; on failure it logs the broken entry and exits non-zero. Note the file mismatch flagged in the previous section.
+`verify` is a flag on the `audit` command, not a subcommand. It has three outcomes, and only the first is a pass:
+
+| Outcome | Output | Exit code |
+|---|---|---|
+| Chain intact | `✓ Chain verified: N entries, all valid.` | 0 |
+| Chain broken | `✗ CHAIN BROKEN at entry N: …` | 1 |
+| Nothing to verify — no security log yet, an empty one, a file with no hash fields, or `security.audit_hash_chain = false` | `! Cannot verify: …` | 2 |
+
+Exit code 2 is not a pass. It means the question "has this log been tampered with?" cannot be answered for that file, which is a different thing from "no".
 
 ---
 

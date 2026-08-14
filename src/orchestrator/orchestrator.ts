@@ -44,7 +44,7 @@ import { toolFilterMatches, DESTRUCTIVE_TOOL_NAMES } from '../security/tool-name
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
-import { AuditLogger } from '../security/audit-logger.js';
+import { AuditLogger, securityAuditLogPath } from '../security/audit-logger.js';
 import { RateLimitHook } from '../hooks/built-in/rate-limit.js';
 import { SecretRedactHook } from '../hooks/built-in/secret-redact.js';
 import { SensitiveFileGuardHook } from '../hooks/built-in/sensitive-file-guard.js';
@@ -825,7 +825,9 @@ export class Orchestrator {
     this._toolHookRunner.register(new AuditLogHook(auditLogPath));
     // AuditLogger: structured hash-chained security event log (boot/shutdown/auth events).
     // audit_hash_chain and audit_single_writer config fields take effect here.
-    this._auditLogger = new AuditLogger(auditLogPath.replace('.jsonl', '-security.jsonl'), {
+    // SEC-25: the `-security` derivation lives in securityAuditLogPath() so the
+    // `audit --verify` reader resolves the same file this writer writes.
+    this._auditLogger = new AuditLogger(securityAuditLogPath(auditLogPath), {
       hashChain: sec.audit_hash_chain ?? true,
       singleWriter: sec.audit_single_writer ?? true,
     });

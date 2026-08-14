@@ -43,11 +43,51 @@ export interface AuditFilter {
   endTime?: string;
 }
 
+/**
+ * Outcome of a chain verification, as a three-state discriminant (SEC-25).
+ *
+ * `valid: boolean` alone cannot express the difference between "the chain checks
+ * out" and "there is no chain here to check", and collapsing the second into
+ * `true` is exactly the false assurance SEC-25 is about: a caller that only
+ * looks at `valid` would print "verified" for a file that carries no tamper
+ * evidence whatsoever.
+ *
+ *   - `verified`     — every entry links to the previous one and rehashes to its
+ *                      stored hash. This is the only status that means anything.
+ *   - `broken`       — the file IS chained and the chain does not hold. Tampering.
+ *   - `unverifiable` — nothing to verify: no file, an empty file, entries written
+ *                      without hash fields, or hash chaining disabled on this
+ *                      logger. Not a pass and not tamper evidence.
+ */
+export type ChainVerificationStatus = 'verified' | 'broken' | 'unverifiable';
+
 export interface ChainVerificationResult {
+  /** True only when status === 'verified'. Never true for an unverifiable file. */
   valid: boolean;
+  status: ChainVerificationStatus;
+  /** The file this result describes — callers report on more than one log. */
+  path: string;
   entries: number;
   brokenAt?: number;
   reason?: string;
+}
+
+/**
+ * Derive the path of the hash-chained security log from the configured
+ * `security.audit_log` path (SEC-25).
+ *
+ * Two different files live under `security.audit_log`:
+ *   1. the configured path itself — written by `AuditLogHook`, NOT hash-chained;
+ *   2. this derived `-security` sibling — written by `AuditLogger`, chained.
+ *
+ * The derivation used to be inlined as `.replace('.jsonl', '-security.jsonl')`
+ * in the orchestrator, which meant every other caller had to guess it. It lives
+ * here so the writer and the `audit --verify` reader cannot drift apart.
+ */
+export function securityAuditLogPath(auditLogPath: string): string {
+  const ext = path.extname(auditLogPath);
+  if (ext) return `${auditLogPath.slice(0, -ext.length)}-security${ext}`;
+  return `${auditLogPath}-security.jsonl`;
 }
 
 export class AuditLogger {
@@ -76,6 +116,16 @@ export class AuditLogger {
         'Writes will be serialized as if singleWriter=true.',
       );
     }
+  }
+
+  /** The file this logger reads and writes. */
+  get logPath(): string {
+    return this._logPath;
+  }
+
+  /** Whether this logger writes hash-chain fields. False means no tamper evidence. */
+  get hashChainEnabled(): boolean {
+    return this._hashChain;
   }
 
   /**
@@ -146,24 +196,50 @@ export class AuditLogger {
 
   /**
    * Verify the hash chain integrity of the entire audit log.
+   *
+   * SEC-25: this must never answer "valid" for a file whose integrity it cannot
+   * actually establish. Every early return that used to be `{ valid: true }` for
+   * an absent, empty or unchained file is now `unverifiable` — a distinct status
+   * carrying the reason, so the caller reports "cannot verify" rather than "OK".
    */
   async verifyChain(): Promise<ChainVerificationResult> {
+    const at = this._logPath;
+
     // When hash chaining is disabled, entries are written without hash fields.
-    // Attempting to verify the chain against those entries would always fail,
-    // so return a meaningful result instead of false positives.
+    // There is no chain to check — that is not the same as a chain that holds.
     if (!this._hashChain) {
-      return { valid: true, entries: 0, reason: 'Hash chaining disabled — chain verification not applicable' };
+      return {
+        valid: false,
+        status: 'unverifiable',
+        path: at,
+        entries: 0,
+        reason: 'Hash chaining is disabled for this log (security.audit_hash_chain = false) — entries carry no tamper evidence',
+      };
     }
 
     let content: string;
     try {
       content = await fs.readFile(this._logPath, 'utf-8');
     } catch {
-      return { valid: true, entries: 0 };
+      return {
+        valid: false,
+        status: 'unverifiable',
+        path: at,
+        entries: 0,
+        reason: 'No audit log at this path — nothing to verify',
+      };
     }
 
     const lines = content.trim().split('\n').filter(Boolean);
-    if (lines.length === 0) return { valid: true, entries: 0 };
+    if (lines.length === 0) {
+      return {
+        valid: false,
+        status: 'unverifiable',
+        path: at,
+        entries: 0,
+        reason: 'Audit log is empty — nothing to verify',
+      };
+    }
 
     let expectedPreviousHash = GENESIS_HASH;
 
@@ -174,9 +250,27 @@ export class AuditLogger {
       } catch {
         return {
           valid: false,
+          status: 'broken',
+          path: at,
           entries: lines.length,
           brokenAt: i,
           reason: `Entry ${i} has malformed JSON`,
+        };
+      }
+
+      // A file whose FIRST entry has no hash fields was never chained — the
+      // AuditLogHook tool log (`audit.jsonl`) is exactly this shape. Reporting
+      // it as "BROKEN" would cry tampering; the honest answer is that this file
+      // cannot be chain-verified at all. (A missing hash on a *later* entry, in
+      // a file that started out chained, falls through to the link checks below
+      // and is correctly reported as broken.)
+      if (i === 0 && (!entry.hash || !entry.previousHash)) {
+        return {
+          valid: false,
+          status: 'unverifiable',
+          path: at,
+          entries: lines.length,
+          reason: 'Entry 0 has no hash-chain fields — this file is not hash-chained, so tampering with it cannot be detected',
         };
       }
 
@@ -184,6 +278,8 @@ export class AuditLogger {
       if (entry.previousHash !== expectedPreviousHash) {
         return {
           valid: false,
+          status: 'broken',
+          path: at,
           entries: lines.length,
           brokenAt: i,
           reason: `Entry ${i} previousHash mismatch: expected ${expectedPreviousHash}, got ${entry.previousHash}`,
@@ -195,6 +291,8 @@ export class AuditLogger {
       if (entry.hash !== computedHash) {
         return {
           valid: false,
+          status: 'broken',
+          path: at,
           entries: lines.length,
           brokenAt: i,
           reason: `Entry ${i} hash mismatch: expected ${computedHash}, got ${entry.hash}`,
@@ -204,7 +302,7 @@ export class AuditLogger {
       expectedPreviousHash = entry.hash;
     }
 
-    return { valid: true, entries: lines.length };
+    return { valid: true, status: 'verified', path: at, entries: lines.length };
   }
 
   // ─── SDK Integration ──────────────────────────────────────────────
