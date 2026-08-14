@@ -29,7 +29,7 @@ Key decisions:
 
 2. **Atomic mailbox writes**: All inbox writes use writeAtomic() (src/utils/fs.ts) to prevent partial-write corruption in concurrent scenarios.
 
-3. **Message types**: MailboxMessageType union (src/teams/team-types.ts:29) defines: task, result, status, steer, handoff, shutdown, idle. This is a closed vocabulary enabling typed dispatch.
+3. **Message types**: MailboxMessageType union (src/teams/team-types.ts) defines: task, result, status, steer, handoff, shutdown, idle. This is a closed vocabulary enabling typed dispatch.
 
 4. **Coordinator pattern**: Every team has exactly one coordinatorId (must be a member agentId). The coordinator aggregates results and drives the next step. No leaderless consensus.
 

@@ -13,7 +13,7 @@ Source: https://www.w3.org/TR/prov-o/
 
 ## 1. Overview
 
-Zora AuditLogger (src/security/audit-logger.ts) produces a hash-chained JSONL audit log where every entry conforms to the AuditEntry interface (src/security/security-types.ts:28). This document maps AuditEntry fields to W3C PROV-O classes and properties to enable standard provenance queries and SIEM integrations.
+Zora AuditLogger (src/security/audit-logger.ts) produces a hash-chained JSONL audit log where every entry conforms to the AuditEntry interface (src/security/security-types.ts). This document maps AuditEntry fields to W3C PROV-O classes and properties to enable standard provenance queries and SIEM integrations.
 
 ---
 
@@ -28,7 +28,7 @@ PROV-O defines three core classes:
 
 ## 3. AuditEntry to PROV-O Mapping
 
-### 3.1 AuditEntry Interface (src/security/security-types.ts:28)
+### 3.1 AuditEntry Interface (src/security/security-types.ts)
 
     interface AuditEntry {
       entryId: string;        // unique entry identifier
@@ -90,7 +90,7 @@ PROV-O defines three core classes:
 
 The SHA-256 hash chain in AuditLogger implements PROV-O prov:wasDerivedFrom at the entry level:
 
-    GENESIS_HASH ("genesis") <-- established at src/security/audit-logger.ts:18
+    GENESIS_HASH ("genesis") <-- established at src/security/audit-logger.ts
        |
        | prov:wasDerivedFrom
        v
@@ -104,7 +104,7 @@ The SHA-256 hash chain in AuditLogger implements PROV-O prov:wasDerivedFrom at t
        v
     Entry[N].hash
 
-Chain integrity is verified via AuditLogger.verifyChain() (src/security/audit-logger.ts:113) which recomputes each hash and compares against the stored value.
+Chain integrity is verified via AuditLogger.verifyChain() (src/security/audit-logger.ts) which recomputes each hash and compares against the stored value.
 
 ---
 
@@ -158,5 +158,5 @@ For chain verification in SIEM, export the previousHash and hash fields and veri
 - W3C PROV-O: https://www.w3.org/TR/prov-o/
 - PROV-DM: https://www.w3.org/TR/prov-dm/
 - AuditLogger implementation: src/security/audit-logger.ts
-- AuditEntry type: src/security/security-types.ts:28
+- AuditEntry type: src/security/security-types.ts
 - ADR-008: Audit Chain Integrity Design (docs/adr/ADR-008-audit-chain-integrity.md)

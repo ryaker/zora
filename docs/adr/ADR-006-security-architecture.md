@@ -43,7 +43,7 @@ Shell command validation must tokenize and split chained commands (&&, ||, ;, |)
 
 ### D4: Capability Tokens for Sub-Agents
 
-Multi-agent teams spawn sub-agents that should operate with narrower permissions than the coordinator. WorkerCapabilityToken (src/security/capability-tokens.ts, src/types.ts:694) creates scoped, time-limited grants (30-minute default) derived from ZoraPolicy but potentially further restricted. Sub-agents receive tokens, not direct policy access.
+Multi-agent teams spawn sub-agents that should operate with narrower permissions than the coordinator. WorkerCapabilityToken (src/security/capability-tokens.ts, `WorkerCapabilityToken` in src/types.ts) creates scoped, time-limited grants (30-minute default) derived from ZoraPolicy but potentially further restricted. Sub-agents receive tokens, not direct policy access.
 
 ### D5: Integrity Guardian for Critical Files
 
@@ -89,3 +89,33 @@ This design addresses:
 - ASI02 (Unintended Side Effects): D3 PolicyEngine DryRunPolicy
 
 See full mapping in docs/architecture/ontologies/owasp-llm-alignment.md.
+
+## Update -- 2026-08 (SEC-20, SEC-21)
+
+D1 layer 3 ("Policy gate") is now two pre-execution layers rather than one, and
+the earlier wording understated where enforcement actually happens:
+
+- **PreToolUse hook** (src/hooks/sdk-hook-bridge.ts). The tool-hook chain --
+  SensitiveFileGuard, ShellSafety, AuditLog, RateLimit, SecretRedact,
+  IrreversibilityScorer -- runs from the SDK's `PreToolUse` hook. A deny there
+  short-circuits ahead of `canUseTool` and the tool is never invoked. It fails
+  closed: a hook that throws denies the call. Argument rewrites (SecretRedact)
+  now reach execution via `updatedInput` rather than only Zora's own log.
+  Previously this chain ran on stream *observation*, after execution, so
+  SensitiveFileGuardHook's "non-bypassable" claim was aspirational.
+- **canUseTool** (PolicyEngine + capability tokens + channel `CapabilitySet`),
+  which the SDK only invokes under `permissionMode: 'default'`. The provider
+  previously defaulted to `bypassPermissions`, which skipped it entirely on the
+  main task path. `bypassPermissions` has been removed from the codebase.
+
+D4's capability tokens are enforced inside that `canUseTool` closure
+(`Orchestrator._buildTokenAwareCanUseTool`), checking `path` and `command`
+arguments against the active token before delegating to the PolicyEngine.
+
+Background paths (heartbeat, memory extraction, context compression) run through
+`ExecutionLoop` with `permissionMode: 'default'`, a static `allowedTools` list,
+and the PolicyEngine `canUseTool`; they do not currently install the PreToolUse
+bridge.
+
+Regression guard: `tests/security/tool-enforcement.test.ts`. Background:
+`docs/reviews/2026-08-code-review.md`.
