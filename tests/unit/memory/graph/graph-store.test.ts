@@ -58,10 +58,10 @@ describe('GraphStore', () => {
     });
 
     it('reports the inbound direction from the other end', () => {
-      // Regression guard for an engine quirk: sparrowdb@0.1.21 ignores the
-      // arrow direction in a single-hop pattern, so `(a)<-[r:R]-(b)` silently
-      // returns the OUTBOUND neighbours. The adapter must instead anchor on the
-      // right-hand side. If it ever reverts, this test returns zero rows.
+      // 0.1.21 ignored arrow direction entirely — `(a)<-[r:R]-(b)` returned the
+      // OUTBOUND neighbours — and 0.1.24 fixed it. The adapter asks for inbound
+      // edges by anchoring on the right-hand side of a `->` arrow, which is
+      // correct under both. If it ever reverts, this test returns zero rows.
       store.relateEntities({ name: 'alice', kind: 'person' }, { name: 'zora', kind: 'project' }, 'maintains');
       const neighbours = store.neighbours('zora');
       expect(neighbours).toHaveLength(1);
@@ -170,10 +170,10 @@ describe('GraphStore', () => {
       expect(store.stats()).toMatchObject({ tasks: 1, entities: 2 });
     });
 
-    it('sorts tasks newest-first in JavaScript, because engine ORDER BY on numbers does not sort', () => {
-      // Verified against sparrowdb@0.1.21: `ORDER BY t.ts DESC` returns
-      // insertion order for numeric properties. If the adapter ever starts
-      // trusting the engine's ordering, this test fails.
+    it('sorts tasks newest-first in JavaScript rather than trusting engine ORDER BY', () => {
+      // The adapter sorts after a capped scan and applies LIMIT itself, because
+      // an engine-side LIMIT over an unsorted scan truncates the wrong rows.
+      // If it ever starts trusting the engine's ordering, this test fails.
       const entity = { name: 'zora', kind: 'project' } as const;
       store.recordTask({ jobId: 'old', summary: 'a', outcome: 'ok', ts: 100 }, [entity]);
       store.recordTask({ jobId: 'newest', summary: 'b', outcome: 'ok', ts: 900 }, [entity]);
@@ -341,9 +341,10 @@ describe('GraphStore', () => {
   });
 
   describeIfNative()('hostile input', () => {
-    // The real test of the escaper: hostile text is written and read back
-    // through the actual parser, and must neither corrupt the graph nor change
-    // its shape.
+    // There is no escaper any more (MEM-33): hostile text is bound as a
+    // parameter and never re-enters the parser. These drive real payloads
+    // through the real engine and assert they neither corrupt the graph nor
+    // change its shape.
     const hostileNames = [
       "'}) CREATE (evil:Entity {name:'pwned'}) MATCH (n:Entity {name:'",
       "it's a \"quoted\" name",
@@ -377,6 +378,40 @@ describe('GraphStore', () => {
 
       expect(store.stats().tasks).toBe(1);
       expect(store.tasksMentioning('zora')[0]?.summary).toBe(summary);
+    });
+
+    it('stores the original S0 payload inert, adding no property it did not ask for', () => {
+      // The finding that started this whole thread: on 0.1.21,
+      // `CREATE (:User {name: "<payload>"})` with `", role: "admin` closed the
+      // name value and added a `role` property. Parameter binding is what makes
+      // that impossible now, so this asserts the *outcome* rather than the
+      // shape of a query — the payload must survive verbatim as data.
+      const payload = '", role: "admin';
+      store.recordTask({ jobId: 'job-1', summary: payload, outcome: 'ok', ts: 1 }, [
+        { name: payload, kind: 'project' },
+      ]);
+
+      expect(store.stats()).toMatchObject({ tasks: 1, entities: 1 });
+      const tasks = store.tasksMentioning(payload);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]?.summary).toBe(payload);
+      // The task is reachable through an entity whose name is the raw payload,
+      // which is only true if the value was stored as text rather than parsed.
+      expect(tasks[0]?.jobId).toBe('job-1');
+    });
+
+    it('keeps a payload aimed at the surrogate key from hijacking a node identity', () => {
+      // Edge endpoints are pinned by an interpolated `zid`, so the payload to
+      // worry about is one shaped like a `zid` property map. It must land as a
+      // name, not as a selector: two distinct entities, no merged identity.
+      const decoy = "', zid: 'deadbeefdeadbeefdeadbeefdeadbeef";
+      store.relateEntities({ name: 'anchor', kind: 'concept' }, { name: decoy, kind: 'concept' }, 'rel');
+      store.relateEntities({ name: 'anchor', kind: 'concept' }, { name: 'plain', kind: 'concept' }, 'rel');
+
+      expect(store.stats().entities).toBe(3);
+      const names = store.neighbours('anchor', 50).map(n => n.name);
+      expect(names).toContain(decoy);
+      expect(names).toContain('plain');
     });
 
     it('truncates an absurdly long summary instead of building a giant query', () => {

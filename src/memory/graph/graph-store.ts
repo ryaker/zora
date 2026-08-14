@@ -1,75 +1,113 @@
 /**
- * GraphStore — typed adapter over the `sparrowdb` embedded graph (MEM-30).
+ * GraphStore — typed adapter over the `sparrowdb` embedded graph (MEM-30, MEM-33).
  *
  * This class exists to make SparrowDB's 0.1.x Cypher dialect a private detail.
- * Nothing above it should ever assemble a query string. The quirks it hides,
- * all verified against sparrowdb@0.1.21:
+ * Nothing above it should ever assemble a query string.
  *
- *   1. **No parameter binding, and injection is real.** Every value is
- *      interpolated, so every value goes through `src/memory/graph/cypher.ts`
- *      first. That module is the security boundary; see its header. This is not
- *      theoretical: interpolating `", role: "admin` into a `CREATE` property
- *      map has been reproduced adding an unintended `role` property, and
- *      `" OR n.name <> "` has been reproduced subverting a `WHERE` predicate.
- *      Statement chaining currently fails only because multi-clause statements
- *      are unimplemented — an accident of incompleteness, not a boundary.
- *      `$param` placeholders are worse than useless: they are **silently
- *      ignored**, so `MATCH (n:Person {name: $name})` returns *every* Person.
- *      Never emit `$`-prefixed placeholder syntax from this file.
- *   2. **No transactions.** `ReadTx.execute()` / `WriteTx.execute()` throw
- *      (upstream SPA-99 / SPA-100), so all access goes through
- *      `SparrowDB.execute()`, which auto-commits per statement. There is no
- *      multi-statement atomicity, so every write here is idempotent and safe to
- *      replay: a crash between two statements leaves a partial but valid graph.
- *   3. **One clause per statement.** `CREATE … CREATE …` is a parse error, and
- *      a second `MATCH` clause is a parse error. Edge creation must therefore
- *      use the comma form: `MATCH (a:X {…}), (b:Y {…}) CREATE (a)-[:R]->(b)`.
- *      `MATCH … WHERE … CREATE …` is *also* a parse error, so edge endpoints
+ * ## Values are bound, never interpolated (MEM-33)
+ *
+ * MEM-30 shipped against 0.1.21, which had no parameter binding at all: every
+ * value was textually interpolated and defended by a hand-rolled escaper.
+ * 0.1.24 added `executeWithParams(cypher, params)` *including* parameterized
+ * `CREATE`, so that escaper is deleted and every value now travels as a bound
+ * parameter. Verified against the published 0.1.24 tarball: the original
+ * exploit payload `", role: "admin` stored as a literal `name` with `role`
+ * null.
+ *
+ * Parameter keys are **bare names** — `{name: 'Alice'}`, never
+ * `{'$name': 'Alice'}`. A `$`-prefixed key raises
+ * `parameter $x was referenced in the query but not supplied`, so getting it
+ * wrong fails loudly, but it is still wrong.
+ *
+ * The quirks this adapter still hides, all verified against sparrowdb@0.1.24:
+ *
+ *   1. **Edge writes cannot bind their endpoints.** This is the sharp one.
+ *      `MATCH (a:L {k: $v}), (b:L2 {k: $w}) CREATE (a)-[:R]->(b)` under
+ *      `executeWithParams` **silently creates nothing** — no error, no edge —
+ *      and the `MERGE` form raises
+ *      `parameterized MATCH...MERGE relationship ... not yet supported`
+ *      (even with an empty params object, so it is the code path, not the
+ *      payload). Endpoints are therefore pinned by the `zid` surrogate key
+ *      from `identifiers.ts`, a digest we compute ourselves, so the statement
+ *      still contains no untrusted text. See `_link`.
+ *   2. **Labels cannot be bound.** `MATCH (n:$lbl)` is rejected with
+ *      `expected label/type name, got Param("lbl")`. Labels, relationship
+ *      types and property keys are validated against the ontology allowlist in
+ *      `identifiers.ts` instead.
+ *   3. **Every node in a chained pattern must carry a label.** An unlabeled
+ *      *middle* node silently returns `[]` when the chain spans multiple
+ *      labels over one relationship type — exactly the shape of `relatedTasks`
+ *      (`Task -[:MENTIONS]-> Entity <-[:MENTIONS]- Task`) — and an unlabeled
+ *      *head or tail* throws `not found`. The requirement is the label, not
+ *      the variable: `(:Entity)` is fine, `(m)` is not. Depth is not a
+ *      constraint; a fully-labeled 3-hop chain works. A silent `[]` in the
+ *      two-hop recall path would read as "no results" rather than as a bug,
+ *      so `tests/unit/memory/graph/emitted-patterns.test.ts` asserts every
+ *      pattern this file emits labels every node.
+ *   4. **Variable-length inbound traversal is unimplemented upstream**
+ *      (`<-[:R*1..3]-` → `not yet implemented`). Inbound traversal past one
+ *      hop must therefore be written as a fully-labeled fixed-hop chain, which
+ *      is what `relatedTasks` does.
+ *   5. **No transactions.** `ReadTx.execute()` / `WriteTx.execute()` throw
+ *      (upstream SPA-99 / SPA-100), so all access auto-commits per statement.
+ *      There is no multi-statement atomicity, so every write here is idempotent
+ *      and safe to replay: a crash between two statements leaves a partial but
+ *      valid graph.
+ *   6. **One clause per statement.** `CREATE … CREATE …` is a parse error, and
+ *      so is a second `MATCH`. Edge creation uses the comma form
+ *      `MATCH (a:X {…}), (b:Y {…}) CREATE (a)-[:R]->(b)`. `MATCH … WHERE …
+ *      CREATE …` is rejected with `expected RETURN clause`, so edge endpoints
  *      must be selected by inline property maps only.
- *   4. **`RETURN n` is unusable.** Returning a whole node yields a map keyed by
+ *   7. **`RETURN n` is unusable.** Returning a whole node yields a map keyed by
  *      hashed column names (`col_2369371622`), not the documented
  *      `{$type:'node', id}` ref. Every read here returns explicit properties.
- *   5. **`ORDER BY` on numeric properties does not sort.** Verified: five Task
- *      nodes with distinct `ts` came back in insertion order. All ordering is
- *      therefore done in JavaScript after a capped scan, and `LIMIT` is applied
- *      here rather than in the engine (an engine-side LIMIT over an unsorted
- *      scan truncates the wrong rows).
- *   6. **No indexes.** Property lookups are full scans; measured cost grows
- *      linearly with graph size (≈50 ms for a one-hop query at 2k tasks). This
- *      is why the store runs on a worker thread — see graph-memory-worker.ts.
- *   7. **Edges are append-only.** `MATCH (a)-[r:R]->(b) SET r.x = …` fails with
- *      "supports only single-node patterns", and there is no `DETACH DELETE` or
- *      `REMOVE`. Edge properties are therefore written once, at MERGE time, and
- *      never mutated. The ontology is designed so nothing here ever needs to:
- *      a superseded decision gets a new `SUPERSEDES` edge rather than an edited
- *      one. Node properties *can* be updated, but only through a single-node
+ *   8. **`ORDER BY` is not trusted.** All ordering is done in JavaScript after
+ *      a capped scan, and `LIMIT` is applied here rather than in the engine —
+ *      an engine-side LIMIT over an unsorted scan truncates the wrong rows.
+ *   9. **No indexes.** Property lookups are full scans; cost grows linearly
+ *      with graph size. This is why the store runs on a worker thread — see
+ *      graph-memory-worker.ts.
+ *  10. **Edge properties are write-once.** `MATCH (a)-[r:R]->(b) SET r.x = …`
+ *      fails with "supports only single-node patterns", and there is no
+ *      `REMOVE`. The ontology is designed so nothing here needs to mutate one:
+ *      a superseded decision gets a new `SUPERSEDES` edge rather than an
+ *      edited one. Node properties *can* be updated, through a single-node
  *      `MATCH … SET`, which is what every writer below uses.
- *   8. **Arrow direction is ignored in a single-hop pattern.** `(a)<-[r:R]-(b)`
- *      returns the same rows as `(a)-[r:R]->(b)`; the left variable is always
- *      the edge source. Inbound queries put the anchor on the right instead.
- *   9. **`DISTINCT` and untyped variable-length paths are unsupported.**
- *      Deduplication happens in JavaScript, and the supersession chain is
- *      walked one hop at a time rather than with `[*1..n]`.
- *  10. **`null` and array property values are rejected at CREATE.** Optional
+ *  11. **`MERGE` on an edge drops its properties; `CREATE` on an edge is not
+ *      idempotent.** Verified on 0.1.24 and unchanged from 0.1.21. So
+ *      property-less edges use `MERGE`, and property-carrying edges are
+ *      guarded by an existence check and then `CREATE`d.
+ *  12. **`null` and array property values are rejected at CREATE.** Optional
  *      fields are omitted rather than nulled, and only strings and numbers are
- *      ever written. Booleans are avoided entirely: they round-trip as 1/0 and
+ *      written. Booleans are avoided entirely: they round-trip as 1/0 and
  *      become indistinguishable from integers on read.
  *
  * Missing labels and relationship types are not errors: a pattern over a label
  * that has never been written returns zero rows.
+ *
+ * ## On-disk compatibility
+ *
+ * The `zid` surrogate property is new in MEM-33. A graph written by the MEM-30
+ * adapter has no `zid`, so its nodes are invisible to the new identity lookups
+ * and would be duplicated rather than updated. `open()` detects that and warns
+ * once; the tier is off by default and experimental, and the graph is derived
+ * data rebuilt from ordinary memory, so the remedy is to delete the database
+ * directory rather than to migrate it.
  */
 
 import {
-  escapeValue,
-  formatPropertyMap,
-  nodePattern,
-  validateIdentifier,
-  type PropertyValue,
-} from './cypher.js';
-import type { SparrowDatabase, SparrowModule } from './sparrow-loader.js';
+  GraphIdentifierError,
+  assertEdgeType,
+  assertNodeLabel,
+  assertPropertyKey,
+  assertSurrogateId,
+  surrogateId,
+} from './identifiers.js';
+import type { CypherParams, SparrowDatabase, SparrowModule } from './sparrow-loader.js';
 import { loadSparrow } from './sparrow-loader.js';
 import {
   isEntityKind,
+  NODE_LABELS,
   type DecisionRecord,
   type DecisionResult,
   type EntityKind,
@@ -79,6 +117,7 @@ import {
   type GraphStats,
   type GraphWrite,
   type NeighbourResult,
+  type NodeLabel,
   type TaskRecord,
   type TaskResult,
 } from './graph-types.js';
@@ -89,6 +128,9 @@ const log = createLogger('graph-store');
 /** Longest string we let into a node property. Summaries are LLM-generated. */
 const MAX_PROP_LENGTH = 2000;
 
+/** Hard ceiling on any `LIMIT` we emit, so the literal is always a small int. */
+const MAX_LIMIT = 10_000;
+
 export interface GraphStoreOptions {
   /** Filesystem path for the database directory. */
   path: string;
@@ -96,6 +138,14 @@ export interface GraphStoreOptions {
   maxRowsScanned?: number;
   /** Injectable module, for tests. Defaults to the lazily-loaded `sparrowdb`. */
   module?: SparrowModule;
+}
+
+/** The identity of a node: its label plus the single property that names it. */
+interface NodeIdentity {
+  label: NodeLabel;
+  key: string;
+  value: string;
+  zid: string;
 }
 
 /**
@@ -111,7 +161,7 @@ export class GraphStore {
 
   private constructor(db: SparrowDatabase, maxRows: number) {
     this._db = db;
-    this._maxRows = maxRows;
+    this._maxRows = clampLimit(maxRows);
   }
 
   /**
@@ -131,7 +181,22 @@ export class GraphStore {
 
     try {
       const db = mod.SparrowDB.open(options.path);
-      return new GraphStore(db, options.maxRowsScanned ?? 500);
+      // Parameter binding is not optional for this adapter — without it every
+      // value would have to be interpolated, and the escaper that used to make
+      // that safe is gone. An older `sparrowdb` is therefore an unavailable
+      // one, reported through the same inert path as a missing binary rather
+      // than by failing on the first write.
+      if (typeof db.executeWithParams !== 'function') {
+        log.warn(
+          { path: options.path },
+          'Installed sparrowdb has no executeWithParams (needs >= 0.1.24) — ' +
+            'graph memory tier is inert',
+        );
+        return null;
+      }
+      const store = new GraphStore(db, options.maxRowsScanned ?? 500);
+      store._warnIfPreSurrogate(options.path);
+      return store;
     } catch (err) {
       log.warn(
         { err, path: options.path },
@@ -151,7 +216,7 @@ export class GraphStore {
     const name = clamp(entity.name);
     if (!name) return;
     const kind: EntityKind = isEntityKind(entity.kind) ? entity.kind : 'concept';
-    this._upsertNode('Entity', { name }, { kind });
+    this._upsertNode(identity('Entity', 'name', name), { kind });
   }
 
   /**
@@ -166,21 +231,18 @@ export class GraphStore {
     const jobId = clamp(task.jobId, 200);
     if (!jobId) return;
 
-    this._upsertNode(
-      'Task',
-      { jobId },
-      {
-        summary: clamp(task.summary),
-        outcome: clamp(task.outcome, 100),
-        ts: safeTs(task.ts),
-      },
-    );
+    const taskId = identity('Task', 'jobId', jobId);
+    this._upsertNode(taskId, {
+      summary: clamp(task.summary),
+      outcome: clamp(task.outcome, 100),
+      ts: safeTs(task.ts),
+    });
 
     for (const entity of mentions) {
       const name = clamp(entity.name);
       if (!name) continue;
       this.upsertEntity(entity);
-      this._link('Task', { jobId }, 'MENTIONS', 'Entity', { name });
+      this._link(taskId, 'MENTIONS', identity('Entity', 'name', name));
     }
   }
 
@@ -194,21 +256,23 @@ export class GraphStore {
     const summary = clamp(decision.summary);
     if (!summary) return;
 
-    this._upsertNode(
-      'Decision',
-      { summary },
-      { rationale: clamp(decision.rationale), ts: safeTs(decision.ts) },
-    );
+    const decisionId = identity('Decision', 'summary', summary);
+    this._upsertNode(decisionId, {
+      rationale: clamp(decision.rationale),
+      ts: safeTs(decision.ts),
+    });
 
     if (jobId) {
-      this._link('Task', { jobId: clamp(jobId, 200) }, 'PRODUCED', 'Decision', { summary });
+      const taskJobId = clamp(jobId, 200);
+      if (taskJobId) this._link(identity('Task', 'jobId', taskJobId), 'PRODUCED', decisionId);
     }
     if (supersedes) {
       const older = clamp(supersedes);
       // Only link to a decision that already exists; creating a placeholder
       // would pollute the chain with an empty node.
-      if (older && this._exists('Decision', { summary: older })) {
-        this._link('Decision', { summary }, 'SUPERSEDES', 'Decision', { summary: older });
+      if (older) {
+        const olderId = identity('Decision', 'summary', older);
+        if (this._exists(olderId)) this._link(decisionId, 'SUPERSEDES', olderId);
       }
     }
   }
@@ -224,18 +288,16 @@ export class GraphStore {
     const signature = clamp(failure.signature, 500);
     if (!signature) return;
 
-    this._upsertNode(
-      'Failure',
-      { signature },
-      {
-        tool: clamp(failure.tool, 100),
-        hint: clamp(failure.hint),
-        ts: safeTs(failure.ts),
-      },
-    );
+    const failureId = identity('Failure', 'signature', signature);
+    this._upsertNode(failureId, {
+      tool: clamp(failure.tool, 100),
+      hint: clamp(failure.hint),
+      ts: safeTs(failure.ts),
+    });
 
     if (jobId) {
-      this._link('Task', { jobId: clamp(jobId, 200) }, 'HIT', 'Failure', { signature });
+      const taskJobId = clamp(jobId, 200);
+      if (taskJobId) this._link(identity('Task', 'jobId', taskJobId), 'HIT', failureId);
     }
   }
 
@@ -248,13 +310,16 @@ export class GraphStore {
     this.upsertEntity(from);
     this.upsertEntity(to);
     // The edge property is `relKind`, not `kind`, deliberately. Verified
-    // against sparrowdb@0.1.21: when an edge property and a node property share
-    // a name, projecting both in one RETURN resolves the edge's value to the
+    // against sparrowdb: when an edge property and a node property share a
+    // name, projecting both in one RETURN resolves the edge's value to the
     // node's — `RETURN b.kind, r.kind` yields the node's kind twice. Property
     // names must be unique across the whole ontology, not just per label.
-    this._link('Entity', { name: fromName }, 'RELATES_TO', 'Entity', { name: toName }, {
-      relKind: clamp(kind, 100),
-    });
+    this._link(
+      identity('Entity', 'name', fromName),
+      'RELATES_TO',
+      identity('Entity', 'name', toName),
+      { relKind: clamp(kind, 100) },
+    );
   }
 
   /** Apply a batch of writes. Individual failures are logged, not thrown. */
@@ -289,28 +354,28 @@ export class GraphStore {
   /**
    * Entities directly connected to `name` via `RELATES_TO`, in both directions.
    *
-   * Two queries, one per direction, and *both use a left-to-right arrow*.
-   * Verified against sparrowdb@0.1.21: the arrow direction written in a
-   * single-hop pattern is ignored — `(a)<-[r:R]-(b)` returns exactly the same
-   * rows as `(a)-[r:R]->(b)`, because the planner always binds the left
-   * variable to the edge source and the right variable to the target. The only
-   * way to ask for inbound edges is to move the anchor to the right-hand side.
-   *
-   * The undirected form `(a)-[r:R]-(b)` does traverse both ways, but drops the
-   * edge properties on the reverse leg (`r.kind` comes back null), so it is not
-   * usable here.
+   * Two queries, one per direction, and *both use a left-to-right arrow*. That
+   * is not a workaround: 0.1.24 honours arrow direction correctly (0.1.21 did
+   * not), and anchoring on the right-hand side with a `->` arrow is the plain
+   * way to ask for inbound edges. It also sidesteps the undirected form
+   * `(a)-[r:R]-(b)`, which drops the edge properties on the reverse leg.
    */
   neighbours(name: string, limit = 20): NeighbourResult[] {
     const anchor = clamp(name);
     if (!anchor) return [];
 
+    // Both nodes labeled in both patterns — see the chained-pattern rule in
+    // the class header. These are single-hop, but the rule is enforced
+    // uniformly so no pattern here is ever one edit away from a silent [].
     const out = this._query(
-      `MATCH ${nodePattern('a', 'Entity', { name: anchor })}-[r:RELATES_TO]->${nodePattern('b', 'Entity')} ` +
+      `MATCH (a:Entity {name: $name})-[r:RELATES_TO]->(b:Entity) ` +
         `RETURN b.name, b.kind, r.relKind LIMIT ${this._maxRows}`,
+      { name: anchor },
     );
     const inbound = this._query(
-      `MATCH ${nodePattern('b', 'Entity')}-[r:RELATES_TO]->${nodePattern('a', 'Entity', { name: anchor })} ` +
+      `MATCH (b:Entity)-[r:RELATES_TO]->(a:Entity {name: $name}) ` +
         `RETURN b.name, b.kind, r.relKind LIMIT ${this._maxRows}`,
+      { name: anchor },
     );
 
     const seen = new Set<string>();
@@ -343,8 +408,9 @@ export class GraphStore {
     if (!anchor) return [];
 
     const rows = this._query(
-      `MATCH ${nodePattern('t', 'Task')}-[:MENTIONS]->${nodePattern('e', 'Entity', { name: anchor })} ` +
+      `MATCH (t:Task)-[:MENTIONS]->(e:Entity {name: $name}) ` +
         `RETURN t.jobId, t.summary, t.outcome, t.ts LIMIT ${this._maxRows}`,
+      { name: anchor },
     );
     return sortByTsDesc(dedupeTasks(rows)).slice(0, limit);
   }
@@ -356,19 +422,31 @@ export class GraphStore {
    * finds tasks whose *words* overlap; this finds tasks that touch the same
    * *things*, even when the summaries share no vocabulary at all.
    *
+   * Two engine constraints shape how this is written, and both are load-bearing:
+   *
+   *   - The second leg is **inbound** ("other tasks pointing at the same
+   *     entity"). Variable-length inbound (`<-[:MENTIONS*1..2]-`) is
+   *     unimplemented upstream, so this must be a fixed-hop chain. It is.
+   *   - Every node in the chain is labeled — `(t:Task)`, `(e:Entity)`,
+   *     `(o:Task)`. This chain is precisely the dangerous shape: multiple
+   *     labels over a single relationship type. Dropping the label from `e`
+   *     makes the engine return `[]` with no error, which would surface to the
+   *     user as "no related tasks" rather than as a bug. Dropping it from `o`
+   *     throws `not found`.
+   *
    * The self-match (`o` = the anchor task) is filtered in JavaScript rather
    * than with `WHERE o.jobId <> t.jobId`, because the anchor is already pinned
-   * by an inline property map and a literal comparison is cheaper than making
-   * the engine evaluate a variable-to-variable predicate over the scan.
+   * by a bound parameter and a variable-to-variable predicate would make the
+   * engine evaluate it over the whole scan.
    */
   relatedTasks(jobId: string, limit = 10): TaskResult[] {
     const anchor = clamp(jobId, 200);
     if (!anchor) return [];
 
     const rows = this._query(
-      `MATCH ${nodePattern('t', 'Task', { jobId: anchor })}-[:MENTIONS]->${nodePattern('e', 'Entity')}` +
-        `<-[:MENTIONS]-${nodePattern('o', 'Task')} ` +
+      `MATCH (t:Task {jobId: $jobId})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(o:Task) ` +
         `RETURN o.jobId, o.summary, o.outcome, o.ts, e.name LIMIT ${this._maxRows}`,
+      { jobId: anchor },
     );
 
     const byJob = new Map<string, TaskResult>();
@@ -412,7 +490,8 @@ export class GraphStore {
     if (!anchor) return [];
 
     const anchorRows = this._query(
-      `MATCH ${nodePattern('d', 'Decision', { summary: anchor })} RETURN d.summary, d.rationale, d.ts LIMIT 1`,
+      `MATCH (d:Decision {summary: $summary}) RETURN d.summary, d.rationale, d.ts LIMIT 1`,
+      { summary: anchor },
     );
     const first = anchorRows[0];
     if (!first) return [];
@@ -433,8 +512,9 @@ export class GraphStore {
     let current = chain[0]!.summary;
     for (let depth = 1; depth < limit; depth++) {
       const rows = this._query(
-        `MATCH ${nodePattern('a', 'Decision', { summary: current })}-[:SUPERSEDES]->${nodePattern('b', 'Decision')} ` +
+        `MATCH (a:Decision {summary: $summary})-[:SUPERSEDES]->(b:Decision) ` +
           `RETURN b.summary, b.rationale, b.ts LIMIT 1`,
+        { summary: current },
       );
       const row = rows[0];
       if (!row) break;
@@ -453,8 +533,9 @@ export class GraphStore {
     if (!anchor) return [];
 
     const rows = this._query(
-      `MATCH ${nodePattern('f', 'Failure', { tool: anchor })} ` +
+      `MATCH (f:Failure {tool: $tool}) ` +
         `RETURN f.tool, f.signature, f.hint, f.ts LIMIT ${this._maxRows}`,
+      { tool: anchor },
     );
     return rows
       .map(row => ({
@@ -473,10 +554,8 @@ export class GraphStore {
    *
    * Worth watching: there is no retention policy yet, and because SparrowDB has
    * no indexes every query is a full scan, so read latency grows linearly with
-   * these numbers (~50 ms for a one-hop query at 2k Task nodes). A pruning pass
-   * — drop Tasks older than N days and the Entities left with no edges — is the
-   * obvious next piece of work, but it needs node deletion, which SparrowDB
-   * currently only supports for single-node patterns with no attached edges.
+   * these numbers. A pruning pass — drop Tasks older than N days and the
+   * Entities left with no edges — is the obvious next piece of work.
    */
   stats(): GraphStats {
     return {
@@ -489,7 +568,7 @@ export class GraphStore {
 
   // ── Maintenance ───────────────────────────────────────────────────
 
-  /** Flush the WAL and compact. Measured at ~90 ms on a 2k-node graph. */
+  /** Flush the WAL and compact. */
   checkpoint(): void {
     try {
       this._db.checkpoint();
@@ -513,47 +592,66 @@ export class GraphStore {
    * Create a node with all its properties, or update the properties of the one
    * that already exists.
    *
-   * `identity` is the subset of properties that defines the node's identity
-   * (`{jobId}` for a Task, `{name}` for an Entity); `attributes` is everything
-   * else. Splitting them matters because `MERGE` matches on the *whole*
-   * property map, so `MERGE (:Entity {name, kind})` would fork a second node
-   * the moment an entity is reclassified. Identity must be matched alone.
+   * The node is found by its `zid` surrogate key rather than by its identity
+   * property, so the lookup, the update and any later edge write all agree on
+   * one selector. Identity and attributes stay separate because a `MERGE` over
+   * the *whole* property map would fork a second node the moment an entity is
+   * reclassified; matching identity alone is what makes the upsert an upsert.
    *
    * Doing an existence check first — rather than always MERGE-then-SET — makes
    * the common path (a node seen for the first time) two statements instead of
    * one per property. Writes dominate this workload and each statement is a
    * full scan, so that is the difference between 2 and 5 scans per task.
    */
-  private _upsertNode(
-    label: string,
-    identity: Record<string, string>,
-    attributes: Record<string, PropertyValue>,
-  ): void {
-    if (this._exists(label, identity)) {
+  private _upsertNode(node: NodeIdentity, attributes: Record<string, string | number>): void {
+    if (this._exists(node)) {
       // Update in place. Each SET is its own statement: SparrowDB allows only
       // one clause per statement, and only single-node MATCH … SET patterns.
       for (const [key, value] of Object.entries(attributes)) {
         this._exec(
-          `MATCH ${nodePattern('n', label, identity)} ` +
-            `SET n.${validateIdentifier(key, 'property key')} = ${escapeValue(value, MAX_PROP_LENGTH)}`,
+          `MATCH (n:${node.label} {zid: $zid}) SET n.${assertPropertyKey(key)} = $value`,
+          { zid: node.zid, value },
         );
       }
       return;
     }
-    this._exec(`CREATE ${nodePattern('n', label, { ...identity, ...attributes })}`);
+
+    const keys = Object.keys(attributes).map(k => assertPropertyKey(k));
+    // An attribute sharing the identity key (or `zid`) would emit the key twice
+    // in one property map and let a mutable attribute overwrite the node's
+    // identity. No caller does this today; the guard is here so none can start.
+    for (const key of keys) {
+      if (key === node.key || key === 'zid') {
+        throw new GraphIdentifierError(
+          `Attribute ${JSON.stringify(key)} collides with the identity of a ${node.label} node`,
+        );
+      }
+    }
+    const map = ['zid: $zid', `${node.key}: $identity`, ...keys.map(k => `${k}: $${k}`)].join(', ');
+    this._exec(`CREATE (n:${node.label} {${map}})`, {
+      zid: node.zid,
+      identity: node.value,
+      ...attributes,
+    });
   }
 
   /**
-   * Create an edge between two nodes selected by inline property maps.
+   * Create an edge between two nodes.
    *
-   * Uses the comma-separated MATCH form because SparrowDB rejects both a second
-   * `MATCH` clause and a `WHERE` before `CREATE`. If either endpoint is missing
-   * the statement is a silent no-op, which is the behaviour we want: the edge
-   * simply is not created.
+   * Endpoints are pinned by `zid`, interpolated as a literal, because
+   * parameterized edge writes do not work: the `CREATE` form silently creates
+   * nothing and the `MERGE` form throws (see quirk 1 in the class header).
+   * `assertSurrogateId` is what makes that interpolation safe — a `zid` is 32
+   * hex characters generated by `surrogateId()`, so the statement carries no
+   * untrusted text even though it is assembled by hand. Edge *properties* are
+   * still bound, since `CREATE` accepts parameters for them.
+   *
+   * If either endpoint is missing the statement is a silent no-op, which is the
+   * behaviour we want: the edge simply is not created.
    *
    * Choosing between MERGE and CREATE is not a style question here — the two
    * verbs have different, individually broken behaviours, verified against
-   * sparrowdb@0.1.21:
+   * sparrowdb 0.1.24:
    *
    *   - `MERGE (a)-[:R {p: 'v'}]->(b)` is idempotent but **silently discards
    *     the edge properties**: `r.p` reads back as null.
@@ -568,64 +666,89 @@ export class GraphStore {
    * the graph worker is the process's only writer.
    */
   private _link(
-    fromLabel: string,
-    fromProps: Record<string, string>,
+    from: NodeIdentity,
     edgeType: string,
-    toLabel: string,
-    toProps: Record<string, string>,
+    to: NodeIdentity,
     edgeProps: Record<string, string> = {},
   ): void {
-    const type = validateIdentifier(edgeType, 'relationship type');
-    const from = nodePattern('a', fromLabel, fromProps);
-    const to = nodePattern('b', toLabel, toProps);
-    const props = formatPropertyMap(edgeProps);
+    const type = assertEdgeType(edgeType);
+    const match =
+      `MATCH (a:${from.label} {zid: '${assertSurrogateId(from.zid)}'}), ` +
+      `(b:${to.label} {zid: '${assertSurrogateId(to.zid)}'})`;
 
-    if (props === '') {
-      this._exec(`MATCH ${from}, ${to} MERGE (a)-[:${type}]->(b)`);
+    const keys = Object.entries(edgeProps).filter(([, v]) => v !== '');
+    if (keys.length === 0) {
+      // No parameters at all, and nothing untrusted in the statement, so the
+      // unparameterized path is the correct one here rather than a fallback:
+      // `executeWithParams` rejects a MERGE-relationship even with `{}`.
+      this._exec(`${match} MERGE (a)-[:${type}]->(b)`);
       return;
     }
 
-    if (this._edgeExists(fromLabel, fromProps, type, toLabel, toProps)) return;
-    this._exec(`MATCH ${from}, ${to} CREATE (a)-[:${type}${props}]->(b)`);
+    if (this._edgeExists(from, type, to)) return;
+    const map = keys.map(([k]) => `${assertPropertyKey(k)}: $${k}`).join(', ');
+    this._exec(`${match} CREATE (a)-[:${type} {${map}}]->(b)`, Object.fromEntries(keys));
   }
 
   /** Whether an edge of `type` already joins the two pinned endpoints. */
-  private _edgeExists(
-    fromLabel: string,
-    fromProps: Record<string, string>,
-    type: string,
-    toLabel: string,
-    toProps: Record<string, string>,
-  ): boolean {
-    // Project a property we know exists, since we just matched on it. There is
-    // no universal "return the edge" projection: `RETURN r` yields hashed
-    // column ids rather than the documented EdgeRef.
-    const projected = Object.keys(toProps)[0] ?? Object.keys(fromProps)[0];
-    if (!projected) return false;
-    const variable = Object.keys(toProps)[0] ? 'b' : 'a';
-
+  private _edgeExists(from: NodeIdentity, type: string, to: NodeIdentity): boolean {
+    // Both nodes labeled, per the chained-pattern rule. `zid` is projected
+    // because it is guaranteed present on any node this adapter wrote — there
+    // is no universal "return the edge" projection, since `RETURN r` yields
+    // hashed column ids rather than the documented EdgeRef.
     const rows = this._query(
-      `MATCH ${nodePattern('a', fromLabel, fromProps)}-[r:${type}]->${nodePattern('b', toLabel, toProps)} ` +
-        `RETURN ${variable}.${validateIdentifier(projected, 'property key')} LIMIT 1`,
+      `MATCH (a:${from.label} {zid: $fromZid})-[r:${assertEdgeType(type)}]->` +
+        `(b:${to.label} {zid: $toZid}) RETURN b.zid LIMIT 1`,
+      { fromZid: from.zid, toZid: to.zid },
     );
     return rows.length > 0;
   }
 
-  private _exists(label: string, props: Record<string, string>): boolean {
-    const rows = this._query(
-      `MATCH ${nodePattern('n', label, props)} RETURN count(n) AS c`,
-    );
-    return num(rows[0]?.['c']) !== null && (num(rows[0]?.['c']) ?? 0) > 0;
+  private _exists(node: NodeIdentity): boolean {
+    const rows = this._query(`MATCH (n:${node.label} {zid: $zid}) RETURN count(n) AS c`, {
+      zid: node.zid,
+    });
+    return (num(rows[0]?.['c']) ?? 0) > 0;
   }
 
-  private _count(label: string): number {
-    const rows = this._query(`MATCH ${nodePattern('n', label)} RETURN count(n) AS c`);
+  private _count(label: NodeLabel): number {
+    // No values involved, so no parameters: the only variable text is a label
+    // from the ontology allowlist.
+    const rows = this._query(`MATCH (n:${assertNodeLabel(label)}) RETURN count(n) AS c`);
     return num(rows[0]?.['c']) ?? 0;
   }
 
-  /** Execute a statement, discarding the result. Throws on parse errors. */
-  private _exec(cypher: string): void {
-    this._db.execute(cypher);
+  /**
+   * Warn once if this database predates the `zid` surrogate key (MEM-33).
+   *
+   * One `LIMIT 1` probe per label at open time, rather than a check on every
+   * write. A legacy node is not corrupt, but it is unreachable by the new
+   * identity lookups, so writes would duplicate it rather than update it.
+   */
+  private _warnIfPreSurrogate(path: string): void {
+    for (const label of NODE_LABELS) {
+      const rows = this._query(`MATCH (n:${label}) RETURN n.zid LIMIT 1`);
+      const first = rows[0];
+      if (first && str(first['n.zid']) === null) {
+        log.warn(
+          { path, label },
+          'Graph database predates MEM-33 and has no surrogate keys — existing nodes will be ' +
+            'duplicated rather than updated. Delete the database directory to rebuild it.',
+        );
+        return;
+      }
+    }
+  }
+
+  /**
+   * Execute a statement, discarding the result. Throws on parse errors.
+   *
+   * Routes to `executeWithParams` whenever there are parameters to bind, and to
+   * plain `execute` only for statements that contain no values at all.
+   */
+  private _exec(cypher: string, params?: CypherParams): void {
+    if (params && Object.keys(params).length > 0) this._db.executeWithParams(cypher, params);
+    else this._db.execute(cypher);
   }
 
   /**
@@ -634,14 +757,28 @@ export class GraphStore {
    * Read failures degrade to an empty result rather than propagating: a graph
    * that cannot answer is strictly better than a graph that breaks the caller.
    */
-  private _query(cypher: string): Array<Record<string, unknown>> {
+  private _query(cypher: string, params?: CypherParams): Array<Record<string, unknown>> {
     try {
-      return this._db.execute(cypher).rows;
+      const result =
+        params && Object.keys(params).length > 0
+          ? this._db.executeWithParams(cypher, params)
+          : this._db.execute(cypher);
+      return result.rows;
     } catch (err) {
       log.debug({ err, cypher: cypher.slice(0, 200) }, 'Graph query failed; returning no rows');
       return [];
     }
   }
+}
+
+/** Build a node identity, validating the label and key against the ontology. */
+function identity(label: NodeLabel, key: string, value: string): NodeIdentity {
+  return {
+    label: assertNodeLabel(label),
+    key: assertPropertyKey(key),
+    value,
+    zid: surrogateId(label, key, value),
+  };
 }
 
 // ── Value coercion ──────────────────────────────────────────────────
@@ -665,9 +802,21 @@ function clamp(value: unknown, max = MAX_PROP_LENGTH): string {
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
 }
 
-/** Coerce a timestamp to a safe integer literal, defaulting to now. */
+/** Coerce a timestamp to a safe integer, defaulting to now. */
 function safeTs(ts: unknown): number {
   return typeof ts === 'number' && Number.isFinite(ts) ? Math.trunc(ts) : Date.now();
+}
+
+/**
+ * Coerce a row limit to a small positive integer.
+ *
+ * `LIMIT` cannot be a bound parameter, so this number is interpolated. It comes
+ * from our own config rather than from user input, but clamping it here means
+ * the interpolated text is provably a short decimal integer regardless.
+ */
+function clampLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 500;
+  return Math.max(1, Math.min(MAX_LIMIT, Math.trunc(value)));
 }
 
 function dedupeTasks(rows: Array<Record<string, unknown>>): TaskResult[] {

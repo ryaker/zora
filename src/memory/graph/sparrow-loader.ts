@@ -17,9 +17,33 @@ import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('graph-memory');
 
+/** A value that may be bound to a Cypher parameter. */
+export type CypherValue = string | number;
+
+/**
+ * Bound parameters for {@link SparrowDatabase.executeWithParams}.
+ *
+ * Keys are **bare names**: `{name: 'Alice'}` binds `$name`. A `$`-prefixed key
+ * is an error (`parameter $name was referenced in the query but not supplied`),
+ * so the mistake is loud rather than silent — but it is still a mistake.
+ */
+export type CypherParams = Record<string, CypherValue>;
+
+/** A single result set. */
+export interface SparrowResult {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+}
+
 /** The subset of the `sparrowdb` surface the graph tier uses. */
 export interface SparrowDatabase {
-  execute(cypher: string): { columns: string[]; rows: Array<Record<string, unknown>> };
+  execute(cypher: string): SparrowResult;
+  /**
+   * Execute with bound parameters (sparrowdb >= 0.1.23; parameterized `CREATE`
+   * since 0.1.24). Values are bound at the plan level and never re-enter the
+   * parser, which is what lets the adapter carry no escaper.
+   */
+  executeWithParams(cypher: string, params: CypherParams): SparrowResult;
   checkpoint(): void;
   optimize(): void;
 }
