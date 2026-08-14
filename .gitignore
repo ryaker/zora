@@ -73,6 +73,15 @@ state/
 /playwright-report/
 .worktrees/
 
+# Test side-effects dropped in the repo root.
+# tests/integration/orchestrator-e2e.test.ts configures `audit_log: 'audit.jsonl'`
+# as a relative path, so the AuditLogger writes both the main and the -security
+# log into the working directory. Ignored here; the durable fix is to point that
+# fixture at a temp dir.
+/audit.jsonl
+/audit-security.jsonl
+/*.jsonl
+
 .claude/statusline.sh
 
 # Workspace-specific files — not part of Zora repo

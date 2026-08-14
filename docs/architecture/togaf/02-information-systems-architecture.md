@@ -4,7 +4,15 @@
 **Document ID:** TOGAF-ISA-001  
 **Version:** 1.0  
 **Date:** 2026-02-25  
-**Status:** Approved  
+**Status:** Approved (scope note below)  
+
+> **Scope note (2026-08).** This catalog was compiled at v0.6-era scope and has
+> not been extended since. It does not cover the subsystems added afterwards:
+> `src/channels/**` (ChannelManager pipeline, `CapabilitySet`, `StructuredIntent`,
+> Signal and Telegram adapters), `src/skills/**`, `src/teams/**`,
+> `src/routines/**`, `src/steering/**`, TLCI dispatch, or the SDK hook bridge
+> added in SEC-21. Treat the tables below as accurate for what they list and
+> incomplete for the rest; `CLAUDE.md` has the current module map.
 
 ---
 
@@ -67,37 +75,37 @@ Derived from actual imports in src/orchestrator/orchestrator.ts and src/types.ts
 
 | Entity | TypeScript Type | Source | Storage | Description |
 |---|---|---|---|---|
-| **ProviderCapability** | type ProviderCapability | src/types.ts:14 | in-memory | Capability tags: reasoning, coding, creative, structured-data, large-context, search, fast |
-| **CostTier** | type CostTier | src/types.ts:27 | in-memory | Cost classification: free, included, metered, premium |
-| **RoutingMode** | type RoutingMode | src/types.ts:32 | config.toml | Provider selection strategy: respect_ranking, optimize_cost, provider_only, round_robin |
-| **AuthStatus** | interface AuthStatus | src/types.ts:40 | in-memory | Provider authentication health: valid, expiresAt, canAutoRefresh, requiresInteraction |
-| **QuotaStatus** | interface QuotaStatus | src/types.ts:47 | in-memory | Rate-limit state: isExhausted, remainingRequests, cooldownUntil, healthScore |
-| **AgentEvent** | interface AgentEvent | src/types.ts:193 | sessions/jobId.jsonl | Streaming event from execution: type, content, sessionId, jobId, timestamp |
-| **AgentEventType** | type AgentEventType | src/types.ts:74 | sessions/jobId.jsonl | Event taxonomy: thinking, tool_call, tool_result, text, error, done, steering, task.start, task.end, turn.start, turn.end, text.delta, tool.start, tool.end |
-| **TaskContext** | interface TaskContext | src/types.ts:304 | in-memory | Task execution context: prompt, sessionId, jobId, provider, capabilities, modelPreference, memoryContext, routineContext, maxTurns, abortSignal |
-| **LLMProvider** | interface LLMProvider | src/types.ts:347 | in-memory | Provider abstraction: name, rank, capabilities, costTier, isAvailable(), checkAuth(), getQuotaStatus(), execute(), abort() |
-| **HandoffBundle** | interface HandoffBundle | src/types.ts:363 | in-memory | Provider transition: fromProvider, toProvider, partialResult, toolCallHistory, checkpointReason |
-| **AuditEvent** | interface AuditEvent | src/types.ts:396 | audit/audit.jsonl | Raw audit event before hash-chaining |
-| **AuditEntry** | interface AuditEntry | src/security/security-types.ts:28 | audit/audit.jsonl | Full audit record: entryId, timestamp, eventType, jobId, sessionId, data, previousHash, hash |
-| **AuditEntryEventType** | type AuditEntryEventType | src/security/security-types.ts:15 | audit/audit.jsonl | Audit event taxonomy: task.start, task.end, tool.call, tool.result, policy.allow, policy.deny, memory.extract, failover, steer |
-| **IntentCapsule** | interface IntentCapsule | src/security/security-types.ts:99 | in-memory per task | HMAC-SHA256 signed mandate bundle: capsuleId, mandate, mandateHash, mandateKeywords, allowedActionCategories, signature, createdAt, expiresAt |
-| **DriftCheckResult** | interface DriftCheckResult | src/security/security-types.ts:110 | in-memory | Drift analysis result: aligned, reason, driftScore, actionKeywords, matchedKeywords |
-| **BudgetStatus** | interface BudgetStatus | src/security/security-types.ts:77 | in-memory | Per-session budget tracking: totalActions, actionsRemaining, tokenBudgetUsed, byActionType |
-| **WorkerCapabilityToken** | interface WorkerCapabilityToken | src/types.ts:694 | in-memory | Scoped capability grant: jobId, allowedPaths, deniedPaths, allowedCommands, allowedTools, maxExecutionTime, createdAt, expiresAt |
-| **MemoryItem** | interface MemoryItem | src/memory/memory-types.ts:10 | memory/items/ | Structured memory record: id, type, summary, source, source_type, created_at, last_accessed, access_count, reinforcement_score, tags, category |
-| **MemoryItemType** | type MemoryItemType | src/memory/memory-types.ts:8 | memory/items/ | Memory classification: profile, event, knowledge, behavior, skill, tool |
-| **SalienceScore** | interface SalienceScore | src/memory/memory-types.ts:21 | in-memory | Salience computation: itemId, score, components (accessWeight, recencyDecay, relevanceScore, sourceTrustBonus) |
-| **CategorySummary** | interface CategorySummary | src/memory/memory-types.ts:31 | memory/categories/ | Category metadata: category, summary, item_count, last_updated, member_item_ids |
-| **ZoraConfig** | interface ZoraConfig | src/types.ts:580 | config.toml | Top-level config: agent, providers, routing, failover, memory, security, steering, notifications, mcp, hooks, routines |
-| **ZoraPolicy** | interface ZoraPolicy | src/types.ts:682 | policy.toml | Security policy: filesystem, shell, actions, network, budget, dry_run |
-| **FilesystemPolicy** | interface FilesystemPolicy | src/types.ts:631 | policy.toml | Path allowlist/denylist, follow_symlinks flag |
-| **ShellPolicy** | interface ShellPolicy | src/types.ts:638 | policy.toml | Shell mode (allowlist/denylist/deny_all), allowed_commands, denied_commands, max_execution_time |
-| **BudgetPolicy** | interface BudgetPolicy | src/types.ts:660 | policy.toml | Per-session limits: max_actions_total, max_actions_by_type, max_tokens_total |
-| **TeamConfig** | interface TeamConfig | src/teams/team-types.ts:19 | teams/<name>/config.json | Multi-agent team: name, members, coordinatorId, persistent, prNumber |
-| **AgentMember** | interface AgentMember | src/teams/team-types.ts:9 | teams/<name>/config.json | Team member spec: agentId, name, provider, model, cwd, capabilities |
-| **MailboxMessage** | interface MailboxMessage | src/teams/team-types.ts:31 | teams/<name>/inboxes/ | Inter-agent message: from, text, timestamp, read, type, metadata |
-| **RoutineDefinition** | interface RoutineDefinition | src/types.ts:624 | routines/<name>.toml | Scheduled task: name, prompt, cron, model, max_cost_tier, timeout |
-| **HookConfigEntry** | interface HookConfigEntry | src/types.ts:574 | config.toml [hooks] | Lifecycle hook: event, command, timeout |
+| **ProviderCapability** | type ProviderCapability | src/types.ts | in-memory | Capability tags: reasoning, coding, creative, structured-data, large-context, search, fast |
+| **CostTier** | type CostTier | src/types.ts | in-memory | Cost classification: free, included, metered, premium |
+| **RoutingMode** | type RoutingMode | src/types.ts | config.toml | Provider selection strategy: respect_ranking, optimize_cost, provider_only, round_robin |
+| **AuthStatus** | interface AuthStatus | src/types.ts | in-memory | Provider authentication health: valid, expiresAt, canAutoRefresh, requiresInteraction |
+| **QuotaStatus** | interface QuotaStatus | src/types.ts | in-memory | Rate-limit state: isExhausted, remainingRequests, cooldownUntil, healthScore |
+| **AgentEvent** | interface AgentEvent | src/types.ts | sessions/jobId.jsonl | Streaming event from execution: type, content, sessionId, jobId, timestamp |
+| **AgentEventType** | type AgentEventType | src/types.ts | sessions/jobId.jsonl | Event taxonomy: thinking, tool_call, tool_result, text, error, done, steering, task.start, task.end, turn.start, turn.end, text.delta, tool.start, tool.end |
+| **TaskContext** | interface TaskContext | src/types.ts | in-memory | Task execution context: prompt, sessionId, jobId, provider, capabilities, modelPreference, memoryContext, routineContext, maxTurns, abortSignal |
+| **LLMProvider** | interface LLMProvider | src/types.ts | in-memory | Provider abstraction: name, rank, capabilities, costTier, isAvailable(), checkAuth(), getQuotaStatus(), execute(), abort() |
+| **HandoffBundle** | interface HandoffBundle | src/types.ts | in-memory | Provider transition: fromProvider, toProvider, partialResult, toolCallHistory, checkpointReason |
+| **AuditEvent** | interface AuditEvent | src/types.ts | audit/audit.jsonl | Raw audit event before hash-chaining |
+| **AuditEntry** | interface AuditEntry | src/security/security-types.ts | audit/audit.jsonl | Full audit record: entryId, timestamp, eventType, jobId, sessionId, data, previousHash, hash |
+| **AuditEntryEventType** | type AuditEntryEventType | src/security/security-types.ts | audit/audit.jsonl | Audit event taxonomy: task.start, task.end, tool.call, tool.result, policy.allow, policy.deny, memory.extract, failover, steer |
+| **IntentCapsule** | interface IntentCapsule | src/security/security-types.ts | in-memory per task | HMAC-SHA256 signed mandate bundle: capsuleId, mandate, mandateHash, mandateKeywords, allowedActionCategories, signature, createdAt, expiresAt |
+| **DriftCheckResult** | interface DriftCheckResult | src/security/security-types.ts | in-memory | Drift analysis result: aligned, reason, driftScore, actionKeywords, matchedKeywords |
+| **BudgetStatus** | interface BudgetStatus | src/security/security-types.ts | in-memory | Per-session budget tracking: totalActions, actionsRemaining, tokenBudgetUsed, byActionType |
+| **WorkerCapabilityToken** | interface WorkerCapabilityToken | src/types.ts | in-memory | Scoped capability grant: jobId, allowedPaths, deniedPaths, allowedCommands, allowedTools, maxExecutionTime, createdAt, expiresAt |
+| **MemoryItem** | interface MemoryItem | src/memory/memory-types.ts | memory/items/ | Structured memory record: id, type, summary, source, source_type, created_at, last_accessed, access_count, reinforcement_score, tags, category |
+| **MemoryItemType** | type MemoryItemType | src/memory/memory-types.ts | memory/items/ | Memory classification: profile, event, knowledge, behavior, skill, tool |
+| **SalienceScore** | interface SalienceScore | src/memory/memory-types.ts | in-memory | Salience computation: itemId, score, components (accessWeight, recencyDecay, relevanceScore, sourceTrustBonus) |
+| **CategorySummary** | interface CategorySummary | src/memory/memory-types.ts | memory/categories/ | Category metadata: category, summary, item_count, last_updated, member_item_ids |
+| **ZoraConfig** | interface ZoraConfig | src/types.ts | config.toml | Top-level config: agent, providers, routing, failover, memory, security, steering, notifications, mcp, hooks, routines |
+| **ZoraPolicy** | interface ZoraPolicy | src/types.ts | policy.toml | Security policy: filesystem, shell, actions, network, budget, dry_run |
+| **FilesystemPolicy** | interface FilesystemPolicy | src/types.ts | policy.toml | Path allowlist/denylist, follow_symlinks flag |
+| **ShellPolicy** | interface ShellPolicy | src/types.ts | policy.toml | Shell mode (allowlist/denylist/deny_all), allowed_commands, denied_commands, max_execution_time |
+| **BudgetPolicy** | interface BudgetPolicy | src/types.ts | policy.toml | Per-session limits: max_actions_total, max_actions_by_type, max_tokens_total |
+| **TeamConfig** | interface TeamConfig | src/teams/team-types.ts | teams/<name>/config.json | Multi-agent team: name, members, coordinatorId, persistent, prNumber |
+| **AgentMember** | interface AgentMember | src/teams/team-types.ts | teams/<name>/config.json | Team member spec: agentId, name, provider, model, cwd, capabilities |
+| **MailboxMessage** | interface MailboxMessage | src/teams/team-types.ts | teams/<name>/inboxes/ | Inter-agent message: from, text, timestamp, read, type, metadata |
+| **RoutineDefinition** | interface RoutineDefinition | src/types.ts | routines/<name>.toml | Scheduled task: name, prompt, cron, model, max_cost_tier, timeout |
+| **HookConfigEntry** | interface HookConfigEntry | src/types.ts | config.toml [hooks] | Lifecycle hook: event, command, timeout |
 
 ---
 

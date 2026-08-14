@@ -23,7 +23,7 @@ Each audit entry is a JSON object serialized as a single line in ~/.zora/audit/a
 
 ### Hash Chain Algorithm
 
-Each AuditEntry (src/security/security-types.ts:28) includes:
+Each AuditEntry (src/security/security-types.ts) includes:
 - previousHash: the SHA-256 hash of the previous entry (or "genesis" for the first entry)
 - hash: SHA-256(previousHash + JSON.stringify(entry_without_hash_fields))
 
@@ -31,7 +31,7 @@ This creates a cryptographic chain where modifying any entry invalidates all sub
 
 Implementation: AuditLogger._appendEntry() (src/security/audit-logger.ts)
 
-    GENESIS_HASH = "genesis"  (src/security/audit-logger.ts:18)
+    GENESIS_HASH = "genesis"  (src/security/audit-logger.ts)
 
     entry.previousHash = this._previousHash
     payload = previousHash + canonical JSON of other fields
@@ -40,7 +40,7 @@ Implementation: AuditLogger._appendEntry() (src/security/audit-logger.ts)
 
 ### Serialized Write Queue
 
-AuditLogger._writeQueue (src/security/audit-logger.ts:39) is a Promise chain that serializes writes. Only one write executes at a time, preventing interleaving of concurrent log() calls that would break the hash chain. This is a single-writer guarantee implemented in-process without file locks.
+AuditLogger._writeQueue (src/security/audit-logger.ts) is a Promise chain that serializes writes. Only one write executes at a time, preventing interleaving of concurrent log() calls that would break the hash chain. This is a single-writer guarantee implemented in-process without file locks.
 
 ### Entry ID Format
 
@@ -52,11 +52,11 @@ On first call to log(), AuditLogger reads the existing file to find the last ent
 
 ### Chain Verification
 
-AuditLogger.verifyChain() (src/security/audit-logger.ts:113) reads the entire log, recomputes each hash, and returns a ChainVerificationResult indicating whether the chain is valid and at which entry it broke (if any). Available via CLI: zora-agent audit verify.
+AuditLogger.verifyChain() (src/security/audit-logger.ts) reads the entire log, recomputes each hash, and returns a ChainVerificationResult indicating whether the chain is valid and at which entry it broke (if any). Available via CLI: zora-agent audit verify.
 
 ### Filtering
 
-AuditLogger.readEntries(filter) (src/security/audit-logger.ts:71) reads and filters entries by jobId, eventType, startTime, and endTime. No indexing; linear scan is acceptable at single-user scale.
+AuditLogger.readEntries(filter) (src/security/audit-logger.ts) reads and filters entries by jobId, eventType, startTime, and endTime. No indexing; linear scan is acceptable at single-user scale.
 
 ### AuditEntry Schema
 
@@ -73,7 +73,7 @@ AuditLogger.readEntries(filter) (src/security/audit-logger.ts:71) reads and filt
 
 ### AuditEntryEventType Taxonomy
 
-Defined in src/security/security-types.ts:15:
+Defined in src/security/security-types.ts:
     task.start | task.end | tool.call | tool.result | policy.allow | policy.deny | memory.extract | failover | steer
 
 ## Consequences

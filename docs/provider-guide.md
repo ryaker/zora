@@ -127,7 +127,11 @@ interface TaskContext {
   modelPreference?: string;            // Override model selection
   maxCostTier?: CostTier;              // Cost ceiling
   maxTurns?: number;                   // Turn limit
-  canUseTool?: Function;               // Policy enforcement callback
+  timeout?: number;                    // Per-task timeout override (ms)
+  errorBudget?: ErrorBudget;           // ERR-09 retry/turn budget
+  customTools?: CustomToolDefinition[];// Zora-defined tools (see below)
+  canUseTool?: Function;               // Policy enforcement callback (gate 2)
+  sdkHooks?: ZoraSdkHooks;             // SEC-21 PreToolUse/PostToolUse hooks (gate 1)
 }
 ```
 
@@ -146,7 +150,8 @@ interface TaskContext {
 - Always yield at least one `done` or `error` event before the generator returns.
 - Set `isAuthError: true` on error events caused by authentication failures so the orchestrator can trigger re-auth.
 - Set `isQuotaError: true` on rate-limit or quota errors so the orchestrator can trigger failover.
-- Wire the `task.canUseTool` callback into your tool execution path if your provider supports tool use.
+- Wire the `task.canUseTool` callback into your tool execution path if your provider supports tool use. This is the second of two pre-execution gates; for SDK-backed providers the first is `task.sdkHooks` (`PreToolUse`), which must also be passed through. Do not implement a mode that skips either -- the SDK's `bypassPermissions` was removed from the codebase in SEC-20 precisely because it silently disabled `canUseTool`.
+- If your provider supports custom tools, register `task.customTools` through `buildZoraMcpServer()` (`src/tools/zora-mcp-server.ts`) rather than inventing a second registration path. It is the only place JSON Schema is converted to the Zod schema the SDK requires.
 
 **Example:**
 

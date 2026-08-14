@@ -48,3 +48,25 @@ The PolicyEngine integrates with the Claude Agent SDK via the `canUseTool` callb
 1. **No policy enforcement (trust the LLM).** Rejected. Unsafe for production use.
 2. **Container-level sandboxing only.** Considered as a complement but not a replacement. Container sandboxing is coarse-grained and doesn't support human-approval flows.
 3. **Embedding policy in the system prompt.** Rejected. LLMs can ignore prompt instructions. Policy must be enforced in code, not requested in prose.
+
+## Update -- 2026-08 (SEC-20, SEC-21)
+
+The decision above stands, but for a period the implementation did not honour it
+on the main task path. Two defects, both found in the August 2026 review
+(`docs/reviews/2026-08-code-review.md`) and fixed in Wave 1:
+
+- `ClaudeProvider` defaulted to the SDK's `bypassPermissions` mode. Under that
+  mode the SDK never invokes `canUseTool`, so the PolicyEngine was not consulted
+  on the main task path and `policy.toml` was advisory there. The provider now
+  defaults to `permissionMode: 'default'`, both CLI factories pass it
+  explicitly, and `bypassPermissions` no longer appears anywhere in `src/`.
+- The tool-hook chain ran on *observation* of a streamed `tool_call` -- after
+  the SDK had already executed the tool -- so a hook "denial" only wrote a
+  synthetic result into Zora's own transcript. The chain now runs from an SDK
+  `PreToolUse` hook (`src/hooks/sdk-hook-bridge.ts`), which is pre-execution and
+  short-circuits ahead of `canUseTool`.
+
+So enforcement is now two pre-execution layers, not one: PreToolUse (tool hooks,
+fails closed, may also rewrite arguments) then `canUseTool` (PolicyEngine,
+capability tokens, and for channel-originated tasks the channel `CapabilitySet`).
+`tests/security/tool-enforcement.test.ts` is the permanent regression guard.

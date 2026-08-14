@@ -45,12 +45,13 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique identifier (e.g. `"claude"`, `"gemini"`, `"ollama"`). |
-| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, or `"ollama"`. |
+| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, `"ollama"`, or `"echo"` (a deterministic stub used by the e2e harness — not for production). |
 | `rank` | integer | yes | Priority for routing. Lower rank = preferred. |
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
 | `enabled` | boolean | yes | Whether this provider is active. |
-| `model` | string | no | Model identifier (e.g. `"claude-sonnet-4-6"`, `"gemini-2.5-flash"`). Provider-specific default if omitted. |
+| `model` | string | no | Model identifier (e.g. `"claude-opus-5"`, `"gemini-2.5-flash"`). Provider-specific default if omitted -- `claude-opus-5` for `claude-sdk`. |
+| `effort` | string | no | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. The main intelligence/latency/cost dial. Left unset by default so the SDK's own default applies. `"xhigh"` requires Opus 4.7+ / Sonnet 5; `"max"` requires Opus 4.6+ / Sonnet 4.6+. Claude only. |
 | `max_turns` | integer | no | Maximum conversation turns per task. Default: `200`. |
 | `max_concurrent_jobs` | integer | no | Concurrency limit for this provider. |
 
@@ -85,7 +86,7 @@ rank = 1
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
-model = "claude-sonnet-4-6"
+model = "claude-opus-5"
 auth_method = "mac_session"
 
 [[providers]]
