@@ -2106,7 +2106,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 4,
@@ -2218,7 +2218,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "in_progress",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
@@ -2228,7 +2228,8 @@
         "job_size": 2,
         "score": 10
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "claude"
     },
     {
       "id": "MEM-34",

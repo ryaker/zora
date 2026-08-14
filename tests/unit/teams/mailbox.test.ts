@@ -145,4 +145,114 @@ describe('Mailbox', () => {
     expect(received[0]!.timestamp >= before).toBe(true);
     expect(received[0]!.timestamp <= after).toBe(true);
   });
+
+  /**
+   * ERR-22 regression guards.
+   *
+   * `send` and `receive` are read-modify-write cycles on a shared file.
+   * `writeAtomic` makes each individual write all-or-nothing, which is a
+   * different guarantee from making the read-then-write indivisible: two
+   * senders that both read `[A]` write `[A, B]` and `[A, C]`, both atomically,
+   * and one message is destroyed. The loss is invisible from both ends — the
+   * sender's promise resolved, and the recipient never knew there was anything
+   * to wait for.
+   *
+   * The counts here are exact, not lower bounds. "Most messages arrive" is the
+   * bug.
+   */
+  describe('concurrent access (ERR-22)', () => {
+    it('loses no messages when many senders write at once', async () => {
+      const recipient = new Mailbox(testDir, 'bob');
+      await recipient.init(teamName);
+
+      // Distinct Mailbox instances, as separate agents would have. All sends
+      // are started before any is awaited, so they genuinely overlap.
+      const senderCount = 25;
+      await Promise.all(
+        Array.from({ length: senderCount }, (_, i) =>
+          new Mailbox(testDir, `sender-${i}`).send(teamName, 'bob', {
+            type: 'task',
+            text: `message-${i}`,
+          }),
+        ),
+      );
+
+      const all = await recipient.getAllMessages(teamName);
+      expect(all).toHaveLength(senderCount);
+      // Every individual message, not just the right count.
+      expect(new Set(all.map((m) => m.text)).size).toBe(senderCount);
+    });
+
+    it('delivers every message exactly once when receive races with send', async () => {
+      const bob = new Mailbox(testDir, 'bob');
+      await bob.init(teamName);
+
+      // Interleave sends with receives. A receive that overlaps a send can
+      // destroy the sent message (receiver writes back the copy it read before
+      // the send landed) or re-deliver an already-read one.
+      const messageCount = 20;
+      const sends = Array.from({ length: messageCount }, (_, i) =>
+        new Mailbox(testDir, `sender-${i}`).send(teamName, 'bob', {
+          type: 'task',
+          text: `message-${i}`,
+        }),
+      );
+      const receives = Array.from({ length: 10 }, () => bob.receive(teamName));
+
+      const [, ...received] = await Promise.all([Promise.all(sends), ...receives]);
+      const drained = await bob.receive(teamName);
+
+      const delivered = [...received.flat(), ...drained].map((m) => m.text);
+      // Nothing lost, and nothing delivered twice.
+      expect(delivered.length).toBe(messageCount);
+      expect(new Set(delivered).size).toBe(messageCount);
+      // And the inbox still holds every message, all marked read.
+      const all = await bob.getAllMessages(teamName);
+      expect(all).toHaveLength(messageCount);
+      expect(all.every((m) => m.read)).toBe(true);
+    });
+
+    /**
+     * The fail-open half of the same gap. `_readInbox` answered any read or
+     * parse failure with `[]`, and both callers write back what they read — so
+     * a single unparseable byte turned a read into a silent, total erase of the
+     * queue on the very next send.
+     */
+    it('refuses to overwrite a corrupt inbox instead of erasing it', async () => {
+      const bob = new Mailbox(testDir, 'bob');
+      await bob.init(teamName);
+      await new Mailbox(testDir, 'alice').send(teamName, 'bob', { type: 'task', text: 'precious' });
+
+      const inboxPath = path.join(testDir, teamName, 'inboxes', 'bob.json');
+      const corrupt = '[{"type":"task","text":"precious"} {"broken"';
+      await fs.writeFile(inboxPath, corrupt, 'utf8');
+
+      await expect(
+        new Mailbox(testDir, 'alice').send(teamName, 'bob', { type: 'task', text: 'second' }),
+      ).rejects.toThrow(/not valid JSON/);
+
+      // The damaged file is left exactly as it was, for recovery by hand,
+      // rather than replaced with a one-element array.
+      expect(await fs.readFile(inboxPath, 'utf8')).toBe(corrupt);
+    });
+
+    it('reports an unreadable inbox rather than reporting it empty', async () => {
+      const bob = new Mailbox(testDir, 'bob');
+      await bob.init(teamName);
+
+      // A directory where the inbox should be: a non-ENOENT errno, which is
+      // "cannot tell", not "no messages".
+      const inboxPath = path.join(testDir, teamName, 'inboxes', 'bob.json');
+      await fs.rm(inboxPath, { force: true });
+      await fs.mkdir(inboxPath, { recursive: true });
+
+      await expect(bob.getAllMessages(teamName)).rejects.toThrow(/cannot read inbox/);
+    });
+
+    it('treats a not-yet-created inbox as empty', async () => {
+      // The one failure that really does mean "no messages yet".
+      const fresh = new Mailbox(testDir, 'nobody');
+      await expect(fresh.getAllMessages(teamName)).resolves.toEqual([]);
+    });
+  });
 });
