@@ -1705,7 +1705,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
@@ -1715,7 +1715,8 @@
         "job_size": 1,
         "score": 11
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-e"
     },
     {
       "id": "PERF-01",
@@ -1727,7 +1728,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 2,
@@ -1737,7 +1738,8 @@
         "job_size": 1,
         "score": 8
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-e"
     },
     {
       "id": "MEM-31",
@@ -1797,7 +1799,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 2,
@@ -1807,7 +1809,8 @@
         "job_size": 1,
         "score": 6
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-e"
     },
     {
       "id": "PERF-05",
@@ -1819,7 +1822,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 2,
@@ -1829,7 +1832,8 @@
         "job_size": 1,
         "score": 6
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-e"
     },
     {
       "id": "PERF-06",
@@ -1841,7 +1845,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 1,
@@ -1851,7 +1855,8 @@
         "job_size": 1,
         "score": 5
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-e"
     },
     {
       "id": "PERF-02",
