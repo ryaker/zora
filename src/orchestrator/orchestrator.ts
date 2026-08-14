@@ -169,6 +169,8 @@ export class Orchestrator {
   private _toolHookRunner: ToolHookRunner = new ToolHookRunner();
   /** SEC-21: per-job SDK hook bridges, so the log path can see hook arg rewrites. */
   private readonly _hookBridges: Map<string, SdkHookBridge> = new Map();
+  /** ERR-20: jobId → the provider currently executing it, for cancelTask(). */
+  private readonly _activeJobProviders: Map<string, LLMProvider> = new Map();
 
   // ERR-07: Error normalizer for safe error replay
   private readonly _errorNormalizer: ErrorNormalizer = new ErrorNormalizer();
@@ -1145,6 +1147,7 @@ export class Orchestrator {
     } finally {
       this._activeTokens.delete(jobId);
       this._hookBridges.delete(jobId);
+      this._activeJobProviders.delete(jobId);
     }
 
     // Post-session: await skill synthesis so CLI mode doesn't exit before confirmation/write
@@ -1164,6 +1167,31 @@ export class Orchestrator {
     });
 
     return execResult;
+  }
+
+  /**
+   * ERR-20: Cancel a running task.
+   *
+   * `LLMProvider.abort(jobId)` has been part of the interface all along and
+   * nothing ever called it, so a task could only be stopped by killing the
+   * daemon. Aborting the provider's AbortController makes its generator finish,
+   * which unwinds `_executeWithProvider` through its normal paths.
+   *
+   * @returns false when the job is not running (already finished, or never existed).
+   */
+  async cancelTask(jobId: string): Promise<boolean> {
+    const provider = this._activeJobProviders.get(jobId);
+    if (!provider) return false;
+
+    log.info({ jobId, provider: provider.name }, 'Cancelling task');
+    await provider.abort(jobId);
+    this._activeJobProviders.delete(jobId);
+    return true;
+  }
+
+  /** Job IDs currently executing. */
+  get activeJobIds(): string[] {
+    return [...this._activeJobProviders.keys()];
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -1235,6 +1263,10 @@ export class Orchestrator {
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
     const bufferedWriter = new BufferedSessionWriter(this._sessionManager, taskContext.jobId, 500);
+
+    // ERR-20: remember which provider is running this job so cancelTask(jobId)
+    // has something to abort. Rebound on every failover hop.
+    this._activeJobProviders.set(taskContext.jobId, provider);
 
     try {
       try {
