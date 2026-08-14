@@ -87,12 +87,22 @@ all of the above.
 - **Graph memory tier (MEM-30) — experimental, off by default.** An optional
   graph over SparrowDB answering relational questions that lexical search
   cannot, exposed to the model as a `graph_recall` tool alongside the BM25
-  `memory_search`. Gated behind a config flag defaulting to false; `sparrowdb`
-  is an optional dependency loaded lazily. A missing module, unsupported
-  platform, unopenable database, failed worker spawn or startup timeout each
-  produce an inert client and one warning rather than a throw, and
-  `graph_recall` is simply not registered. Runs on a worker thread — the
-  measured main-thread block is 0.007 ms/call versus 3.853 ms/call in-process.
+  `memory_search`. Enable with `ZORA_GRAPH_MEMORY=1`; `ZORA_GRAPH_MEMORY_PATH`
+  overrides the database location. `sparrowdb` is an optional dependency loaded
+  lazily. A missing module, unsupported platform, unopenable database, failed
+  worker spawn or startup timeout each produce an inert client and one warning
+  rather than a throw, and `graph_recall` is simply not registered. Runs on a
+  worker thread — the measured main-thread block is 0.007 ms/call versus
+  3.853 ms/call in-process.
+- **`graph_recall` reaches the model (MEM-34).** The tier above was built,
+  tested and documented, but `createGraphTools` was called from nowhere in
+  `src/` — the graph was reachable only from its own test suite, and the claim
+  above that it was "exposed to the model" was false. Wired into
+  `Orchestrator._buildCustomTools()`, with the client started before the tool
+  list is cached and closed on shutdown. `tests/unit/tools/tool-registration.test.ts`
+  is the guard: every tool factory must be invoked in `_buildCustomTools()` and
+  its result must reach the returned array, because a tool that is never
+  registered is indistinguishable from a tool that is never chosen.
 - **Documentation drift guard (DOC-12).** `tests/unit/docs/` fails the build
   when the docs and the code disagree on model IDs, config keys, SDK versions,
   the hook pipeline, or CLI commands.

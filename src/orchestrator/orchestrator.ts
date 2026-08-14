@@ -60,6 +60,8 @@ import { FlagManager } from '../steering/flag-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
+import { createGraphTools } from '../tools/graph-tools.js';
+import { GraphMemoryClient, graphConfigFromEnv } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -214,6 +216,11 @@ export class Orchestrator {
 
   // PERF-06: custom tool definitions, built once per boot rather than per task.
   private _customTools: CustomToolDefinition[] | null = null;
+
+  // MEM-34: the graph memory tier's main-thread façade. Null until boot, and
+  // inert (every call a no-op) whenever the tier is disabled or degraded, so
+  // nothing downstream needs to branch on it beyond tool registration.
+  private _graphClient: GraphMemoryClient | null = null;
 
   // PERF-03: SOUL.md identity cache. The file used to be existsSync'd and
   // readFileSync'd on every submitTask(), blocking the event loop per task.
@@ -641,6 +648,22 @@ export class Orchestrator {
     // R5 / ERR-08 / PERF-05: RetryQueue polling is demand-driven — see _armRetryPoll().
     this._armRetryPoll();
 
+    // MEM-34: start the graph tier before the tool list is built, because
+    // `createGraphTools` returns `[]` for an inert client and the list is
+    // cached for the life of the boot — starting it afterwards would register
+    // nothing. `create()` never throws and never blocks past
+    // `startupTimeoutMs`: a disabled flag, a missing native module, an
+    // unopenable database or a failed spawn all yield an inert client.
+    this._graphClient = await GraphMemoryClient.create(graphConfigFromEnv());
+    if (this._graphClient.available) {
+      log.info('Graph memory tier live — graph_recall registered');
+    } else {
+      log.debug(
+        { reason: this._graphClient.unavailableReason },
+        'Graph memory tier inert — graph_recall not registered',
+      );
+    }
+
     // PERF-06: build the custom tool definitions once, now that every subsystem
     // their handlers close over exists. submitTask() reuses this list; only the
     // per-job canUseTool closure is rebuilt per task. Assigned (not ??=) so a
@@ -1026,6 +1049,18 @@ export class Orchestrator {
     // PERF-06: drop the cached tool list so a re-boot rebuilds it against the
     // newly constructed subsystems rather than the ones being torn down here.
     this._customTools = null;
+
+    // MEM-34: stop the graph worker. `close()` flushes queued writes and is
+    // safe on an inert client. Dropped to null with the tool list so a re-boot
+    // starts a fresh worker rather than handing tools a terminated one.
+    if (this._graphClient) {
+      try {
+        await this._graphClient.close();
+      } catch (err) {
+        log.warn({ err }, 'Graph memory tier failed to close cleanly');
+      }
+      this._graphClient = null;
+    }
 
     // PERF-03: stop watching SOUL.md
     if (this._soulWatcher) {
@@ -2392,7 +2427,12 @@ export class Orchestrator {
       ? [createSpawnZoraTool({ projects: pmConfig.projects, maxChildren: pmConfig.max_children ?? 5 })]
       : [];
 
-    return [...permissionTools, ...memoryTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
+    // MEM-34: graph_recall — relational recall alongside the BM25 memory_search.
+    // Yields [] when the tier is inert, so the model is never offered a tool
+    // whose backing store is not there.
+    const graphTools = this._graphClient ? createGraphTools(this._graphClient) : [];
+
+    return [...permissionTools, ...memoryTools, ...graphTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
   }
 
   /**

@@ -2228,6 +2228,29 @@
         "score": 10
       },
       "release_gate": false
+    },
+    {
+      "id": "MEM-34",
+      "category": "memory",
+      "title": "graph_recall defined but never registered — the graph tier was unreachable by the agent",
+      "severity": "S1",
+      "files_affected": 4,
+      "impact": 8,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "completed",
+      "detail_file": "CHANGELOG.md",
+      "wsjf": {
+        "usability_value": 9,
+        "wiring_impact": 10,
+        "security_risk": 2,
+        "time_criticality": 7,
+        "job_size": 1,
+        "score": 28
+      },
+      "release_gate": true,
+      "claimed_by": "agent-main"
     }
   ]
 }

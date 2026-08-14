@@ -195,6 +195,30 @@ auto_extract_interval = 10
 
 Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora-agent init`.
 
+#### Graph memory (experimental, off by default)
+
+The graph tier is the one memory setting that is **not** in `config.toml` — it is
+env-gated, because it is experimental and depends on an optional native module.
+
+| Variable | Effect |
+|---|---|
+| `ZORA_GRAPH_MEMORY` | `1`, `true`, `on` or `yes` starts the tier. Anything else, including unset, leaves it off. |
+| `ZORA_GRAPH_MEMORY_PATH` | Database location. Default `~/.zora/memory/graph.db`. |
+
+When it is on, the agent gains a `graph_recall` tool alongside `memory_search`.
+The two answer different questions: `memory_search` is BM25 over item summaries
+and finds a memory by its *wording*; `graph_recall` traverses *relationships*
+— what else involved this project, what earlier work touched the same entities
+as the current job, what a decision superseded, whether a tool has failed this
+way before. The two-hop case is the one lexical search cannot reach at all,
+since the summaries need share no words.
+
+The tier degrades to nothing rather than failing. A missing `sparrowdb` module,
+an unsupported platform, an unopenable database, a failed worker spawn or a
+startup timeout each produce one warning and an inert client, and `graph_recall`
+is simply not registered — the agent keeps running with lexical memory alone.
+It runs on a worker thread, so the native calls do not block the main loop.
+
 ### `[security]`
 
 Security and audit settings.
