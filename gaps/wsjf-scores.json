@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 83,
+    "total_gaps": 84,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -1967,7 +1967,7 @@
         "DOC-11"
       ],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
@@ -1977,7 +1977,8 @@
         "job_size": 2,
         "score": 9
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-g"
     },
     {
       "id": "SEC-23",
@@ -2000,6 +2001,28 @@
         "score": 12
       },
       "release_gate": true
+    },
+    {
+      "id": "TEST-20",
+      "category": "testing",
+      "title": "Flaky under load: GeminiBridge kill-on-stop, EventTriggerManager debounce",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 3,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "wsjf": {
+        "usability_value": 4,
+        "wiring_impact": 1,
+        "security_risk": 1,
+        "time_criticality": 6,
+        "job_size": 1,
+        "score": 12
+      },
+      "release_gate": false
     }
   ]
 }
