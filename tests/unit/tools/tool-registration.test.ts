@@ -207,8 +207,8 @@ const testPolicy: ZoraPolicy = {
   network: { allowed_domains: [], denied_domains: [], max_request_size: '10MB' },
 };
 
-/** Boot, read the registered tool names, shut down. */
-async function registeredToolNames(): Promise<string[]> {
+/** Boot, read the registered tool names and the tier's own view of itself, shut down. */
+async function bootAndInspect(): Promise<{ names: string[]; graphAvailable: boolean; reason: string | null }> {
   const baseDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'zora-tool-registration-'));
   const config = structuredClone(DEFAULT_CONFIG);
   config.agent.log_level = 'error';
@@ -224,8 +224,15 @@ async function registeredToolNames(): Promise<string[]> {
 
   try {
     await orchestrator.boot();
-    const tools = (orchestrator as unknown as { _getCustomTools(): { name: string }[] })._getCustomTools();
-    return tools.map(t => t.name);
+    const internals = orchestrator as unknown as {
+      _getCustomTools(): { name: string }[];
+      _graphClient: { available: boolean; unavailableReason: string | null } | null;
+    };
+    return {
+      names: internals._getCustomTools().map(t => t.name),
+      graphAvailable: internals._graphClient?.available ?? false,
+      reason: internals._graphClient?.unavailableReason ?? null,
+    };
   } finally {
     await orchestrator.shutdown().catch(() => { /* teardown is not under test */ });
     await fsp.rm(baseDir, { recursive: true, force: true }).catch(() => { /* temp dir */ });
@@ -237,23 +244,43 @@ describe('MEM-34 — a booted Orchestrator offers the graph tool', () => {
     vi.unstubAllEnvs();
   });
 
-  it('registers graph_recall when the tier is enabled', async () => {
+  it('registers graph_recall if and only if the tier came up', async () => {
     vi.stubEnv('ZORA_GRAPH_MEMORY', '1');
     vi.stubEnv('ZORA_GRAPH_MEMORY_PATH', path.join(os.tmpdir(), `zora-graph-reg-${process.pid}.db`));
 
-    const names = await registeredToolNames();
-    expect(
-      names,
-      `graph_recall is not in the booted tool list — the model cannot call it. Got: ${names.join(', ')}`,
-    ).toContain('graph_recall');
-    // The pairing is the point: relational recall sits next to lexical recall.
+    const { names, graphAvailable, reason } = await bootAndInspect();
+
+    // Asserted as a biconditional rather than skipped on platforms without the
+    // native module. `sparrowdb` is an optional dependency and its platform
+    // coverage is genuinely incomplete, so a plain describe.skip would go
+    // vacuous on exactly the platform where the degrade path is load-bearing.
+    // Both directions are real: a live tier the model cannot reach is MEM-34
+    // returning, and a dead tier the model *can* reach is a tool whose every
+    // call fails.
+    if (graphAvailable) {
+      expect(
+        names,
+        `the graph tier is live but graph_recall is not in the booted tool list — ` +
+          `the model cannot call it. Got: ${names.join(', ')}`,
+      ).toContain('graph_recall');
+    } else {
+      expect(
+        names,
+        `the graph tier is inert (${reason ?? 'no reason given'}) but graph_recall was ` +
+          `registered anyway — every call would fail`,
+      ).not.toContain('graph_recall');
+    }
+
+    // The pairing is the point: relational recall sits next to lexical recall,
+    // and lexical recall is there either way.
     expect(names).toContain('memory_search');
   }, 40_000);
 
   it('omits graph_recall when the tier is off, rather than offering a dead tool', async () => {
     vi.stubEnv('ZORA_GRAPH_MEMORY', '');
 
-    const names = await registeredToolNames();
+    const { names, graphAvailable } = await bootAndInspect();
+    expect(graphAvailable, 'the tier started despite the flag being off').toBe(false);
     expect(names).not.toContain('graph_recall');
     // …and the rest of the surface is unaffected by the tier being absent.
     expect(names).toContain('memory_search');
