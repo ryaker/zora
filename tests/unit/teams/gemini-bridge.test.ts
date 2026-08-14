@@ -3,17 +3,35 @@ import { Mailbox } from '../../../src/teams/mailbox.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { EventEmitter } from 'node:events';
-import type { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { GeminiBridge, type TeamTaskSubmitter } from '../../../src/teams/gemini-bridge.js';
 
-vi.mock('node:child_process', () => ({
-  spawn: vi.fn(),
-}));
+/**
+ * SEC-22 follow-up: these tests used to mock `node:child_process` and assert on
+ * `spawn` calls, because the bridge ran delegated tasks as a subprocess. It
+ * submits them to the orchestrator now, so the seam under test is the injected
+ * submitter and no process mocking is needed.
+ */
 
-import { spawn } from 'node:child_process';
-import { GeminiBridge } from '../../../src/teams/gemini-bridge.js';
+interface SubmitterStub {
+  submit: TeamTaskSubmitter;
+  /** Prompts the bridge asked to run, in order. */
+  prompts: string[];
+}
 
-const mockSpawn = vi.mocked(spawn);
+/** A submitter that records what it was asked to run and answers as told. */
+function stubSubmitter(
+  respond: (prompt: string) => Promise<{ ok: true; output: string } | { ok: false; error: string }>,
+): SubmitterStub {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    submit: async (request) => {
+      prompts.push(request.prompt);
+      return respond(request.prompt);
+    },
+  };
+}
 
 /**
  * TEST-20: wait for an observable condition instead of sleeping a fixed span.
@@ -53,7 +71,6 @@ describe('GeminiBridge', () => {
 
   beforeEach(async () => {
     await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
-    mockSpawn.mockReset();
   });
 
   afterEach(async () => {
@@ -91,141 +108,150 @@ describe('GeminiBridge', () => {
     bridge.stop();
   });
 
-  it('spawns CLI on task message and posts result', async () => {
+  it('runs a delegated task and posts the result back to the sender', async () => {
     const geminiMailbox = new Mailbox(testDir, 'gemini-agent');
     const coordMailbox = new Mailbox(testDir, 'coordinator');
     await geminiMailbox.init(teamName);
     await coordMailbox.init(teamName);
 
-    // Send a task to gemini-agent inbox
     await coordMailbox.send(teamName, 'gemini-agent', {
       type: 'task',
-      text: 'analyze this code',
+      text: 'analyze the repo',
     });
 
-    // Track if close event is emitted
-    let closeFired = false;
-    mockSpawn.mockImplementation((_cmd: any, _args: any, _opts: any) => {
-      const proc = new EventEmitter() as any;
-      const stdoutStream = new EventEmitter() as Readable;
-      const stderrStream = new EventEmitter() as Readable;
-      proc.stdout = stdoutStream;
-      proc.stderr = stderrStream;
-      proc.kill = vi.fn();
-      proc.pid = 12345;
-
-      setTimeout(() => {
-        stdoutStream.emit('data', Buffer.from('Analysis complete'));
-        proc.emit('close', 0);
-        closeFired = true;
-      }, 10);
-
-      return proc;
-    });
-
+    const submitter = stubSubmitter(async () => ({ ok: true, output: 'Analysis complete' }));
     const bridge = new GeminiBridge(teamName, geminiMailbox, {
       pollIntervalMs: 30,
-      geminiCliPath: '/usr/bin/gemini',
+      submitTask: submitter.submit,
     });
 
     bridge.start();
-    // Wait for the poll to spawn the CLI and for the mocked process to close.
-    await until(() => closeFired, 'mocked gemini process to close');
+    await until(() => submitter.prompts.length > 0, 'the delegated task to be submitted');
+
+    // The instruction reaches the submitter verbatim.
+    expect(submitter.prompts).toEqual(['analyze the repo']);
+
+    const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
+    let inbox: Array<{ type: string; text: string }> = [];
+    await until(async () => {
+      inbox = JSON.parse(await fs.readFile(inboxPath, 'utf8'));
+      return inbox.some((m) => m.type === 'result');
+    }, 'result message in the coordinator inbox');
     bridge.stop();
 
-    expect(mockSpawn).toHaveBeenCalled();
-    expect(closeFired).toBe(true);
-
-    // The result is written to the coordinator inbox asynchronously after close.
-    const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
-    let inboxData: any[] = [];
-    await until(async () => {
-      inboxData = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as any[];
-      return inboxData.some((m: any) => m.type === 'result');
-    }, 'result message in the coordinator inbox');
-
-    const resultMsg = inboxData.find((m: any) => m.type === 'result');
-    expect(resultMsg).toBeDefined();
-    expect(resultMsg.text).toBe('Analysis complete');
+    expect(inbox.find((m) => m.type === 'result')?.text).toBe('Analysis complete');
   }, 20_000);
 
-  it('handles process errors gracefully', async () => {
+  it('reports a failed task back to the requester instead of swallowing it', async () => {
     const geminiMailbox = new Mailbox(testDir, 'gemini-agent');
     const coordMailbox = new Mailbox(testDir, 'coordinator');
     await geminiMailbox.init(teamName);
     await coordMailbox.init(teamName);
 
-    await coordMailbox.send(teamName, 'gemini-agent', {
-      type: 'task',
-      text: 'fail please',
-    });
-
-    let errorFired = false;
-    mockSpawn.mockImplementation(() => {
-      const proc = new EventEmitter() as any;
-      proc.stdout = new EventEmitter() as Readable;
-      proc.stderr = new EventEmitter() as Readable;
-      proc.kill = vi.fn();
-
-      setTimeout(() => {
-        proc.emit('error', new Error('spawn failed'));
-        errorFired = true;
-      }, 5);
-
-      return proc;
-    });
+    await coordMailbox.send(teamName, 'gemini-agent', { type: 'task', text: 'fail please' });
 
     const bridge = new GeminiBridge(teamName, geminiMailbox, {
       pollIntervalMs: 30,
-      geminiCliPath: '/nonexistent',
+      submitTask: stubSubmitter(async () => ({ ok: false, error: 'provider unavailable' })).submit,
     });
 
     bridge.start();
-    await until(() => errorFired, 'mocked spawn to emit an error');
-
-    // The failure is reported back to the requesting agent, not swallowed.
     const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
     await until(async () => {
-      const inbox = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as any[];
-      return inbox.some((m: any) => m.type === 'result' && m.text.includes('spawn failure'));
-    }, 'spawn-failure result posted back to the coordinator');
+      const inbox = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as Array<{ type: string; text: string }>;
+      return inbox.some((m) => m.type === 'result' && m.text.includes('provider unavailable'));
+    }, 'failure result posted back to the coordinator');
 
     bridge.stop();
-
-    // Should not crash
     expect(bridge.isRunning()).toBe(false);
   }, 20_000);
 
-  it('kills active process on stop', async () => {
-    const mailbox = new Mailbox(testDir, 'gemini-agent');
-    await mailbox.init(teamName);
+  /**
+   * A submitter that throws is a wiring bug rather than a task failure, and the
+   * requester must not be left waiting on a reply that never comes.
+   */
+  it('answers the requester even when the submitter throws', async () => {
+    const geminiMailbox = new Mailbox(testDir, 'gemini-agent');
+    const coordMailbox = new Mailbox(testDir, 'coordinator');
+    await geminiMailbox.init(teamName);
+    await coordMailbox.init(teamName);
 
-    // Send a task
-    const sender = new Mailbox(testDir, 'coord');
-    await sender.send(teamName, 'gemini-agent', { type: 'task', text: 'long task' });
+    await coordMailbox.send(teamName, 'gemini-agent', { type: 'task', text: 'boom' });
 
-    const killFn = vi.fn();
-    mockSpawn.mockImplementation(() => {
-      const proc = new EventEmitter() as any;
-      proc.stdout = new EventEmitter() as Readable;
-      proc.stderr = new EventEmitter() as Readable;
-      proc.kill = killFn;
-      // Process never closes — simulates a long-running task
-      return proc;
-    });
-
-    const bridge = new GeminiBridge(teamName, mailbox, {
+    const bridge = new GeminiBridge(teamName, geminiMailbox, {
       pollIntervalMs: 30,
-      geminiCliPath: '/usr/bin/gemini',
+      submitTask: async () => {
+        throw new Error('orchestrator not booted');
+      },
     });
 
     bridge.start();
-    // TEST-20: stop() can only kill a process that has already been spawned, so
-    // wait for the spawn itself rather than for a fixed span that has to be long
-    // enough to cover a poll tick plus four filesystem syscalls.
-    await until(() => mockSpawn.mock.calls.length > 0, 'the CLI subprocess to be spawned');
+    const inboxPath = path.join(testDir, teamName, 'inboxes', 'coordinator.json');
+    await until(async () => {
+      const inbox = JSON.parse(await fs.readFile(inboxPath, 'utf8')) as Array<{ type: string; text: string }>;
+      return inbox.some((m) => m.type === 'result' && m.text.includes('orchestrator not booted'));
+    }, 'submission failure reported back to the coordinator');
 
     bridge.stop();
-    expect(killFn).toHaveBeenCalled();
   }, 20_000);
+
+  it('does not post a result for a task that finished after stop()', async () => {
+    const geminiMailbox = new Mailbox(testDir, 'gemini-agent');
+    const coordMailbox = new Mailbox(testDir, 'coordinator');
+    await geminiMailbox.init(teamName);
+    await coordMailbox.init(teamName);
+
+    await coordMailbox.send(teamName, 'gemini-agent', { type: 'task', text: 'slow task' });
+
+    let release: (() => void) | null = null;
+    const started = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let submitCalled = false;
+
+    const bridge = new GeminiBridge(teamName, geminiMailbox, {
+      pollIntervalMs: 30,
+      submitTask: async () => {
+        submitCalled = true;
+        await started; // held open until the test stops the bridge
+        return { ok: true, output: 'too late' };
+      },
+    });
+
+    bridge.start();
+    await until(() => submitCalled, 'the task to be submitted');
+    bridge.stop();
+    release!();
+
+    // Give the resolved submission a chance to post, so this asserts silence
+    // rather than merely racing ahead of it.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const inbox = JSON.parse(
+      await fs.readFile(path.join(testDir, teamName, 'inboxes', 'coordinator.json'), 'utf8'),
+    ) as Array<{ type: string }>;
+    expect(inbox.some((m) => m.type === 'result')).toBe(false);
+  }, 20_000);
+
+  /**
+   * SEC-22 regression guard, asserted against the source rather than behaviour.
+   *
+   * The bridge used to run `spawn(geminiCliPath, ['chat', '--prompt', taskText])`
+   * — the exact construction SEC-22 removed from GeminiProvider, because argv is
+   * world-readable and a large prompt dies at MAX_ARG_STRLEN. A behavioural test
+   * cannot show the absence of a subprocess without mocking the module back in,
+   * so this pins the property directly: the bridge does not execute anything
+   * itself, it delegates to the submitter.
+   */
+  it('never executes a subprocess of its own', async () => {
+    const source = await fs.readFile(
+      fileURLToPath(new URL('../../../src/teams/gemini-bridge.ts', import.meta.url)),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    expect(code, 'gemini-bridge imports node:child_process again').not.toMatch(/from ['"]node:child_process['"]/);
+    expect(code, 'gemini-bridge spawns a process again — see SEC-22').not.toMatch(/\bspawn\s*\(/);
+    expect(code, 'gemini-bridge execs a process again — see SEC-22').not.toMatch(/\bexec(Sync|File)?\s*\(/);
+  });
 });
