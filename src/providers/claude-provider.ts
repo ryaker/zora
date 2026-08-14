@@ -128,8 +128,19 @@ export interface ClaudeProviderOptions {
   /** Allowed tools list for the SDK. */
   allowedTools?: string[];
 
-  /** Permission mode. Defaults to 'bypassPermissions' for autonomous operation. */
-  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  /**
+   * SEC-20: Permission mode. Defaults to 'default', which is the only mode in
+   * which the SDK consults `canUseTool`.
+   *
+   * The SDK's permission-bypass mode is deliberately not offered here: it skips
+   * every permission check, the SDK does not invoke `canUseTool` under it, and
+   * it requires `allowDangerouslySkipPermissions` which Zora never sets. While
+   * it was the default, PolicyEngine, the SEC-10 capability tokens, and the
+   * channel allowlist were all inert on the main task path and policy.toml was
+   * advisory. Anyone who genuinely wants that mode can set the SDK flag
+   * themselves and own the consequences.
+   */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan';
 }
 
 // ─── Claude Provider ────────────────────────────────────────────────
@@ -176,7 +187,8 @@ export class ClaudeProvider implements LLMProvider {
     this._cwd = options.cwd ?? process.cwd();
     this._systemPrompt = options.systemPrompt ?? '';
     this._allowedTools = options.allowedTools ?? [];
-    this._permissionMode = options.permissionMode ?? 'bypassPermissions';
+    // SEC-20: 'default' is the only mode under which the SDK calls canUseTool.
+    this._permissionMode = options.permissionMode ?? 'default';
     this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK

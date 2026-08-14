@@ -63,7 +63,8 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
     if (!pConfig.enabled) continue;
     switch (pConfig.type) {
       case 'claude-sdk':
-        providers.push(new ClaudeProvider({ config: pConfig }));
+        // SEC-20: explicit — see the matching comment in cli/index.ts.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default' }));
         break;
       case 'gemini-cli':
         providers.push(new GeminiProvider({ config: pConfig }));
