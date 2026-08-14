@@ -81,6 +81,8 @@ import type { WorkerCapabilityToken } from '../types.js';
 import { IntegrityGuardian } from '../security/integrity-guardian.js';
 import { SecretsManager } from '../security/secrets-manager.js';
 import { createLogger, initLogger } from '../utils/logger.js';
+import { initGlobalCooldown, cooldownConfigFrom } from '../core/agent-cooldown.js';
+import { initGlobalForecaster, forecasterConfigFrom } from '../core/memory-risk-forecaster.js';
 import { TLCIDispatcher, type DispatchResult, type DispatchCallOptions } from './tlci-dispatcher.js';
 import { PlanCache } from '../memory/plan-cache.js';
 import type { WorkflowStep } from './step-classifier.js';
@@ -418,6 +420,18 @@ export class Orchestrator {
     // Wire agent.log_level — reinitialize root logger with config-specified level.
     // This overrides the env-var default so config.toml is the authoritative source.
     initLogger({ level: this._config.agent.log_level }, /* force= */ true);
+
+    // SEC-29: initialize the process-global enforcement singletons here, on the
+    // shared boot path, rather than in each entry point. Both were previously
+    // initialized only in `cli/daemon.ts`, so on the `zora-agent ask` path
+    // `getGlobalForecaster()` and `getGlobalCooldown()` returned null and their
+    // enforcement silently did not apply — `IrreversibilityScorerHook` skips its
+    // whole session-risk block when the forecaster is absent, so `shouldAutoDeny`
+    // never fired there. Same hook, same registration, weaker enforcement,
+    // nothing looking. `initLogger` above already established the pattern.
+    const raw = this._config as unknown as Record<string, unknown>;
+    initGlobalCooldown(cooldownConfigFrom(raw['cooldown']));
+    initGlobalForecaster(forecasterConfigFrom(raw['risk_forecaster']));
 
     // Initialize core services
     // Wire notifications.enabled + per-event toggles from config

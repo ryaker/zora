@@ -245,6 +245,56 @@ export const DEFAULT_FORECASTER_CONFIG: ForecasterConfig = {
   stateDir: '~/.zora/session-risk',
 };
 
+/**
+ * Build a ForecasterConfig from the raw `[risk_forecaster]` config table (SEC-29).
+ *
+ * See `cooldownConfigFrom` — same reasoning. This one mattered more: with no
+ * forecaster the `IrreversibilityScorerHook` skips its session-risk block
+ * entirely, so `shouldAutoDeny` never fires and a run that the daemon would
+ * have stopped for a critical risk pattern proceeded under `ask`.
+ */
+export function forecasterConfigFrom(raw: unknown): ForecasterConfig {
+  const table = (raw as Record<string, unknown> | undefined) ?? undefined;
+  if (!table) return { ...DEFAULT_FORECASTER_CONFIG };
+
+  // Fallbacks read from DEFAULT_FORECASTER_CONFIG, not repeated as literals —
+  // duplicating them meant a changed default applied only to installs with no
+  // [risk_forecaster] table.
+  const positive = (key: string, fallback: number): number => {
+    const value = table[key];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  const enabled = typeof table['enabled'] === 'boolean' ? table['enabled'] : DEFAULT_FORECASTER_CONFIG.enabled;
+
+  const interceptThreshold = positive('intercept_threshold', DEFAULT_FORECASTER_CONFIG.interceptThreshold);
+  let autoDenyThreshold = positive('auto_deny_threshold', DEFAULT_FORECASTER_CONFIG.autoDenyThreshold);
+
+  // `maxEvents` is the rolling-window size, applied as
+  // `events.slice(-maxEvents)` behind `events.length > maxEvents`. At 0 that is
+  // `slice(-0)`, which returns the *whole* array — so the guard is always true,
+  // nothing is ever trimmed, and session history grows without bound for the
+  // life of the process. A fractional window is equally meaningless.
+  const rawMax = table['max_events'];
+  const maxEvents =
+    typeof rawMax === 'number' && Number.isInteger(rawMax) && rawMax > 0
+      ? rawMax
+      : DEFAULT_FORECASTER_CONFIG.maxEvents;
+
+  // Auto-deny is the harder action and must sit at or above intercept. Inverted
+  // thresholds do not merely disable escalation — every score in the gap is
+  // auto-denied *instead of* intercepted, so a misconfiguration silently makes
+  // the agent refuse more than it should while looking like a tuning change.
+  if (autoDenyThreshold < interceptThreshold) {
+    log.warn(
+      { interceptThreshold, autoDenyThreshold, using: DEFAULT_FORECASTER_CONFIG.autoDenyThreshold },
+      'risk_forecaster.auto_deny_threshold is below intercept_threshold — ignoring it and using the default',
+    );
+    autoDenyThreshold = Math.max(interceptThreshold, DEFAULT_FORECASTER_CONFIG.autoDenyThreshold);
+  }
+
+  return { ...DEFAULT_FORECASTER_CONFIG, enabled, interceptThreshold, autoDenyThreshold, maxEvents };
+}
+
 // Module-level singleton
 let _globalForecaster: MemoryRiskForecaster | null = null;
 

@@ -213,6 +213,45 @@ export const DEFAULT_COOLDOWN_CONFIG: CooldownConfig = {
   reputationDir: '~/.zora/agent-reputation',
 };
 
+/**
+ * Build a CooldownConfig from the raw `[cooldown]` config table (SEC-29).
+ *
+ * Lives here rather than in an entry point because a global singleton that
+ * each entry point configures for itself is a global singleton that some
+ * entry point will forget. `zora-agent ask` did: `initGlobalCooldown` was
+ * called only from the daemon, so `getGlobalCooldown()` returned null on the
+ * ask path and the subagent cooldown never applied there.
+ */
+export function cooldownConfigFrom(raw: unknown): CooldownConfig {
+  const table = (raw as Record<string, unknown> | undefined) ?? undefined;
+  if (!table) return { ...DEFAULT_COOLDOWN_CONFIG };
+
+  /**
+   * Fall back to the default for anything that is not a positive finite number.
+   * The fallback is read from DEFAULT_COOLDOWN_CONFIG rather than repeated as a
+   * literal: duplicating them gave each setting two sources of truth, so
+   * changing a default silently applied only to installs with no [cooldown]
+   * table at all.
+   */
+  const positive = (key: string, fallback: number): number => {
+    const value = table[key];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  // A non-boolean `enabled` was previously cast, not checked — so `enabled =
+  // "false"` in TOML is a truthy string and would have switched cooldown ON.
+  const enabled = typeof table['enabled'] === 'boolean' ? table['enabled'] : DEFAULT_COOLDOWN_CONFIG.enabled;
+
+  return {
+    ...DEFAULT_COOLDOWN_CONFIG,
+    enabled,
+    level1Threshold: positive('level1_threshold', DEFAULT_COOLDOWN_CONFIG.level1Threshold),
+    level2Threshold: positive('level2_threshold', DEFAULT_COOLDOWN_CONFIG.level2Threshold),
+    shutdownThreshold: positive('shutdown_threshold', DEFAULT_COOLDOWN_CONFIG.shutdownThreshold),
+    resetAfterHours: positive('reset_after_hours', DEFAULT_COOLDOWN_CONFIG.resetAfterHours),
+    level1DelayMs: positive('level1_delay_ms', DEFAULT_COOLDOWN_CONFIG.level1DelayMs),
+  };
+}
+
 // Module-level singleton for global access across the process
 let _globalCooldown: AgentCooldown | null = null;
 
