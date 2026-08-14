@@ -15,13 +15,16 @@
  * So the deliverable is not "gate the fourth path", it is "make a fifth path
  * impossible to add quietly". These tests are the thing that notices:
  *
- *   1. A **registry check**. Every construction site in `src/` — every
- *      `new ExecutionLoop(...)` and every direct `query({...})` / `queryFn({...})`
- *      into the SDK — must be listed below with a rationale. A new file that
- *      constructs one fails immediately with a message pointing at
- *      `buildEnforcedSdkOptions()`. This is the test that breaks on drift:
- *      the failure is triggered by the *existence* of an unregistered site, so
- *      it cannot be satisfied by the new path being carefully written.
+ *   1. A **registry check**. Every file in `src/` that *acquires* the SDK's
+ *      execution entry point — imports `query`, dynamically imports the SDK
+ *      module, or constructs an `ExecutionLoop` — must be listed below with a
+ *      rationale. A new file that does fails immediately with a message
+ *      pointing at `buildEnforcedSdkOptions()`. This is the test that breaks on
+ *      drift: the failure is triggered by the *existence* of an unregistered
+ *      site, so it cannot be satisfied by the new path being carefully written.
+ *      See `SDK_ACQUISITION` below for why this scans acquisition and not call
+ *      shape — the first version of this guard scanned call shape and the
+ *      property in the previous sentence was not actually true of it.
  *
  *   2. A **spread check**. Every registered `new ExecutionLoop({...})` literal
  *      must actually spread `buildEnforcedSdkOptions(...)` (or be registered as
@@ -123,32 +126,100 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+const SDK_MODULE = String.raw`@anthropic-ai/claude-agent-sdk`;
+
 /**
- * Text that looks like a construction of an SDK execution.
+ * How a file can come to hold the SDK's execution entry point.
  *
- * `query({` / `queryFn({` catches a direct SDK entry; `new ExecutionLoop(`
- * catches Zora's wrapper. Deliberately textual: the point is to notice a *new
- * file* doing this, and a type-level or runtime registry would only see paths
- * that already imported the right thing.
+ * This guard originally matched *call shapes* — `query({`, `queryFn({`,
+ * `new ExecutionLoop(`. That was unsound, and the comment above claiming the
+ * failure could not be dodged by writing the new path carefully was false of
+ * it. All three patterns required an inline object literal at the call site,
+ * so hoisting the options to a variable walked straight past them:
+ *
+ *     const enforced = buildEnforcedSdkOptions({ … });
+ *     query(enforced);                    // ← invisible to the old guard
+ *
+ * That is not an adversarial shape; it is this codebase's own idiom, in
+ * `claude-provider.ts`. Aliased imports (`query as sdkQuery`), namespace
+ * imports, member calls (`this.sdk.query({`) and dynamic imports evaded it
+ * too — and the last of those is how the **main task path** acquires the SDK
+ * (`claude-provider.ts` `_resolveQueryFn`). The reference implementation for
+ * "how Zora calls the SDK" was matched only incidentally, by an unrelated
+ * `queryFn({` elsewhere in the same file. A new provider modeled on it — the
+ * natural way to add one — would have been registered nowhere and caught by
+ * nothing. That is the SEC-23 shape exactly: not a missing check, but a new
+ * path quietly picking its own defenses while nothing is looking.
+ *
+ * Matching call syntax is unbounded — every pattern added invites the next
+ * shape. Acquisition is not. A file cannot call the SDK without first
+ * obtaining it, and there are only three ways to obtain it. So the scan gates
+ * on the capability, not on how it is spelled at the point of use.
+ *
+ * The precision matters in the other direction too: 18 files under `src/`
+ * mention the SDK or `execution-loop`, and a naive "references the SDK" scan
+ * would put 14 type-only importers into the registry and train everyone to
+ * rubber-stamp entries — the exact failure the header warns about. So a
+ * type-only import is not acquisition, and neither is importing
+ * `createSdkMcpServer`/`tool`, which register tools but cannot run a turn.
+ * `SDK_ACQUISITION_SHAPES` below pins both halves of that boundary.
  */
-const CONSTRUCTION_PATTERNS: RegExp[] = [
-  /\bnew\s+ExecutionLoop\s*\(/,
-  /(?<![.\w])query\s*\(\s*\{/,
-  /\bqueryFn\s*\(\s*\{/,
+const SDK_ACQUISITION: { reason: string; test: (code: string) => boolean }[] = [
+  {
+    reason: 'imports query from the SDK',
+    test: code => {
+      // A value import (not `import type`) whose specifiers include `query`,
+      // or which takes the whole namespace/default and so includes it.
+      const re = new RegExp(String.raw`import\s+(?!type\s)([\s\S]{0,400}?)from\s*['"]${SDK_MODULE}['"]`, 'g');
+      for (const match of code.matchAll(re)) {
+        const clause = match[1];
+        if (/\*\s+as\s+[\w$]+/.test(clause)) return true;   // import * as sdk
+        if (/^\s*[\w$]+\s*(,|\s*$)/.test(clause)) return true; // default import
+        const named = clause.match(/\{([\s\S]*)\}/)?.[1] ?? '';
+        const acquiresQuery = named
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+          // `{ type Options, query }` — inline type specifiers are not values.
+          .some(s => !/^type\s/.test(s) && /^query\b/.test(s));
+        if (acquiresQuery) return true;
+      }
+      return false;
+    },
+  },
+  {
+    reason: 'dynamically imports the SDK',
+    // Hands back the whole namespace, `query` included. This is the main task
+    // path, and the shape the old call-site scan could not see.
+    test: code => new RegExp(String.raw`import\s*\(\s*['"]${SDK_MODULE}['"]\s*\)`).test(code),
+  },
+  {
+    reason: 'constructs an ExecutionLoop',
+    // Zora's own wrapper. Importing the class without constructing one is not
+    // acquisition — the construction is what runs a turn, wherever it happens.
+    test: code => /\bnew\s+ExecutionLoop\s*\(/.test(code),
+  },
 ];
 
-function findConstructionSites(): string[] {
-  const hits: string[] = [];
+/** Strip comments so prose about `query({ … })` is not mistaken for code. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+function acquisitionReasons(code: string): string[] {
+  return SDK_ACQUISITION.filter(rule => rule.test(code)).map(rule => rule.reason);
+}
+
+/** Every file in `src/` that holds the SDK's execution entry point, and why. */
+function findConstructionSites(): { file: string; reasons: string[] }[] {
+  const hits: { file: string; reasons: string[] }[] = [];
   for (const file of walk(SRC_ROOT)) {
-    const source = fs.readFileSync(file, 'utf-8');
-    // Strip block comments so a doc-comment mentioning `query({ prompt, options })`
-    // is not mistaken for a call site.
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '');
-    if (CONSTRUCTION_PATTERNS.some(p => p.test(code))) {
-      hits.push(path.relative(SRC_ROOT, file).split(path.sep).join('/'));
+    const reasons = acquisitionReasons(stripComments(fs.readFileSync(file, 'utf-8')));
+    if (reasons.length > 0) {
+      hits.push({ file: path.relative(SRC_ROOT, file).split(path.sep).join('/'), reasons });
     }
   }
-  return hits.sort();
+  return hits.sort((a, b) => a.file.localeCompare(b.file));
 }
 
 /** Extract the `{ ... }` object literal that follows each `new ExecutionLoop(`. */
@@ -180,15 +251,15 @@ describe('SEC-23 — every SDK construction site is registered', () => {
   it('finds no construction site outside the registry', () => {
     const found = findConstructionSites();
     const registered = new Set(REGISTERED_SITES.map(s => s.file));
-    const unregistered = found.filter(f => !registered.has(f));
+    const unregistered = found.filter(f => !registered.has(f.file));
 
     expect(
-      unregistered,
+      unregistered.map(f => f.file),
       unregistered.length === 0
         ? ''
-        : `SEC-23: these files build Claude Agent SDK options but are not in ` +
-          `REGISTERED_SITES in tests/security/sdk-options-coverage.test.ts:\n` +
-          unregistered.map(f => `  src/${f}`).join('\n') +
+        : `SEC-23: these files hold the Claude Agent SDK's execution entry point but ` +
+          `are not in REGISTERED_SITES in tests/security/sdk-options-coverage.test.ts:\n` +
+          unregistered.map(f => `  src/${f.file} — ${f.reasons.join(', ')}`).join('\n') +
           `\n\nA new execution path must get the same gate as the others. Route its ` +
           `options through buildEnforcedSdkOptions() in src/security/enforced-sdk-options.ts ` +
           `— that is what supplies permissionMode, canUseTool, hooks, allowedTools and ` +
@@ -197,8 +268,15 @@ describe('SEC-23 — every SDK construction site is registered', () => {
     ).toEqual([]);
   });
 
+  // This check carries a second duty that is easy to mistake for bookkeeping:
+  // it is what protects the *existing* sites against evasion. If a registered
+  // file is refactored into a shape the scanner cannot see, it drops out of
+  // `found` and fails here as stale — so an evasion of the scan is loud even
+  // though the scan itself went quiet. Do not "simplify" this away as
+  // redundant with the registry check above; the two cover different
+  // populations (this one existing files, that one new ones).
   it('has no stale registry entry — a removed path should be de-registered', () => {
-    const found = new Set(findConstructionSites());
+    const found = new Set(findConstructionSites().map(f => f.file));
     const stale = REGISTERED_SITES.filter(s => !found.has(s.file)).map(s => s.file);
     expect(stale, `registered but no longer constructing SDK options: ${stale.join(', ')}`).toEqual([]);
   });
@@ -207,6 +285,128 @@ describe('SEC-23 — every SDK construction site is registered', () => {
     for (const site of REGISTERED_SITES) {
       expect(site.rationale.length, `${site.file} has no rationale`).toBeGreaterThan(40);
     }
+  });
+});
+
+// ─── 1b. The guard's own claimed property, asserted ──────────────────
+
+/**
+ * A drift guard is only worth its line count if it actually has the property
+ * it claims. The first version of this file claimed in prose that the failure
+ * "cannot be satisfied by the new path being carefully written" — and that was
+ * untrue of it, which nothing noticed because the claim lived in a comment
+ * instead of an assertion. The five shapes marked below as previously-missed
+ * are the ones that walked past it.
+ *
+ * So the property is a test now. Each row is a file the scanner is shown
+ * directly; `caught: true` means it must be flagged for registration.
+ */
+const SDK_ACQUISITION_SHAPES: { name: string; caught: boolean; source: string; note?: string }[] = [
+  {
+    name: 'inline object literal at the call site',
+    caught: true,
+    source: `import { query } from '${'@anthropic-ai/claude-agent-sdk'}';\nquery({ prompt, options });`,
+  },
+  {
+    name: 'options hoisted to a variable',
+    caught: true,
+    note: 'previously missed — a routine refactor, not an attack',
+    source: `import { query } from '${'@anthropic-ai/claude-agent-sdk'}';\nconst opts = { prompt };\nquery(opts);`,
+  },
+  {
+    name: 'options from buildEnforcedSdkOptions() into a variable',
+    caught: true,
+    note: "previously missed — and this is claude-provider.ts's own idiom",
+    source: `import { query } from '${'@anthropic-ai/claude-agent-sdk'}';\nconst enforced = buildEnforcedSdkOptions({ policy });\nquery(enforced);`,
+  },
+  {
+    name: 'aliased import',
+    caught: true,
+    note: 'previously missed',
+    source: `import { query as sdkQuery } from '${'@anthropic-ai/claude-agent-sdk'}';\nsdkQuery({ prompt });`,
+  },
+  {
+    name: 'namespace import',
+    caught: true,
+    note: 'previously missed',
+    source: `import * as sdk from '${'@anthropic-ai/claude-agent-sdk'}';\nsdk.query({ prompt });`,
+  },
+  {
+    name: 'member call on a stored handle',
+    caught: true,
+    note: 'previously missed',
+    source: `import { query } from '${'@anthropic-ai/claude-agent-sdk'}';\nthis._sdk = { query };\nthis._sdk.query({ prompt });`,
+  },
+  {
+    name: 'dynamic import',
+    caught: true,
+    note: 'previously missed — and it is how the main task path acquires the SDK',
+    source: `const m = await import('${'@anthropic-ai/claude-agent-sdk'}');\nconst q = m.query;\nq({ prompt });`,
+  },
+  {
+    name: 'ExecutionLoop construction',
+    caught: true,
+    source: `new ExecutionLoop({ systemPrompt: 'x' });`,
+  },
+  // The other half of the boundary. These must stay clean, or the registry
+  // fills with files nobody needed to reason about and entries get
+  // rubber-stamped — which defeats the whole mechanism.
+  {
+    name: 'type-only import of SDK types',
+    caught: false,
+    source: `import type { Options } from '${'@anthropic-ai/claude-agent-sdk'}';\nconst o: Options = {};`,
+  },
+  {
+    name: 'inline type specifier',
+    caught: false,
+    source: `import { type Options, type HookInput } from '${'@anthropic-ai/claude-agent-sdk'}';`,
+  },
+  {
+    name: 'MCP registration helpers — cannot run a turn',
+    caught: false,
+    source: `import { createSdkMcpServer, tool } from '${'@anthropic-ai/claude-agent-sdk'}';`,
+  },
+  {
+    name: 'type-only import from execution-loop',
+    caught: false,
+    source: `import type { ExecutionLoopOptions } from '../orchestrator/execution-loop.js';`,
+  },
+  {
+    name: 'prose in a comment mentioning query({ … })',
+    caught: false,
+    source: `/** Calls query({ prompt, options }) eventually. */\nexport const x = 1;`,
+  },
+];
+
+describe('SEC-23 — the guard detects acquisition, not call shape', () => {
+  it.each(SDK_ACQUISITION_SHAPES)('$name', ({ caught, source, note }) => {
+    const reasons = acquisitionReasons(stripComments(source));
+    expect(
+      reasons.length > 0,
+      caught
+        ? `this shape acquires the SDK but the scanner does not see it${note ? ` (${note})` : ''} — ` +
+          `a file written this way would be registered nowhere and gated by nothing`
+        : `this shape does not acquire the SDK but the scanner flags it — ` +
+          `false positives push type-only importers into REGISTERED_SITES and turn ` +
+          `registration into a rubber stamp`,
+    ).toBe(caught);
+  });
+
+  it('sees the main task path on its own terms, not incidentally', () => {
+    // claude-provider.ts acquires the SDK by dynamic import in _resolveQueryFn.
+    // Under the old call-shape scan it was matched only because an unrelated
+    // `queryFn({` literal happened to sit elsewhere in the file — delete that
+    // literal and the reference implementation for calling the SDK went dark.
+    const provider = findConstructionSites().find(f => f.file === 'providers/claude-provider.ts');
+    expect(provider, 'claude-provider.ts is no longer detected at all').toBeDefined();
+    expect(provider!.reasons).toContain('dynamically imports the SDK');
+  });
+
+  it('does not inflate the registry with files that merely reference the SDK', () => {
+    // 18 files under src/ mention the SDK or execution-loop; only the ones that
+    // can actually run a turn belong in the registry. If this number climbs,
+    // the scan has gone broad and entries will start getting rubber-stamped.
+    expect(findConstructionSites().length).toBeLessThanOrEqual(REGISTERED_SITES.length);
   });
 });
 
