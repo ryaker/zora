@@ -27,6 +27,22 @@ interface HealthState {
   lastRestart?: string;
 }
 
+/**
+ * ERR-21: the outcome of reading the health file, with "absent" kept distinct
+ * from "unusable".
+ *
+ * The distinction is the whole fix. `_readState()` used to answer every failure
+ * with a fresh heartbeat, which is only the right answer for one of these three
+ * cases; for the other two it is a lie that the caller cannot detect, and
+ * `_check()` believed it.
+ */
+type ReadResult =
+  | { ok: true; state: HealthState }
+  /** The file does not exist yet. `start()` has not run, or state was wiped. */
+  | { ok: false; reason: 'missing' }
+  /** The file exists but its last-heartbeat time cannot be established. */
+  | { ok: false; reason: 'unusable'; detail: string };
+
 export class BridgeWatchdog {
   private readonly _bridge: GeminiBridge;
   private readonly _healthCheckIntervalMs: number;
@@ -80,9 +96,23 @@ export class BridgeWatchdog {
 
   /**
    * Writes a heartbeat timestamp to the health file.
+   *
+   * ERR-21: this is the one path that may legitimately overwrite an unusable
+   * file. It runs from the bridge's poll-completion callback, so reaching it at
+   * all is positive evidence that the bridge is alive — writing a current
+   * heartbeat is the truth, not an assumption, and it heals a damaged file
+   * instead of leaving the watchdog to restart a working bridge forever. The
+   * damage is logged on the way past so a recurring corruption is visible.
    */
   async writeHeartbeat(): Promise<void> {
-    const state = await this._readState();
+    const read = await this._readState();
+    if (!read.ok && read.reason === 'unusable') {
+      log.warn(
+        { healthFile: this._healthFilePath, detail: read.detail },
+        'Health file unusable; rewriting it from a live poll heartbeat',
+      );
+    }
+    const state = read.ok ? read.state : this._freshState();
     state.lastHeartbeat = new Date().toISOString();
     await this._writeState(state);
   }
@@ -92,9 +122,29 @@ export class BridgeWatchdog {
     this._checking = true;
 
     try {
-      const state = await this._readState();
-      const lastBeat = new Date(state.lastHeartbeat).getTime();
-      const elapsed = Date.now() - lastBeat;
+      // ERR-21: fail CLOSED. The check has exactly one question to answer —
+      // how long since the last heartbeat — and if it cannot answer it, the
+      // safe reading is "too long", not "no time at all". An absent file counts
+      // as unanswerable too: `start()` writes one before the first check, so a
+      // missing file at check time means state was lost, not that the bridge is
+      // fresh. The restart path rewrites the file, so a single bad read heals
+      // itself; a persistently unreadable state directory exhausts maxRestarts
+      // and stops the watchdog loudly, which is the outcome this gap is about.
+      const read = await this._readState();
+      let elapsed: number;
+      if (read.ok) {
+        elapsed = Date.now() - new Date(read.state.lastHeartbeat).getTime();
+      } else {
+        elapsed = Number.POSITIVE_INFINITY;
+        log.error(
+          {
+            healthFile: this._healthFilePath,
+            reason: read.reason,
+            ...(read.reason === 'unusable' ? { detail: read.detail } : {}),
+          },
+          'Cannot determine last heartbeat; treating bridge as stale',
+        );
+      }
 
       if (elapsed > this._maxStaleMs) {
         if (this._restartCount >= this._maxRestarts) {
@@ -107,7 +157,18 @@ export class BridgeWatchdog {
         const backoffMs = Math.min(1000 * Math.pow(2, this._restartCount), 60_000);
         this._restartCount++;
 
-        log.warn({ elapsedMs: elapsed, attempt: this._restartCount, maxRestarts: this._maxRestarts, backoffMs }, 'Heartbeat stale, restarting bridge');
+        // ERR-21: the fail-closed path sets elapsed to Infinity, which JSON
+        // serialises to null — indistinguishable in the log from a field that
+        // was never set. Name the case instead.
+        log.warn(
+          {
+            elapsedMs: Number.isFinite(elapsed) ? elapsed : 'unknown (health file unreadable)',
+            attempt: this._restartCount,
+            maxRestarts: this._maxRestarts,
+            backoffMs,
+          },
+          'Heartbeat stale, restarting bridge',
+        );
 
         this._bridge.stop();
 
@@ -117,8 +178,13 @@ export class BridgeWatchdog {
           this._bridge.start();
           await this.writeHeartbeat();
 
-          // Re-read state to avoid overwriting concurrent heartbeat updates
-          const freshState = await this._readState();
+          // Re-read state to avoid overwriting concurrent heartbeat updates.
+          // ERR-21: `writeHeartbeat()` above has just rewritten the file, so a
+          // read failure here is new damage rather than the one being healed;
+          // fall back to a current heartbeat so the restart is still recorded
+          // and the next check has a timestamp to measure against.
+          const reread = await this._readState();
+          const freshState = reread.ok ? reread.state : this._freshState();
           freshState.restartCount = this._restartCount;
           freshState.lastRestart = new Date().toISOString();
           await this._writeState(freshState);
@@ -131,16 +197,78 @@ export class BridgeWatchdog {
     }
   }
 
-  private async _readState(): Promise<HealthState> {
+  /**
+   * ERR-21: reads the health file without inventing a heartbeat.
+   *
+   * Every failure here used to collapse into `{ lastHeartbeat: now }`, which
+   * made an unreadable file indistinguishable from a perfectly healthy bridge
+   * that had just checked in. That is a fail-open: a corrupt file, a bad
+   * permission, a directory where the file should be, or a `{}` document all
+   * produced an elapsed time of ~0 forever, so the staleness branch in
+   * `_check()` became unreachable and the watchdog stopped watching in silence.
+   *
+   * The shape check is part of the same hole rather than an extra: JSON.parse
+   * succeeds on `{}` and on `{"lastHeartbeat":"banana"}`, and
+   * `new Date(...).getTime()` then yields NaN. Every comparison against NaN is
+   * false, so `elapsed > maxStaleMs` is false and the watchdog goes blind
+   * through a path that never throws and never logs. `lastHeartbeat` is
+   * therefore validated strictly; `restartCount` is not, because it is only
+   * persisted for observability — the restart limit is enforced against the
+   * in-memory `this._restartCount`.
+   */
+  private async _readState(): Promise<ReadResult> {
+    let content: string;
     try {
-      const content = await fs.readFile(this._healthFilePath, 'utf8');
-      return JSON.parse(content) as HealthState;
-    } catch {
-      return {
-        lastHeartbeat: new Date().toISOString(),
-        restartCount: 0,
-      };
+      content = await fs.readFile(this._healthFilePath, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { ok: false, reason: 'missing' };
+      }
+      return { ok: false, reason: 'unusable', detail: `unreadable: ${String(err)}` };
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content) as unknown;
+    } catch (err) {
+      return { ok: false, reason: 'unusable', detail: `unparseable: ${String(err)}` };
+    }
+
+    if (typeof parsed !== 'object' || parsed === null) {
+      return { ok: false, reason: 'unusable', detail: 'not a JSON object' };
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const lastHeartbeat = record.lastHeartbeat;
+    if (typeof lastHeartbeat !== 'string' || !Number.isFinite(new Date(lastHeartbeat).getTime())) {
+      return { ok: false, reason: 'unusable', detail: 'lastHeartbeat missing or not a valid date' };
+    }
+
+    const restartCount = typeof record.restartCount === 'number' && Number.isFinite(record.restartCount)
+      ? record.restartCount
+      : 0;
+
+    return {
+      ok: true,
+      state: {
+        lastHeartbeat,
+        restartCount,
+        ...(typeof record.lastRestart === 'string' ? { lastRestart: record.lastRestart } : {}),
+      },
+    };
+  }
+
+  /**
+   * ERR-21: the state to build on when the file could not be read.
+   *
+   * `restartCount` comes from the in-memory counter rather than from 0, so
+   * healing a damaged file cannot hand the bridge a fresh budget of restarts.
+   */
+  private _freshState(): HealthState {
+    return {
+      lastHeartbeat: new Date().toISOString(),
+      restartCount: this._restartCount,
+    };
   }
 
   /**
@@ -154,12 +282,16 @@ export class BridgeWatchdog {
    * document spliced into another — observed in a test run as
    * `{ "lastHeartbeat": ..., "restartCount": 0 } "lastRestart": ... }`.
    *
-   * That is unrecoverable rather than transient, because `_readState()` treats
-   * any read or parse failure as "no state yet" and returns a *fresh*
-   * heartbeat: once the file is invalid, every health check sees an elapsed
-   * time of ~0 and the watchdog never restarts the bridge again. It fails
-   * open, silently. A rename is atomic, so a reader now sees either the whole
-   * previous document or the whole new one.
+   * That used to be unrecoverable rather than transient, because
+   * `_readState()` treated any read or parse failure as "no state yet" and
+   * returned a *fresh* heartbeat: once the file was invalid, every health check
+   * saw an elapsed time of ~0 and the watchdog never restarted the bridge
+   * again. ERR-21 closed that second half — an unreadable file now reads as
+   * stale and provokes a restart, which rewrites the file — so corruption is
+   * survivable. This atomic write remains the first line of defence: it stops
+   * the corruption happening at all, rather than relying on recovery from it.
+   * A rename is atomic, so a reader sees either the whole previous document or
+   * the whole new one.
    */
   private async _writeState(state: HealthState): Promise<void> {
     await writeAtomic(this._healthFilePath, JSON.stringify(state, null, 2));
