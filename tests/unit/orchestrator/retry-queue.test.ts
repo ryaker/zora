@@ -83,4 +83,36 @@ describe('RetryQueue', () => {
     await expect(queue.enqueue(task, 'err', 1)).rejects.toThrow('Max retries exceeded');
     expect(queue.size).toBe(0);
   });
+
+  // PERF-05: lets the orchestrator sleep until something is due.
+  describe('nextRunAt', () => {
+    it('is null while the queue is empty', () => {
+      expect(queue.nextRunAt()).toBeNull();
+    });
+
+    it('reports the earliest scheduled retry across entries', async () => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+
+      await queue.enqueue(task, 'err');                                   // +1m
+      await queue.enqueue({ ...task, jobId: 'retry-job-2' }, 'err');      // +1m
+      // Push the second entry far out; the first must still be the earliest.
+      const internal = queue as unknown as { _queue: Array<{ nextRunAt: Date }> };
+      internal._queue[1]!.nextRunAt = new Date(now + 60 * 60 * 1000);
+
+      expect(queue.nextRunAt()).toBe(now + 60 * 1000);
+
+      vi.useRealTimers();
+    });
+
+    it('treats an unparseable date as immediately ready, matching getReadyEntries', async () => {
+      await queue.enqueue(task, 'err');
+      const internal = queue as unknown as { _queue: Array<{ nextRunAt: Date }> };
+      internal._queue[0]!.nextRunAt = new Date('not a date');
+
+      expect(queue.nextRunAt()).toBe(0);
+      expect(queue.getReadyEntries()).toHaveLength(1);
+    });
+  });
 });

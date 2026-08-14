@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import { Orchestrator } from '../../../src/orchestrator/orchestrator.js';
 import { DEFAULT_CONFIG } from '../../../src/config/defaults.js';
 import { MockProvider } from '../../fixtures/mock-provider.js';
-import type { ZoraConfig, ZoraPolicy } from '../../../src/types.js';
+import type { TaskContext, ZoraConfig, ZoraPolicy } from '../../../src/types.js';
 
 function makePolicy(): ZoraPolicy {
   return {
@@ -235,6 +235,19 @@ describe('PERF-04 — background timers are unref\'d', () => {
     });
     await orchestrator.boot();
 
+    // PERF-05 means the retry poll only arms when something is queued.
+    await orchestrator.retryQueue.enqueue({
+      jobId: 'perf04-job',
+      task: 'retry me',
+      requiredCapabilities: [],
+      complexity: 'simple',
+      resourceType: 'general',
+      systemPrompt: '',
+      memoryContext: [],
+      history: [],
+    }, 'boom', 3);
+    (orchestrator as unknown as { _armRetryPoll(): void })._armRetryPoll();
+
     const timers = orchestrator as unknown as TimerInternals;
     for (const field of BACKGROUND_TIMER_FIELDS) {
       const timer = timers[field];
@@ -261,4 +274,174 @@ describe('PERF-04 — background timers are unref\'d', () => {
     expect(result.stdout).toContain('EXIT_PROBE_OK');
     expect(result.status).toBe(0);
   }, 90_000);
+});
+
+// ─── PERF-05 ─────────────────────────────────────────────────────
+
+interface RetryInternals {
+  _armRetryPoll(): void;
+  _pollRetryQueue(): Promise<void>;
+  _scheduleBackground(fn: () => void, ms: number): NodeJS.Timeout;
+  _resumeTask(task: TaskContext): Promise<string>;
+  _retryPollTimeout: NodeJS.Timeout | null;
+}
+
+function retry(orchestrator: Orchestrator): RetryInternals {
+  return orchestrator as unknown as RetryInternals;
+}
+
+/** Reaches into the queue's backing array to age an entry, as a restart would. */
+function setNextRunAt(orchestrator: Orchestrator, index: number, at: Date): void {
+  (orchestrator.retryQueue as unknown as { _queue: Array<{ nextRunAt: Date }> })._queue[index]!.nextRunAt = at;
+}
+
+function makeTask(jobId: string): TaskContext {
+  return {
+    jobId,
+    task: 'retry me',
+    requiredCapabilities: [],
+    complexity: 'simple',
+    resourceType: 'general',
+    systemPrompt: '',
+    memoryContext: [],
+    history: [],
+  };
+}
+
+describe('PERF-05 — demand-driven retry scheduling', () => {
+  let testDir: string;
+  let orchestrator: Orchestrator;
+
+  async function boot(retryAfterCooldown = true): Promise<Orchestrator> {
+    const config = makeConfig(testDir, path.join(testDir, 'SOUL.md'));
+    config.memory.long_term_file = path.join(testDir, 'memory', 'MEMORY.md');
+    config.memory.daily_notes_dir = path.join(testDir, 'memory', 'daily');
+    config.memory.items_dir = path.join(testDir, 'memory', 'items');
+    config.memory.categories_dir = path.join(testDir, 'memory', 'categories');
+    config.memory.auto_extract = false;
+    config.security.policy_file = path.join(testDir, 'policy.toml');
+    config.security.audit_log = path.join(testDir, 'audit', 'audit.jsonl');
+    config.failover.retry_after_cooldown = retryAfterCooldown;
+    config.steering.enabled = false;
+    config.notifications.enabled = false;
+
+    const o = new Orchestrator({
+      config,
+      policy: makePolicy(),
+      providers: [new MockProvider({ name: 'primary', rank: 1 })],
+      baseDir: testDir,
+      skipChannels: true,
+    });
+    await o.boot();
+    return o;
+  }
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `zora-perf05-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await fsp.mkdir(testDir, { recursive: true });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    if (orchestrator?.isBooted) await orchestrator.shutdown();
+    vi.restoreAllMocks();
+    await fsp.rm(testDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('schedules nothing while the queue is empty', async () => {
+    orchestrator = await boot();
+    expect(orchestrator.retryQueue.size).toBe(0);
+    expect(retry(orchestrator)._retryPollTimeout).toBeNull();
+  }, 30_000);
+
+  it('wakes at the earliest entry ready time, not on a fixed tick', async () => {
+    orchestrator = await boot();
+    // First enqueue backs off 1 minute (retryCount^2 minutes).
+    await orchestrator.retryQueue.enqueue(makeTask('job-a'), 'boom', 3);
+
+    const spy = vi.spyOn(retry(orchestrator), '_scheduleBackground');
+    retry(orchestrator)._armRetryPoll();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const delay = spy.mock.calls[0]![1];
+    // ~60s, and emphatically not the old 30s tick.
+    expect(delay).toBeGreaterThan(55_000);
+    expect(delay).toBeLessThanOrEqual(60_000);
+  }, 30_000);
+
+  it('re-arms automatically when an entry is enqueued', async () => {
+    orchestrator = await boot();
+    expect(retry(orchestrator)._retryPollTimeout).toBeNull();
+
+    // The private enqueue path is what the failover code calls.
+    await (orchestrator as unknown as { _enqueueRetry(t: TaskContext, e: string): Promise<void> })
+      ._enqueueRetry(makeTask('job-b'), 'boom');
+
+    expect(orchestrator.retryQueue.size).toBe(1);
+    expect(retry(orchestrator)._retryPollTimeout).not.toBeNull();
+  }, 30_000);
+
+  it('floors an overdue entry at the old 30s cadence rather than spinning', async () => {
+    orchestrator = await boot();
+    await orchestrator.retryQueue.enqueue(makeTask('job-c'), 'boom', 3);
+    // Force the entry into the past, as a failed retry or a restart would.
+    setNextRunAt(orchestrator, 0, new Date(Date.now() - 60_000));
+
+    const spy = vi.spyOn(retry(orchestrator), '_scheduleBackground');
+    retry(orchestrator)._armRetryPoll();
+    expect(spy.mock.calls[0]![1]).toBe(30_000);
+  }, 30_000);
+
+  it('caps the sleep so a long backoff still gets re-checked', async () => {
+    orchestrator = await boot();
+    await orchestrator.retryQueue.enqueue(makeTask('job-d'), 'boom', 3);
+    // Backoff caps at 24h; the poll must not sleep that long.
+    setNextRunAt(orchestrator, 0, new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+    const spy = vi.spyOn(retry(orchestrator), '_scheduleBackground');
+    retry(orchestrator)._armRetryPoll();
+    expect(spy.mock.calls[0]![1]).toBe(15 * 60 * 1000);
+  }, 30_000);
+
+  it('honours the retry_after_cooldown guard', async () => {
+    orchestrator = await boot(/* retryAfterCooldown */ false);
+    await orchestrator.retryQueue.enqueue(makeTask('job-e'), 'boom', 3);
+    setNextRunAt(orchestrator, 0, new Date(Date.now() - 1000));
+
+    const resume = vi.spyOn(retry(orchestrator), '_resumeTask').mockResolvedValue('never');
+    await retry(orchestrator)._pollRetryQueue();
+
+    expect(resume).not.toHaveBeenCalled();
+    expect(orchestrator.retryQueue.size).toBe(1); // entry untouched
+    expect(retry(orchestrator)._retryPollTimeout).not.toBeNull(); // still re-armed
+  }, 30_000);
+
+  it('drains a due entry and stops scheduling once the queue empties', async () => {
+    orchestrator = await boot();
+    await orchestrator.retryQueue.enqueue(makeTask('job-f'), 'boom', 3);
+    setNextRunAt(orchestrator, 0, new Date(Date.now() - 1000));
+
+    const resume = vi.spyOn(retry(orchestrator), '_resumeTask').mockResolvedValue('ok');
+    await retry(orchestrator)._pollRetryQueue();
+
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(orchestrator.retryQueue.size).toBe(0);
+    // Nothing left to wait for — no wakeups at all.
+    expect(retry(orchestrator)._retryPollTimeout).toBeNull();
+  }, 30_000);
+
+  it('drops an entry whose error budget is exhausted, without resuming it', async () => {
+    orchestrator = await boot();
+    const task = makeTask('job-g');
+    task.errorBudget = { maxBudget: 2, budgetConsumed: 1, maxTurns: 0, turnsConsumed: 0 };
+    await orchestrator.retryQueue.enqueue(task, 'boom', 3);
+    setNextRunAt(orchestrator, 0, new Date(Date.now() - 1000));
+
+    const resume = vi.spyOn(retry(orchestrator), '_resumeTask').mockResolvedValue('ok');
+    await retry(orchestrator)._pollRetryQueue();
+
+    expect(resume).not.toHaveBeenCalled();
+    expect(orchestrator.retryQueue.size).toBe(0);
+  }, 30_000);
 });

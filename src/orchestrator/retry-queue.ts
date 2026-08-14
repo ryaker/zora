@@ -125,6 +125,25 @@ export class RetryQueue {
   }
 
   /**
+   * PERF-05: Earliest `nextRunAt` in the queue, as epoch milliseconds.
+   *
+   * Lets the orchestrator sleep until something is actually due instead of
+   * waking on a fixed tick. An entry with an unparseable date is treated as
+   * immediately ready, matching getReadyEntries().
+   *
+   * @returns Epoch ms of the soonest scheduled retry, or null when the queue is empty.
+   */
+  nextRunAt(): number | null {
+    let earliest: number | null = null;
+    for (const entry of this._queue) {
+      const time = entry.nextRunAt.getTime();
+      const at = isNaN(time) ? 0 : time;
+      if (earliest === null || at < earliest) earliest = at;
+    }
+    return earliest;
+  }
+
+  /**
    * Removes a task from the queue once successfully completed.
    */
   async remove(jobId: string): Promise<void> {

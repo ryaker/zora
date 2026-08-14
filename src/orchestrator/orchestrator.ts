@@ -285,6 +285,112 @@ export class Orchestrator {
     return timer;
   }
 
+  /**
+   * PERF-05: Floor on retry-poll wakeups. Matches the old fixed 30s tick, so an
+   * entry that is already overdue — a retry that failed and stayed queued, or a
+   * queue restored from disk after downtime — is re-attempted at exactly the old
+   * cadence rather than spinning the event loop.
+   */
+  private static readonly RETRY_POLL_MIN_MS = 30 * 1000;
+
+  /**
+   * PERF-05: Ceiling on retry-poll sleep. Backoff caps at 24h, but re-checking at
+   * least this often means a suspend/resume or a wall-clock jump cannot strand an
+   * entry, and a `retry_after_cooldown` flip is picked up within one window.
+   */
+  private static readonly RETRY_POLL_MAX_MS = 15 * 60 * 1000;
+
+  /**
+   * PERF-05: Arms the retry poll for the earliest entry's ready time.
+   *
+   * Replaces a fixed 30s tick that fired 2,880 times a day whether or not
+   * anything was due. An empty queue schedules nothing at all; the enqueue path
+   * (_enqueueRetry) re-arms, and every poll re-arms itself from the finally
+   * block, so add and remove both re-derive the next wake.
+   *
+   * Idempotent: an existing timer is cleared first, so callers can re-arm freely.
+   */
+  private _armRetryPoll(): void {
+    if (this._retryPollTimeout) {
+      clearTimeout(this._retryPollTimeout);
+      this._retryPollTimeout = null;
+    }
+    // Shutdown may have raced an in-flight poll; do not resurrect the timer.
+    if (this._shuttingDown) return;
+
+    const nextRunAt = this._retryQueue.nextRunAt();
+    if (nextRunAt === null) {
+      // Nothing queued — sleep indefinitely. _enqueueRetry() wakes us.
+      return;
+    }
+
+    const waitMs = nextRunAt - Date.now();
+    const delay = waitMs <= 0
+      // Already due: floor the wake so a permanently-failing entry retries at the
+      // old 30s cadence instead of busy-looping on a task that never leaves the queue.
+      ? Orchestrator.RETRY_POLL_MIN_MS
+      : Math.min(waitMs, Orchestrator.RETRY_POLL_MAX_MS);
+
+    this._retryPollTimeout = this._scheduleBackground(() => {
+      void this._pollRetryQueue();
+    }, delay);
+  }
+
+  /**
+   * PERF-05: One retry-queue pass. Body is unchanged from the old fixed-tick
+   * poll — including the `retry_after_cooldown` guard and the ERR-08 error-budget
+   * accounting — only the scheduling around it moved.
+   */
+  private async _pollRetryQueue(): Promise<void> {
+    this._retryPollTimeout = null;
+    try {
+      // Guard: skip all retries if retry_after_cooldown is disabled
+      if (!this._failoverController.shouldRetryAfterCooldown()) {
+        return;
+      }
+      const readyEntries = this._retryQueue.getReadyEntries();
+      for (const entry of readyEntries) {
+        try {
+          // ERR-08: Increment budgetConsumed before re-executing to track retry depth
+          if (entry.task.errorBudget) {
+            entry.task.errorBudget.budgetConsumed += 1;
+            // Skip tasks with exhausted budget
+            if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
+              log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
+              await this._retryQueue.remove(entry.task.jobId);
+              continue;
+            }
+          }
+          await this._resumeTask(entry.task);
+          await this._retryQueue.remove(entry.task.jobId);
+        } catch (err) {
+          log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
+          // Leave task in queue for next poll cycle
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'RetryQueue poll failed');
+    } finally {
+      // Re-derive the next wake from whatever is left in the queue.
+      this._armRetryPoll();
+    }
+  }
+
+  /**
+   * PERF-05: Enqueues a failed task and re-arms the poll so the new entry is
+   * woken at its own ready time rather than on the next fixed tick.
+   *
+   * Rethrows exactly as RetryQueue.enqueue() does (notably "max retries
+   * exceeded"), so callers keep their existing swallow-and-continue behaviour.
+   */
+  private async _enqueueRetry(task: TaskContext, error: string): Promise<void> {
+    try {
+      await this._retryQueue.enqueue(task, error, this._config.failover.max_retries);
+    } finally {
+      this._armRetryPoll();
+    }
+  }
+
   setApprovalQueue(queue: ApprovalQueue): void {
     this._approvalQueue = queue;
     // If already booted, propagate immediately
@@ -526,44 +632,8 @@ export class Orchestrator {
     };
     scheduleAuthCheck();
 
-    // R5 / ERR-08: Poll RetryQueue (every 30 seconds) — use _resumeTask to preserve full
-    // TaskContext (state continuity) instead of re-submitting just the original prompt.
-    // retry_after_cooldown: if false, skip the retry poll entirely.
-    const scheduleRetryPoll = () => {
-      this._retryPollTimeout = this._scheduleBackground(async () => {
-        // Guard: skip all retries if retry_after_cooldown is disabled
-        if (!this._failoverController.shouldRetryAfterCooldown()) {
-          scheduleRetryPoll();
-          return;
-        }
-        try {
-          const readyEntries = this._retryQueue.getReadyEntries();
-          for (const entry of readyEntries) {
-            try {
-              // ERR-08: Increment budgetConsumed before re-executing to track retry depth
-              if (entry.task.errorBudget) {
-                entry.task.errorBudget.budgetConsumed += 1;
-                // Skip tasks with exhausted budget
-                if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
-                  log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
-                  await this._retryQueue.remove(entry.task.jobId);
-                  continue;
-                }
-              }
-              await this._resumeTask(entry.task);
-              await this._retryQueue.remove(entry.task.jobId);
-            } catch (err) {
-              log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
-              // Leave task in queue for next poll cycle
-            }
-          }
-        } catch (err) {
-          log.error({ err }, 'RetryQueue poll failed');
-        }
-        scheduleRetryPoll();
-      }, 30 * 1000);
-    };
-    scheduleRetryPoll();
+    // R5 / ERR-08 / PERF-05: RetryQueue polling is demand-driven — see _armRetryPoll().
+    this._armRetryPoll();
 
     // R9: Start HeartbeatSystem and RoutineManager — daemon-only.
     // Skip in one-shot ask mode (skipChannels=true) so node-cron handles
@@ -1750,7 +1820,7 @@ export class Orchestrator {
               errorContent.message ?? 'provider error',
             ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
             try {
-              await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+              await this._enqueueRetry(taskContext, error.message);
             } catch {
               // Max retries exceeded or enqueue failed
             }
@@ -1790,7 +1860,7 @@ export class Orchestrator {
             err.message,
           ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
           try {
-            await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
+            await this._enqueueRetry(taskContext, err.message);
           } catch {
             // Max retries exceeded
           }
