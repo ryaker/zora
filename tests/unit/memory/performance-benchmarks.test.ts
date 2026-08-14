@@ -1,13 +1,33 @@
 /**
  * MEM-15: Performance benchmarks.
  *
- * Tests timing characteristics at scale:
- *   - Search latency at 100, 1000 items (must be <10ms at 1K)
- *   - Item creation throughput
- *   - Salience computation overhead
- *   - Context loading time
+ * TEST-21: these asserted wall-clock budgets and flaked under full-suite
+ * parallelism — 1-3 failures on some runs, green in isolation. The history is
+ * visible in what the file used to say: every name had drifted from its
+ * assertion, because each flake was answered by raising the bound.
  *
- * Uses Date.now() timing since vitest bench is not standard.
+ *   `creates 100 items in under 2 seconds`      asserted < 10000ms
+ *   `lists 100 items in under 500ms`            asserted <  2000ms
+ *   `getItem by ID is under 10ms`               asserted <   200ms
+ *   `computes 10000 recency decays in under 10ms`  asserted <  50ms
+ *
+ * Budgets 4-20x their stated intent are flaky *and* toothless: still tripped by
+ * a loaded machine, while a real 4x regression sails through. Raising them
+ * again was not an option, so the file is split by what it can actually
+ * measure.
+ *
+ *   - CPU-bound work (scoring, decay, relevance) is measured with
+ *     `process.cpuUsage()`, which counts time the process was *running*.
+ *     Descheduling under load does not inflate it, so the budgets are tight
+ *     again and an accidental O(n^2) still trips them.
+ *   - I/O-bound work (create/list/search/loadContext) no longer asserts on
+ *     time at all. It was measuring tmpdir throughput, not Zora. The
+ *     functional assertions stay: they are the part that was ever worth a
+ *     failing build.
+ *
+ * The CPU measurement depends on vitest's default `forks` pool, where a worker
+ * process runs one file at a time — `process.cpuUsage()` is process-wide, so
+ * switching to the `threads` pool would silently invalidate it.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -73,16 +93,18 @@ function randomSentence(seed: number): string {
   return words.join(' ');
 }
 
-async function measure(fn: () => Promise<void>): Promise<number> {
-  const start = performance.now();
-  await fn();
-  return performance.now() - start;
-}
-
-function measureSync(fn: () => void): number {
-  const start = performance.now();
+/**
+ * TEST-21: CPU milliseconds consumed by `fn`, not wall-clock elapsed.
+ *
+ * `process.cpuUsage()` reports user+system time actually spent on a CPU. A
+ * contended machine makes wall-clock balloon while this stays put, which is
+ * what makes a tight budget survivable in a parallel suite.
+ */
+function cpuMillis(fn: () => void): number {
+  const before = process.cpuUsage();
   fn();
-  return performance.now() - start;
+  const delta = process.cpuUsage(before);
+  return (delta.user + delta.system) / 1000;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -91,44 +113,49 @@ describe('Performance Benchmarks — MEM-15', () => {
   describe('Salience scoring performance (in-memory)', () => {
     const scorer = new SalienceScorer();
 
-    it('scores 100 items in under 50ms', () => {
+    // TEST-21: budgets are CPU-ms, set from measurements on an idle container
+    // with headroom for slower hardware. They are not derived from the author's
+    // CI, so treat a first-run failure on much slower hardware as a budget to
+    // re-baseline rather than a regression — but re-baseline from a measured
+    // number, not by doubling until green, which is how the old bounds got to
+    // 20x their names.
+    it('scores 100 items using under 20ms of CPU', () => {
       const items = Array.from({ length: 100 }, (_, i) => makeMemoryItem(i));
-      const elapsed = measureSync(() => {
-        scorer.rankItems(items, 'typescript logging', 10);
-      });
-      expect(elapsed).toBeLessThan(50);
+      expect(cpuMillis(() => scorer.rankItems(items, 'typescript logging', 10))).toBeLessThan(20);
     });
 
-    it('scores 1000 items in under 200ms', () => {
+    it('scores 1000 items using under 100ms of CPU', () => {
       const items = Array.from({ length: 1000 }, (_, i) => makeMemoryItem(i));
-      const elapsed = measureSync(() => {
-        scorer.rankItems(items, 'typescript logging', 10);
-      });
-      expect(elapsed).toBeLessThan(200);
+      expect(cpuMillis(() => scorer.rankItems(items, 'typescript logging', 10))).toBeLessThan(100);
     });
 
-    it('scores 10000 items in under 1000ms', () => {
+    /**
+     * The shape guard: 10x the items for roughly 10x the work. A quadratic
+     * ranking would need ~100x and blow this bound long before a constant
+     * factor could.
+     */
+    it('scores 10000 items using under 600ms of CPU', () => {
       const items = Array.from({ length: 10000 }, (_, i) => makeMemoryItem(i));
-      const elapsed = measureSync(() => {
-        scorer.rankItems(items, 'typescript logging performance', 10);
-      });
-      expect(elapsed).toBeLessThan(1000);
+      expect(cpuMillis(() => scorer.rankItems(items, 'typescript logging performance', 10))).toBeLessThan(600);
     });
 
-    it('individual score computation is sub-microsecond amortized', () => {
+    it('scores an individual item in under 50 microseconds of CPU, amortized', () => {
       const items = Array.from({ length: 1000 }, (_, i) => makeMemoryItem(i));
-      const start = performance.now();
-      for (const item of items) {
-        scorer.scoreItem(item, 'testing');
-      }
-      const elapsed = performance.now() - start;
-      const perItem = elapsed / items.length;
-      // Each item should take less than 0.1ms (100 microseconds)
-      expect(perItem).toBeLessThan(0.1);
+      const perItem = cpuMillis(() => {
+        for (const item of items) scorer.scoreItem(item, 'testing');
+      }) / items.length;
+      expect(perItem).toBeLessThan(0.05);
     });
   });
 
-  describe('Structured memory I/O performance', () => {
+  /**
+   * TEST-21: these were timing tmpdir throughput, not Zora, and their budgets
+   * had drifted to 4-20x their names chasing CI flakes. The timing assertions
+   * are gone; what each operation is supposed to *do* is asserted instead,
+   * which is the part worth failing a build over. Scale is kept so the work is
+   * still realistic.
+   */
+  describe('Structured memory I/O at scale', () => {
     let itemsDir: string;
     let mem: StructuredMemory;
 
@@ -142,23 +169,26 @@ describe('Performance Benchmarks — MEM-15', () => {
       await fs.rm(itemsDir, { recursive: true, force: true });
     });
 
-    it('creates 100 items in under 2 seconds', async () => {
-      const elapsed = await measure(async () => {
-        for (let i = 0; i < 100; i++) {
-          await mem.createItem({
-            type: 'knowledge',
-            summary: `Performance test item ${i}: ${randomSentence(i)}`,
-            source: `session-perf-${i}`,
-            source_type: 'agent_analysis',
-            tags: [`tag-${i % 10}`, 'perf'],
-            category: `coding/perf-${i % 5}`,
-          });
-        }
-      });
-      expect(elapsed).toBeLessThan(10_000); // Disk I/O: generous for busy CI
+    it('creates 100 items, each with a distinct id', async () => {
+      const ids = new Set<string>();
+      for (let i = 0; i < 100; i++) {
+        const item = await mem.createItem({
+          type: 'knowledge',
+          summary: `Performance test item ${i}: ${randomSentence(i)}`,
+          source: `session-perf-${i}`,
+          source_type: 'agent_analysis',
+          tags: [`tag-${i % 10}`, 'perf'],
+          category: `coding/perf-${i % 5}`,
+        });
+        ids.add(item.id);
+      }
+      // Id collision at volume is the real failure mode here, and it is what a
+      // stopwatch never checked.
+      expect(ids.size).toBe(100);
+      expect(await mem.listItems()).toHaveLength(100);
     });
 
-    it('lists 100 items in under 500ms', async () => {
+    it('lists every one of 100 items', async () => {
       // Create items first
       for (let i = 0; i < 100; i++) {
         await mem.createItem({
@@ -171,13 +201,10 @@ describe('Performance Benchmarks — MEM-15', () => {
         });
       }
 
-      const elapsed = await measure(async () => {
-        await mem.listItems();
-      });
-      expect(elapsed).toBeLessThan(2000);
+      expect(await mem.listItems()).toHaveLength(100);
     });
 
-    it('searches 100 items in under 500ms', async () => {
+    it('searches 100 items and returns matches', async () => {
       for (let i = 0; i < 100; i++) {
         await mem.createItem({
           type: 'knowledge',
@@ -189,13 +216,14 @@ describe('Performance Benchmarks — MEM-15', () => {
         });
       }
 
-      const elapsed = await measure(async () => {
-        await mem.searchItems('typescript logging');
-      });
-      expect(elapsed).toBeLessThan(2000);
+      const hits = await mem.searchItems('typescript logging');
+      // Search over a populated store must return a usable subset, not
+      // everything and not nothing.
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.length).toBeLessThanOrEqual(100);
     });
 
-    it('getItem by ID is under 10ms', async () => {
+    it('retrieves an item by id', async () => {
       const item = await mem.createItem({
         type: 'knowledge',
         summary: 'Quick retrieval test',
@@ -205,14 +233,13 @@ describe('Performance Benchmarks — MEM-15', () => {
         category: 'coding/perf',
       });
 
-      const elapsed = await measure(async () => {
-        await mem.getItem(item.id);
-      });
-      expect(elapsed).toBeLessThan(200); // Relaxed: disk I/O + write-back varies by environment
+      const fetched = await mem.getItem(item.id);
+      expect(fetched?.id).toBe(item.id);
+      expect(fetched?.summary).toBe('Quick retrieval test');
     });
   });
 
-  describe('MemoryManager search performance at scale', () => {
+  describe('MemoryManager at scale', () => {
     let baseDir: string;
     let manager: MemoryManager;
 
@@ -226,7 +253,7 @@ describe('Performance Benchmarks — MEM-15', () => {
       await fs.rm(baseDir, { recursive: true, force: true });
     });
 
-    it('searchMemory with 100 items completes in under 1 second', async () => {
+    it('searchMemory over 100 items honours its result limit', async () => {
       // Populate
       for (let i = 0; i < 100; i++) {
         await manager.structuredMemory.createItem({
@@ -239,13 +266,13 @@ describe('Performance Benchmarks — MEM-15', () => {
         });
       }
 
-      const elapsed = await measure(async () => {
-        await manager.searchMemory('typescript testing', 10);
-      });
-      expect(elapsed).toBeLessThan(1000);
+      // The limit is the contract a stopwatch never checked: a search that
+      // silently returned all 100 would have passed the old timing assertion.
+      const results = await manager.searchMemory('typescript testing', 10);
+      expect(results.length).toBeLessThanOrEqual(10);
     });
 
-    it('loadContext with 50 items completes in under 2 seconds', async () => {
+    it('loadContext assembles context from 50 items and a daily note', async () => {
       // Populate items
       for (let i = 0; i < 50; i++) {
         await manager.structuredMemory.createItem({
@@ -261,42 +288,34 @@ describe('Performance Benchmarks — MEM-15', () => {
       // Add daily notes
       await manager.appendDailyNote('Performance testing in progress');
 
-      const elapsed = await measure(async () => {
-        await manager.loadContext();
-      });
-      expect(elapsed).toBeLessThan(2000);
+      const context = await manager.loadContext();
+      expect(context.length).toBeGreaterThan(0);
     });
   });
 
   describe('Recency decay computation', () => {
     const scorer = new SalienceScorer();
 
-    it('computes 10000 recency decays in under 10ms', () => {
+    it('computes 10000 recency decays using under 30ms of CPU', () => {
       const timestamps = Array.from({ length: 10000 }, (_, i) =>
         new Date(Date.now() - i * 86400000).toISOString(),
       );
 
-      const elapsed = measureSync(() => {
-        for (const ts of timestamps) {
-          scorer.recencyDecay(ts);
-        }
-      });
-      expect(elapsed).toBeLessThan(50); // Relaxed: CI/publish environments vary in speed
+      expect(cpuMillis(() => {
+        for (const ts of timestamps) scorer.recencyDecay(ts);
+      })).toBeLessThan(30);
     });
   });
 
   describe('Relevance scoring computation', () => {
     const scorer = new SalienceScorer();
 
-    it('computes 1000 relevance scores in under 50ms', () => {
+    it('computes 1000 relevance scores using under 30ms of CPU', () => {
       const items = Array.from({ length: 1000 }, (_, i) => makeMemoryItem(i));
 
-      const elapsed = measureSync(() => {
-        for (const item of items) {
-          scorer.relevanceScore('typescript logging framework', item);
-        }
-      });
-      expect(elapsed).toBeLessThan(50); // 50ms is plenty tight; 20ms was flaky under load
+      expect(cpuMillis(() => {
+        for (const item of items) scorer.relevanceScore('typescript logging framework', item);
+      })).toBeLessThan(30);
     });
   });
 
