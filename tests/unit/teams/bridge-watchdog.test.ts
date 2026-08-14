@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BridgeWatchdog } from '../../../src/teams/bridge-watchdog.js';
-import type { GeminiBridge } from '../../../src/teams/gemini-bridge.js';
+import type { SupervisedPoller } from '../../../src/teams/bridge-watchdog.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -57,7 +57,7 @@ interface HealthFileShape {
 describe('BridgeWatchdog', () => {
   const testDir = path.join(os.tmpdir(), `zora-watchdog-test-${process.pid}-${Date.now()}`);
   const stateDir = path.join(testDir, 'state');
-  let mockBridge: GeminiBridge;
+  let mockBridge: SupervisedPoller;
 
   const stopCalls = () => vi.mocked(mockBridge.stop).mock.calls.length;
   const startCalls = () => vi.mocked(mockBridge.start).mock.calls.length;
@@ -69,7 +69,7 @@ describe('BridgeWatchdog', () => {
       stop: vi.fn(),
       isRunning: vi.fn().mockReturnValue(true),
       setOnPollComplete: vi.fn(),
-    } as unknown as GeminiBridge;
+    } as unknown as SupervisedPoller;
   });
 
   afterEach(async () => {

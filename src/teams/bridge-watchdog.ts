@@ -9,7 +9,8 @@
  * ERR-21 follow-up: the spec says "bridge", and this supervised `GeminiBridge`
  * — a class constructed nowhere in src/, so the fail-closed fix landed on
  * something that never runs. It now supervises any `SupervisedPoller`, which in
- * the daemon is the team `MailboxChannelAdapter`.
+ * the daemon is the team `MailboxChannelAdapter`. GeminiBridge itself is gone:
+ * the adapter does what it did, through the ChannelManager pipeline.
  */
 
 import fs from 'node:fs/promises';
@@ -23,11 +24,11 @@ const log = createLogger('bridge-watchdog');
 /**
  * What the watchdog supervises.
  *
- * ERR-21 follow-up: this was typed as `GeminiBridge`, which is constructed
+ * ERR-21 follow-up: this was typed as `GeminiBridge`, which was constructed
  * nowhere in `src/` — so the fail-closed fix protected a component that never
- * runs. The watchdog only ever needs three things, and naming them as an
- * interface lets it supervise whatever actually polls, which today is
- * `MailboxChannelAdapter`. `GeminiBridge` still satisfies it unchanged.
+ * ran. The watchdog only ever needs three things, and naming them as an
+ * interface lets it supervise whatever actually polls, which is
+ * `MailboxChannelAdapter`.
  */
 export interface SupervisedPoller {
   start(): void | Promise<void>;

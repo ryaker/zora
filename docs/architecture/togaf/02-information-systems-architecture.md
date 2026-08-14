@@ -59,7 +59,7 @@ Derived from actual imports in src/orchestrator/orchestrator.ts and src/types.ts
 | **Team Manager** | TeamManager | src/teams/team-manager.ts | TeamConfig | Creates and tears down multi-agent teams with filesystem-based mailboxes |
 | **Mailbox** | Mailbox | src/teams/mailbox.ts | MailboxMessage | Filesystem inbox per agent: teams/<name>/inboxes/<agentId>.json |
 | **Agent Loader** | AgentLoader | src/teams/agent-loader.ts | AgentMember | Launches and manages sub-agent processes |
-| **Gemini Bridge** | GeminiBridge | src/teams/gemini-bridge.ts | --- | Subprocess bridge for Gemini agents in multi-agent teams |
+| **Team Mailbox Channel** | MailboxChannelAdapter | src/channels/team/mailbox-channel-adapter.ts | ChannelMessage | Presents a team inbox as a channel so delegated tasks traverse the ChannelManager pipeline (INVARIANT-9). Replaced GeminiBridge, which ran inbox messages as a subprocess, bypassing it |
 | **Routine Manager** | RoutineManager | src/routines/routine-manager.ts | RoutineDefinition | node-cron scheduler for recurring tasks |
 | **Heartbeat System** | HeartbeatSystem | src/routines/heartbeat.ts | --- | Periodic health checks; triggers RoutineManager tasks |
 | **Hook Runner** | HookRunner | src/hooks/hook-runner.ts | OnTaskStartHook, BeforeToolExecuteHook, AfterToolExecuteHook | Lifecycle hook dispatcher for user-defined interceptors |

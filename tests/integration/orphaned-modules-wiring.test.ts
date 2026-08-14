@@ -4,7 +4,7 @@
  * Proves that three previously-orphaned modules are now real connections:
  *   1. signal-pm-router  → SignalIntakeAdapter (setProjects + _handleRawMessage)
  *   2. PRLifecycleManager → TeamManager (prLifecycle getter)
- *   3. BridgeWatchdog     → GeminiBridge (attachWatchdog + heartbeat)
+ *   3. (removed with GeminiBridge — see Group 3 below)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,7 +16,6 @@ import path from 'node:path';
 import { SignalIntakeAdapter } from '../../src/channels/signal/signal-intake-adapter.js';
 import type { ChannelMessage } from '../../src/types/channel.js';
 import { TeamManager } from '../../src/teams/team-manager.js';
-import { GeminiBridge } from '../../src/teams/gemini-bridge.js';
 import { BridgeWatchdog } from '../../src/teams/bridge-watchdog.js';
 import { Mailbox } from '../../src/teams/mailbox.js';
 import type { AgentMember } from '../../src/teams/team-types.js';
@@ -151,65 +150,14 @@ describe('TeamManager.prLifecycle — PRLifecycleManager wiring', () => {
   });
 });
 
+
 // ---------------------------------------------------------------------------
-// Group 3: GeminiBridge.attachWatchdog() ↔ BridgeWatchdog heartbeat
+// Group 3: removed with GeminiBridge.
+//
+// This asserted that GeminiBridge.attachWatchdog() started the watchdog and
+// wired its heartbeat to the poll cycle. GeminiBridge is gone —
+// MailboxChannelAdapter does what it did, through the ChannelManager pipeline
+// — and the same wiring is covered better in
+// tests/integration/team-channel-pipeline.test.ts, which drives the real
+// adapter the daemon constructs rather than a class nothing did.
 // ---------------------------------------------------------------------------
-
-describe('GeminiBridge.attachWatchdog — BridgeWatchdog wiring', () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await makeTempDir();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it('Test 5 — attachWatchdog() calls watchdog.start() and wires heartbeat to poll cycle', async () => {
-    // Create a minimal Mailbox backed by the temp dir
-    const teamsDir = path.join(tmpDir, 'teams');
-    await fs.mkdir(path.join(teamsDir, 'test-team', 'inboxes'), { recursive: true });
-    const mailbox = new Mailbox(teamsDir, 'gemini-agent');
-    await mailbox.init('test-team');
-
-    const bridge = new GeminiBridge('test-team', mailbox, {
-      pollIntervalMs: 9999,     // Long interval — we won't rely on real polling
-      geminiCliPath: '/bin/false',
-      onPollComplete: undefined,
-    });
-
-    const stateDir = path.join(tmpDir, 'state');
-    await fs.mkdir(stateDir, { recursive: true });
-
-    const watchdog = new BridgeWatchdog(bridge, {
-      healthCheckIntervalMs: 100,
-      maxStaleMs: 500,
-      maxRestarts: 3,
-      stateDir,
-    });
-
-    // Spy on watchdog.start() before attaching
-    const startSpy = vi.spyOn(watchdog, 'start');
-    const heartbeatSpy = vi.spyOn(watchdog, 'writeHeartbeat');
-
-    bridge.attachWatchdog(watchdog);
-
-    // watchdog.start() must have been called as part of attachWatchdog()
-    expect(startSpy).toHaveBeenCalledOnce();
-
-    // The poll-complete callback should now invoke writeHeartbeat.
-    // Simulate a completed poll cycle by calling setOnPollComplete callback directly.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pollCompleteFn = (bridge as any)._onPollComplete as (() => void | Promise<void>) | undefined;
-    expect(pollCompleteFn).toBeDefined();
-    await pollCompleteFn?.();
-
-    // writeHeartbeat was triggered by the poll-complete callback
-    expect(heartbeatSpy).toHaveBeenCalled();
-
-    // Cleanup: stop the watchdog to avoid timer leaks
-    watchdog.stop();
-    bridge.stop();
-  });
-});
