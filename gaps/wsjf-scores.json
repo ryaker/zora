@@ -1940,9 +1940,8 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [
-        "PERF-01",
-        "MEM-30",
-        "DOC-10"
+        "DOC-12",
+        "SEC-23"
       ],
       "status": "open",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
@@ -1963,11 +1962,11 @@
       "severity": "S2",
       "files_affected": 4,
       "impact": 5,
-      "blocking": false,
-      "blocks": [],
-      "blocked_by": [
+      "blocking": true,
+      "blocks": [
         "DOC-11"
       ],
+      "blocked_by": [],
       "status": "open",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
