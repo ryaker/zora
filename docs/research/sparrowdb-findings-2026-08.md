@@ -422,3 +422,135 @@ node sparrowdb-probe2.mjs   # injection, type fidelity, timing
 Both print PASS/FAIL per case and are self-contained (each opens a fresh temp
 database). They're structured to be dropped into `node --test` with minimal
 editing if you want them as the regression suite.
+
+---
+
+# Re-test against `sparrowdb@0.1.23` — 2026-08-14
+
+Published 2026-08-14 02:36 UTC, re-probed immediately. Same environment (Linux
+x64 glibc, Node v22.22.2). Probe scripts `sparrowdb-probe5.mjs` (parameter
+binding) and `sparrowdb-probe6.mjs` (direction/delete semantics) are checked in
+alongside the originals.
+
+**Headline: parameter binding works, and it genuinely closes the injection hole
+on the statements it supports. But it does not support `CREATE`, which is the
+statement the original exploit used — so the primary write-path injection
+surface is unchanged for anyone still using `CREATE`.**
+
+## Fixed
+
+**S0 / S1-1 — parameter binding (partial, see below).** `executeWithParams(cypher, params)`
+is present and binds correctly. Verified against the exact payloads from the
+original report:
+
+| Attack | Statement | Result |
+|---|---|---|
+| `'", evil: "yes'` as a property value | `MERGE (:Tag {name: $n})` | Stored as the literal string; `n.evil` is `null`. **Blocked.** |
+| `'", admin: "true'` as a property value | `MATCH (n:User {...}) SET n.role = $r` | Literal; `n.admin` is `null`. **Blocked.** |
+| `'" OR n.name <> "'` in a predicate | `MATCH (n:User) WHERE n.name = $n` | Zero rows. **Blocked.** |
+| Label injection | `MATCH (n:$lbl)` | Rejected: `expected label/type name, got Param("lbl")`. **Blocked.** |
+
+Special characters round-trip exactly (`a"b\c\nd` in and out unchanged).
+
+Unbound `$param` via plain `execute()` now returns **zero rows** rather than the
+entire label. Still not the error it should be, but it now fails **closed**
+instead of open — the dangerous half of S1-1 is gone.
+
+**S2 — `DISTINCT`** now works: `RETURN DISTINCT type(r)` → `R1, R2`;
+`RETURN DISTINCT labels(n)` → `A, B`. Previously errored with `not found`.
+
+## Not fixed — unchanged from 0.1.21
+
+- **S1-2** `RETURN n` still yields hashed column ids (`{"col_3826002220": 1}`), still
+  never the documented `NodeRef`.
+- **S1-3** booleans still round-trip as `1`/`0` — including through the new
+  parameter path (`MERGE (:T3 {b: $b})` with `true` reads back as `1`).
+- **S1-4** unknown functions still return `null` instead of erroring.
+- **S2** no `REMOVE`, no multi-clause statements, no edge-property `SET`
+  (`MATCH...SET/DELETE currently supports only single-node patterns`).
+- **A2** `MERGE` on a relationship still silently drops its properties.
+- **S3-4** the five `@sparrowdb/*` platform packages still 404; the tarball still
+  ships a linux ELF as the generic `sparrowdb.node` fallback alongside an
+  unreachable `sparrowdb.darwin-arm64.node`. The loader is unchanged.
+
+## New / newly characterised
+
+### N1. `executeWithParams` does not support `CREATE` — the original exploit path
+
+```
+invalid argument: execute_with_params: parameterized MATCH...CREATE and
+standalone CREATE are not yet supported; use MERGE or MATCH...SET with $params
+```
+
+The S0 repro that started this report was `CREATE (:User {name: "<untrusted>"})`.
+That is precisely the statement form parameters cannot express. So a consumer
+inserting new nodes with untrusted property values must still interpolate, and
+the injection surface is unchanged for them.
+
+The suggested workaround — use `MERGE` — is viable and is what Zora adopted, but
+it is a semantic change (upsert rather than insert), not a drop-in. Closing this
+would complete S0; until then the fix is real but partial, and the docs should
+say so plainly so consumers don't assume `executeWithParams` makes them safe.
+
+### N2. `DELETE` is a no-op — nodes are never removed
+
+```js
+db.execute('CREATE (:C {n:9})');
+db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1
+db.execute('MATCH (n:C) DELETE n');          // no error
+db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1   ← still there
+db.checkpoint();
+db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1   ← still there
+```
+
+No error, no effect, survives a checkpoint. **This also reproduces on 0.1.21**, so
+it is long-standing rather than a regression.
+
+*My original report missed this, and the reason is worth recording: the first
+probe asserted only that `DELETE` did not throw, never that the node was gone.
+A test that checks for the absence of an error is not a test of the operation.*
+
+`DETACH DELETE` (newly parsing in 0.1.23) has the same shape — it removes the
+edges but leaves the node:
+
+```
+before: A count 1, edges 1
+after MATCH (n:A) DETACH DELETE n:  A count 1, edges 0
+```
+
+So it detaches without deleting. Consumers get silent partial execution.
+
+Combined impact: **there is no way to remove a node from the graph.** For any
+long-running store that is unbounded growth with no retention or pruning path —
+and it makes GDPR/right-to-erasure style requirements unimplementable.
+
+### N3. Relationship direction is ignored — precisely characterised
+
+Given a single edge `(:A {n:1})-[:R]->(:B {n:2})`:
+
+| Query | Expected | Actual |
+|---|---|---|
+| `MATCH (a:A)-[r:R]->(x) RETURN x.n` | `2` | `2` ✓ |
+| `MATCH (a:A)<-[r:R]-(x) RETURN x.n` | *empty* | **`2`** ✗ |
+| `MATCH (b:B)<-[r:R]-(x) RETURN x.n` | `1` | **empty** ✗ |
+| `MATCH (b:B)-[r:R]->(x) RETURN x.n` | *empty* | empty ✓ |
+
+Direction is not merely ignored — traversal **always runs outbound from the
+anchor node** regardless of the arrow. So `<-` is not just permissive, it is
+wrong in both directions: it returns outbound neighbours, and it can never return
+inbound ones. **There is no way to ask "what points at this node."**
+
+That breaks the whole class of query directed edges exist for: who depends on
+this, what supersedes this, who reports to whom. Combined with N2, a knowledge
+graph here is append-only and forward-traversable only.
+
+## Revised priority for the next release
+
+1. **N2 — make `DELETE` / `DETACH DELETE` actually delete.** Silent no-op on a
+   data-removal operation is the most dangerous behaviour in this report: callers
+   believe data is gone when it is not.
+2. **N3 — honour relationship direction.** Silent wrong answers, and it disables
+   inbound traversal entirely.
+3. **N1 — parameterize `CREATE`** to finish S0.
+4. **S3-4 — the loader / platform packages.** Still effectively linux-x64 only.
+5. S1-2, S1-3, A2 — type and contract fidelity.
