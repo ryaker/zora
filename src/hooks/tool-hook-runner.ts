@@ -5,6 +5,7 @@
  */
 
 import { createLogger } from '../utils/logger.js';
+import { toolFilterMatches } from '../security/tool-names.js';
 
 const log = createLogger('tool-hook-runner');
 
@@ -43,18 +44,13 @@ export interface ToolHook {
  * was skipped on every real call. `SensitiveFileGuardHook` was unaffected only
  * because it has no `tools` filter and lowercases the name itself.
  *
- * Matching is therefore case-insensitive, and MCP-prefixed names
- * (`mcp__zora-tools__memory_save`) are compared on their base name too, since
- * that is the name a filter would sensibly be written against.
+ * SEC-24 found the same mismatch in `RateLimitHook`, `IrreversibilityScorerHook`,
+ * `PolicyEngine` and `validateOutput()`, so the matching rule moved to
+ * `src/security/tool-names.ts` and every comparison site in `src/` now shares
+ * it. Re-exported here because `ToolHook.tools` filters are its most common
+ * caller and the import site should stay obvious.
  */
-export function toolFilterMatches(filter: string[], tool: string): boolean {
-  const lower = tool.toLowerCase();
-  const base = (tool.split('__').pop() ?? tool).toLowerCase();
-  return filter.some(f => {
-    const lf = f.toLowerCase();
-    return lf === lower || lf === base;
-  });
-}
+export { toolFilterMatches };
 
 export class ToolHookRunner {
   private readonly _hooks: ToolHook[] = [];

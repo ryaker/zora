@@ -4,6 +4,7 @@
  */
 
 import type { ToolHook, ToolCallContext, ToolHookResult } from '../tool-hook-runner.js';
+import { SHELL_TOOL_ALIASES } from '../../security/tool-names.js';
 
 const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /rm\s+-[a-z]*r[a-z]*\s+\/(?!\s*tmp)/i, reason: 'rm -rf on non-tmp path' },
@@ -19,7 +20,10 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 export const ShellSafetyHook: ToolHook = {
   name: 'shell-safety',
   phase: 'before',
-  tools: ['bash', 'shell', 'run_command', 'execute_bash'],
+  // SEC-23 made ToolHookRunner match this filter case-insensitively so `Bash`
+  // reaches it at all. SEC-24 points it at the shared alias list so the filter
+  // and every other shell gate in the codebase name the same set of tools.
+  tools: [...SHELL_TOOL_ALIASES],
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
     const rawCmd = String(ctx.arguments['command'] ?? ctx.arguments['cmd'] ?? '');

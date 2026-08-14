@@ -2,6 +2,18 @@
  * Security barrel exports.
  */
 
+// SEC-24: the one tool-name normaliser. Every tool-name comparison in src/
+// routes through these; see the module doc for the bug class they close.
+export {
+  normalizeToolName,
+  toolNameEquals,
+  toolFilterMatches,
+  SDK_TOOL_NAMES,
+  SHELL_TOOL_ALIASES,
+  READ_TOOL_ALIASES,
+  WRITE_TOOL_ALIASES,
+  DESTRUCTIVE_TOOL_NAMES,
+} from './tool-names.js';
 export { PolicyEngine } from './policy-engine.js';
 export type { ValidationResult } from './policy-engine.js';
 

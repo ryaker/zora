@@ -10,6 +10,12 @@
  */
 
 import { ALL_PATTERNS, ENCODED_INJECTION_PATTERNS } from './patterns.js';
+import {
+  toolFilterMatches,
+  SHELL_TOOL_ALIASES,
+  READ_TOOL_ALIASES,
+  WRITE_TOOL_ALIASES,
+} from './tool-names.js';
 
 // ─── Suspicious Output Patterns ─────────────────────────────────────
 
@@ -85,8 +91,14 @@ export function validateOutput(toolCall: {
   const { tool, args } = toolCall;
   const argsStr = JSON.stringify(args).toLowerCase();
 
+  // SEC-24: these three comparisons were `tool === 'shell' | 'bash' |
+  // 'execute_command'`, `'write_file' | 'create_file'` and `'read_file' | 'cat'`
+  // — Zora's own vocabulary. An SDK call arrives as `Bash` / `Write` / `Read`
+  // and matched none of them, so every branch below was unreachable on a real
+  // tool call. Routed through the shared normaliser and the shared alias lists.
+
   // Check for shell commands piping to curl/wget (data exfiltration)
-  if (tool === 'shell' || tool === 'bash' || tool === 'execute_command') {
+  if (toolFilterMatches(SHELL_TOOL_ALIASES, tool)) {
     const command = String(args['command'] ?? args['cmd'] ?? '');
 
     if (/\|\s*(curl|wget)\b/.test(command)) {
@@ -108,7 +120,7 @@ export function validateOutput(toolCall: {
   }
 
   // Check for file writes to critical paths
-  if (tool === 'write_file' || tool === 'create_file') {
+  if (toolFilterMatches(WRITE_TOOL_ALIASES, tool)) {
     const targetPath = String(args['path'] ?? args['file_path'] ?? '');
     for (const criticalPath of CRITICAL_PATHS) {
       // Only block if exactly the critical file or preceded by a path separator
@@ -124,7 +136,7 @@ export function validateOutput(toolCall: {
   }
 
   // Check for reads of sensitive files
-  if (tool === 'read_file' || tool === 'cat') {
+  if (toolFilterMatches(READ_TOOL_ALIASES, tool)) {
     const targetPath = String(args['path'] ?? args['file_path'] ?? '');
     for (const sensitivePattern of SENSITIVE_READ_PATTERNS) {
       if (sensitivePattern.test(targetPath)) {
