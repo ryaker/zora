@@ -3,6 +3,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -28,4 +29,22 @@ export async function writeAtomic(filePath: string, content: string): Promise<vo
     }
     throw err;
   }
+}
+
+/**
+ * Expands a leading `~` to the user's home directory and returns an absolute path.
+ *
+ * PROV-10. Config paths like `agent.workspace` are written the way a human types
+ * them (`~/work`), and `~` means nothing to any filesystem call — an unexpanded
+ * path silently becomes a literal `./~` directory relative to wherever the
+ * process happened to start.
+ *
+ * Returns `fallback` (default: process.cwd()) for an empty/undefined input.
+ */
+export function expandHome(inputPath?: string, fallback: string = process.cwd()): string {
+  if (!inputPath || inputPath.trim().length === 0) return fallback;
+  const expanded = inputPath.startsWith('~')
+    ? path.join(os.homedir(), inputPath.slice(1))
+    : inputPath;
+  return path.resolve(expanded);
 }

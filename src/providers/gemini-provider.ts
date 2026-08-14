@@ -28,6 +28,8 @@ const log = createLogger('gemini-provider');
 export interface GeminiProviderOptions {
   config: ProviderConfig;
   cliPath?: string;
+  /** PROV-10: working directory for the spawned CLI. Defaults to process.cwd(). */
+  cwd?: string;
 }
 
 export class GeminiProvider implements LLMProvider {
@@ -38,6 +40,7 @@ export class GeminiProvider implements LLMProvider {
 
   private readonly _config: ProviderConfig;
   private readonly _cliPath: string;
+  private readonly _cwd: string;
   private _lastAuthStatus: AuthStatus | null = null;
   private _lastAuthCheckAt: number = 0;
   private static readonly AUTH_CACHE_TTL_MS = 60_000;       // re-check valid auth every 60s
@@ -60,6 +63,9 @@ export class GeminiProvider implements LLMProvider {
 
     this._config = config;
     this._cliPath = options.cliPath ?? config.cli_path ?? 'gemini';
+    // PROV-10: the CLI inherits this as its working directory, so relative paths
+    // in the prompt resolve against the configured workspace.
+    this._cwd = options.cwd ?? process.cwd();
     this._circuitBreaker = new CircuitBreaker();
   }
 
@@ -202,13 +208,14 @@ export class GeminiProvider implements LLMProvider {
     this._requestCount++;
     this._lastRequestAt = new Date();
     const prompt = this._buildPrompt(task);
+
     const args = ['chat', '--prompt', prompt];
 
     if (this._config.model) {
       args.push('--model', this._config.model);
     }
 
-    const child = spawn(this._cliPath, args);
+    const child = spawn(this._cliPath, args, { cwd: this._cwd });
     this._activeProcesses.set(task.jobId, child);
 
     let buffer = '';
