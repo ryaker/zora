@@ -624,15 +624,31 @@ Two fixtures, each a 2-hop chain, expecting `x.v = 3`:
 | **F1** multi-label, same rel type (`A-[:R]->B-[:R]->C`) | `[{"x.v":3}]` ✓ | **`[]`** ✗ silent | **`not found`** ✗ |
 | **F2** single label, different rel types (`N-[:R1]->N-[:R2]->N`) | `[{"x.v":3}]` ✓ | `[{"x.v":3}]` ✓ | **`not found`** ✗ |
 
-So the rule is: **label every node in a chained pattern and it works.** Two
+So the rule is: **label every node in a chained pattern and it works** — and the
+requirement is the *label*, not a variable. Verified on the F1 (multi-label)
+fixture with the tail labeled throughout:
+
+| Middle node form | Result |
+|---|---|
+| `(:B)` anonymous **but labeled** | `[{"x.v":3}]` ✓ |
+| `(m:B)` named and labeled | `[{"x.v":3}]` ✓ |
+| `(m)` named, **no label** | `[]` ✗ |
+| `()` anonymous, no label | `[]` ✗ |
+| `-[r1:R]->(m:B)-[r2:R]->` named rel vars | `[{"x.v":3}]` ✓ |
+| `(:A)` anonymous labeled **head** | `[{"x.v":3}]` ✓ |
+
+Depth is not the constraint either — a fully-labeled 3-hop chain
+(`A-[:R]->B-[:R]->C-[:R]->D`) returns `4` correctly. Two
+
+
 distinct defects remain, and they differ in severity:
 
-**D1 — unlabeled tail throws `not found` (both fixtures).** Loud, so it cannot
+**D1 — unlabeled tail throws `not found` (both fixtures; upstream #493).** Loud, so it cannot
 produce a wrong answer, but the message is the same uninformative string flagged
 in S3-1 and gives no hint that adding a label to the tail fixes it. Worth:
 *"the final node in a chained pattern must be labeled"*.
 
-**D2 — unlabeled middle silently returns `[]`, but only in F1.** This is the
+**D2 — unlabeled middle silently returns `[]`, but only in F1 (upstream #493).** This is the
 dangerous one: no error, empty result, and it only bites when the chain spans
 multiple labels over the same relationship type — which is exactly the shape a
 heterogeneous knowledge graph uses (`Task -[:MENTIONS]-> Entity -[:MENTIONS]-> Task`).
@@ -642,7 +658,7 @@ that depend on the label topology of the data are very hard to catch downstream.
 
 Variable-length syntax (`[:R*2..2]`, `[:R*1..3]`) works and is unaffected by
 either defect, so it remains a safe fallback. **Variable-length inbound is still
-`not yet implemented`**, so inbound traversal past one hop is unavailable —
+`not yet implemented` (upstream #495)**, so inbound traversal past one hop is unavailable —
 "what does this depend on" is answerable, "what depends on this" is not.
 
 ### Consequence for consumers
