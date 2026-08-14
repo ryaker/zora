@@ -93,6 +93,18 @@ import { SignalResponseGateway } from '../channels/signal/signal-response-gatewa
 
 const log = createLogger('orchestrator');
 
+/**
+ * PERF-01: in-flight tool_call bookkeeping for one provider execution.
+ * Keyed by toolCallId so a tool_result resolves its call in O(1) instead of
+ * rescanning the (unbounded) task history.
+ */
+interface PendingToolCall {
+  /** Wall-clock ms when the tool_call was observed — hook timing bookkeeping. */
+  startedAt: number;
+  /** The tool_call payload (tool name + arguments) awaiting its result. */
+  call: ToolCallEventContent;
+}
+
 export interface OrchestratorOptions {
   config: ZoraConfig;
   policy: ZoraPolicy;
@@ -197,6 +209,18 @@ export class Orchestrator {
 
   private _booted = false;
 
+  // PERF-06: custom tool definitions, built once per boot rather than per task.
+  private _customTools: CustomToolDefinition[] | null = null;
+
+  // PERF-03: SOUL.md identity cache. The file used to be existsSync'd and
+  // readFileSync'd on every submitTask(), blocking the event loop per task.
+  // It is read once and served from memory; an fs.watch on the containing
+  // directory invalidates it when the file changes.
+  private _soulPath: string | null = null;
+  private _soulContent = '';
+  private _soulLoaded = false;
+  private _soulWatcher: fs.FSWatcher | null = null;
+
   // TLCI: lazy-initialized dispatcher and plan cache (additive — does not affect submitTask)
   private _planCache?: PlanCache;
   private _tlciDispatcher?: TLCIDispatcher;
@@ -244,6 +268,132 @@ export class Orchestrator {
    * but no flagCallback is registered. Must be called BEFORE boot().
    * After boot(), use policyEngine.setApprovalQueue() directly.
    */
+  /**
+   * PERF-04: Schedules a background timer that never keeps the process alive.
+   *
+   * All five self-rescheduling background loops (auth check, retry poll, daily
+   * consolidation, integrity check, memory extraction) go through here. They are
+   * housekeeping: a process with nothing else to do should exit rather than sit
+   * in the event loop waiting for the next tick. The daemon stays alive on its
+   * dashboard HTTP listener and cron handles, not on these.
+   *
+   * @param fn Callback to run when the timer fires.
+   * @param ms Delay in milliseconds.
+   * @returns The timer handle, so callers can still clearTimeout() it on shutdown.
+   */
+  private _scheduleBackground(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(fn, ms);
+    // unref() is Node-only; the optional call keeps this safe under other typings.
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  }
+
+  /**
+   * PERF-05: Floor on retry-poll wakeups. Matches the old fixed 30s tick, so an
+   * entry that is already overdue — a retry that failed and stayed queued, or a
+   * queue restored from disk after downtime — is re-attempted at exactly the old
+   * cadence rather than spinning the event loop.
+   */
+  private static readonly RETRY_POLL_MIN_MS = 30 * 1000;
+
+  /**
+   * PERF-05: Ceiling on retry-poll sleep. Backoff caps at 24h, but re-checking at
+   * least this often means a suspend/resume or a wall-clock jump cannot strand an
+   * entry, and a `retry_after_cooldown` flip is picked up within one window.
+   */
+  private static readonly RETRY_POLL_MAX_MS = 15 * 60 * 1000;
+
+  /**
+   * PERF-05: Arms the retry poll for the earliest entry's ready time.
+   *
+   * Replaces a fixed 30s tick that fired 2,880 times a day whether or not
+   * anything was due. An empty queue schedules nothing at all; the enqueue path
+   * (_enqueueRetry) re-arms, and every poll re-arms itself from the finally
+   * block, so add and remove both re-derive the next wake.
+   *
+   * Idempotent: an existing timer is cleared first, so callers can re-arm freely.
+   */
+  private _armRetryPoll(): void {
+    if (this._retryPollTimeout) {
+      clearTimeout(this._retryPollTimeout);
+      this._retryPollTimeout = null;
+    }
+    // Shutdown may have raced an in-flight poll; do not resurrect the timer.
+    if (this._shuttingDown) return;
+
+    const nextRunAt = this._retryQueue.nextRunAt();
+    if (nextRunAt === null) {
+      // Nothing queued — sleep indefinitely. _enqueueRetry() wakes us.
+      return;
+    }
+
+    const waitMs = nextRunAt - Date.now();
+    const delay = waitMs <= 0
+      // Already due: floor the wake so a permanently-failing entry retries at the
+      // old 30s cadence instead of busy-looping on a task that never leaves the queue.
+      ? Orchestrator.RETRY_POLL_MIN_MS
+      : Math.min(waitMs, Orchestrator.RETRY_POLL_MAX_MS);
+
+    this._retryPollTimeout = this._scheduleBackground(() => {
+      void this._pollRetryQueue();
+    }, delay);
+  }
+
+  /**
+   * PERF-05: One retry-queue pass. Body is unchanged from the old fixed-tick
+   * poll — including the `retry_after_cooldown` guard and the ERR-08 error-budget
+   * accounting — only the scheduling around it moved.
+   */
+  private async _pollRetryQueue(): Promise<void> {
+    this._retryPollTimeout = null;
+    try {
+      // Guard: skip all retries if retry_after_cooldown is disabled
+      if (!this._failoverController.shouldRetryAfterCooldown()) {
+        return;
+      }
+      const readyEntries = this._retryQueue.getReadyEntries();
+      for (const entry of readyEntries) {
+        try {
+          // ERR-08: Increment budgetConsumed before re-executing to track retry depth
+          if (entry.task.errorBudget) {
+            entry.task.errorBudget.budgetConsumed += 1;
+            // Skip tasks with exhausted budget
+            if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
+              log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
+              await this._retryQueue.remove(entry.task.jobId);
+              continue;
+            }
+          }
+          await this._resumeTask(entry.task);
+          await this._retryQueue.remove(entry.task.jobId);
+        } catch (err) {
+          log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
+          // Leave task in queue for next poll cycle
+        }
+      }
+    } catch (err) {
+      log.error({ err }, 'RetryQueue poll failed');
+    } finally {
+      // Re-derive the next wake from whatever is left in the queue.
+      this._armRetryPoll();
+    }
+  }
+
+  /**
+   * PERF-05: Enqueues a failed task and re-arms the poll so the new entry is
+   * woken at its own ready time rather than on the next fixed tick.
+   *
+   * Rethrows exactly as RetryQueue.enqueue() does (notably "max retries
+   * exceeded"), so callers keep their existing swallow-and-continue behaviour.
+   */
+  private async _enqueueRetry(task: TaskContext, error: string): Promise<void> {
+    try {
+      await this._retryQueue.enqueue(task, error, this._config.failover.max_retries);
+    } finally {
+      this._armRetryPoll();
+    }
+  }
+
   setApprovalQueue(queue: ApprovalQueue): void {
     this._approvalQueue = queue;
     // If already booted, propagate immediately
@@ -342,7 +492,7 @@ export class Orchestrator {
     // cause _parseIntervalMinutes to receive a number and silently return the default.
     const integrityIntervalMs = this._parseIntervalMinutes(String(sec.integrity_interval ?? '5m')) * 60 * 1000;
     const scheduleIntegrityCheck = () => {
-      this._integrityCheckTimeout = setTimeout(async () => {
+      this._integrityCheckTimeout = this._scheduleBackground(async () => {
         try {
           const result = await this._integrityGuardian.checkIntegrity();
           if (!result.valid) {
@@ -474,7 +624,7 @@ export class Orchestrator {
     // R4: Schedule periodic auth checks (every 5 minutes) using self-rescheduling
     // setTimeout to avoid overlapping async executions
     const scheduleAuthCheck = () => {
-      this._authCheckTimeout = setTimeout(async () => {
+      this._authCheckTimeout = this._scheduleBackground(async () => {
         try {
           await this._authMonitor.checkAll();
         } catch (err) {
@@ -485,48 +635,26 @@ export class Orchestrator {
     };
     scheduleAuthCheck();
 
-    // R5 / ERR-08: Poll RetryQueue (every 30 seconds) — use _resumeTask to preserve full
-    // TaskContext (state continuity) instead of re-submitting just the original prompt.
-    // retry_after_cooldown: if false, skip the retry poll entirely.
-    const scheduleRetryPoll = () => {
-      this._retryPollTimeout = setTimeout(async () => {
-        // Guard: skip all retries if retry_after_cooldown is disabled
-        if (!this._failoverController.shouldRetryAfterCooldown()) {
-          scheduleRetryPoll();
-          return;
-        }
-        try {
-          const readyEntries = this._retryQueue.getReadyEntries();
-          for (const entry of readyEntries) {
-            try {
-              // ERR-08: Increment budgetConsumed before re-executing to track retry depth
-              if (entry.task.errorBudget) {
-                entry.task.errorBudget.budgetConsumed += 1;
-                // Skip tasks with exhausted budget
-                if (entry.task.errorBudget.budgetConsumed >= entry.task.errorBudget.maxBudget) {
-                  log.warn({ jobId: entry.task.jobId }, 'Retry skipped: error budget exhausted');
-                  await this._retryQueue.remove(entry.task.jobId);
-                  continue;
-                }
-              }
-              await this._resumeTask(entry.task);
-              await this._retryQueue.remove(entry.task.jobId);
-            } catch (err) {
-              log.error({ jobId: entry.task.jobId, err }, 'Retry failed');
-              // Leave task in queue for next poll cycle
-            }
-          }
-        } catch (err) {
-          log.error({ err }, 'RetryQueue poll failed');
-        }
-        scheduleRetryPoll();
-      }, 30 * 1000);
-    };
-    scheduleRetryPoll();
+    // R5 / ERR-08 / PERF-05: RetryQueue polling is demand-driven — see _armRetryPoll().
+    this._armRetryPoll();
+
+    // PERF-06: build the custom tool definitions once, now that every subsystem
+    // their handlers close over exists. submitTask() reuses this list; only the
+    // per-job canUseTool closure is rebuilt per task. Assigned (not ??=) so a
+    // re-boot rebinds the tools to the freshly constructed subsystems.
+    this._customTools = this._buildCustomTools();
 
     // R9: Start HeartbeatSystem and RoutineManager — daemon-only.
     // Skip in one-shot ask mode (skipChannels=true) so node-cron handles
     // don't keep the event loop alive after the task completes.
+    //
+    // PERF-04: this gate is NOT redundant now that the five background timers
+    // above are unref'd. Those are ours to unref; node-cron's are not — it
+    // schedules its own internal setTimeout in scheduler/runner and exposes no
+    // handle on ScheduledTask, so there is nothing here to unref. Until that
+    // changes, skipping the cron systems entirely is the only way one-shot
+    // `ask` mode exits. The gate is also semantically right for the Signal
+    // channel below: a one-shot ask should not open a channel listener at all.
     if (!this._skipChannels) {
       // Use heartbeat_provider if set (typically a free/local Ollama) to keep
       // background routine costs at zero. Falls back to rank-1 if not set.
@@ -539,7 +667,7 @@ export class Orchestrator {
         permissionMode: 'default',
         cwd: agentWorkspace,
         canUseTool: this._policyEngine.createCanUseTool(),
-        customTools: this._createCustomTools(),
+        customTools: this._getCustomTools(),
         model: this._config.agent.heartbeat_provider,
         streamTimeout: agentTimeoutMs,
       });
@@ -564,7 +692,7 @@ export class Orchestrator {
 
     // Schedule daily note consolidation (check once per day)
     const scheduleConsolidation = () => {
-      this._consolidationTimeout = setTimeout(async () => {
+      this._consolidationTimeout = this._scheduleBackground(async () => {
         try {
           const reflectFn = this._reflectorWorker
             ? async (content: string): Promise<void> => {
@@ -582,7 +710,7 @@ export class Orchestrator {
       }, 24 * 60 * 60 * 1000); // 24 hours
     };
     // Run first check shortly after boot (30 seconds), then daily
-    this._consolidationTimeout = setTimeout(async () => {
+    this._consolidationTimeout = this._scheduleBackground(async () => {
       try {
         const reflectFn = this._reflectorWorker
           ? async (content: string): Promise<void> => {
@@ -602,7 +730,7 @@ export class Orchestrator {
     if (this._config.memory.auto_extract && this._config.memory.auto_extract_interval > 0) {
       const extractIntervalMs = this._config.memory.auto_extract_interval * 60 * 1000; // minutes → ms
       const scheduleExtractInterval = () => {
-        this._memoryExtractIntervalTimeout = setTimeout(async () => {
+        this._memoryExtractIntervalTimeout = this._scheduleBackground(async () => {
           try {
             // Interval-based extraction: consolidate recent daily notes as a fallback
             // for sessions that completed without triggering per-task extraction.
@@ -728,6 +856,11 @@ export class Orchestrator {
       scores: this._policy.actions.scores ?? DEFAULT_IRREVERSIBILITY_SCORES,
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
     }));
+
+    // PERF-03: warm the SOUL.md identity cache and start its watch here, so no
+    // task ever pays a synchronous read for it.
+    this._soulLoaded = false;
+    this._loadSoulIdentity();
 
     // Eagerly initialize TLCI so CostTracker is available immediately after boot()
     // (daemon.ts reads getTLCICostTracker() synchronously when constructing DashboardServer)
@@ -890,6 +1023,16 @@ export class Orchestrator {
       this._memoryExtractIntervalTimeout = null;
     }
 
+    // PERF-06: drop the cached tool list so a re-boot rebuilds it against the
+    // newly constructed subsystems rather than the ones being torn down here.
+    this._customTools = null;
+
+    // PERF-03: stop watching SOUL.md
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
     // Stop heartbeat and routines
     if (this._heartbeatSystem) {
       this._heartbeatSystem.stop();
@@ -907,6 +1050,87 @@ export class Orchestrator {
     }
 
     this._booted = false;
+  }
+
+  /**
+   * PERF-03: Returns the cached SOUL.md identity text, reading it from disk only
+   * on the first call (or after a watch-triggered invalidation).
+   *
+   * Behaviour on a miss is identical to the old per-task read: a missing or
+   * unreadable SOUL.md yields the empty string, and the caller substitutes the
+   * default identity. The empty result is cached too, so an absent file does not
+   * re-stat on every task.
+   *
+   * @returns The trimmed SOUL.md contents, or '' when the file is absent/unreadable.
+   */
+  private _loadSoulIdentity(): string {
+    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
+
+    // A config reload can repoint soul_file; treat a changed path as a cache miss.
+    if (this._soulLoaded && this._soulPath === soulPath) {
+      return this._soulContent;
+    }
+
+    const previousPath = this._soulPath;
+    this._soulPath = soulPath;
+    this._soulContent = '';
+    try {
+      if (fs.existsSync(soulPath)) {
+        this._soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
+      }
+    } catch {
+      // SOUL.md missing or unreadable — use default identity
+    }
+    this._soulLoaded = true;
+
+    if (previousPath !== soulPath || !this._soulWatcher) {
+      this._watchSoulFile(soulPath);
+    }
+    return this._soulContent;
+  }
+
+  /**
+   * PERF-03: Watches SOUL.md so an edit invalidates the cache.
+   *
+   * Watches the *containing directory* rather than the file: fs.watch on a path
+   * that does not exist throws, and editors (plus every atomic write) replace the
+   * inode, which a file-level watch stops following. A directory watch survives
+   * create, replace and delete.
+   *
+   * Watches are unreliable on some filesystems (network mounts, some containers).
+   * Every failure path here degrades to "keep serving the cached value" rather
+   * than throwing — a stale identity string is far better than a broken boot.
+   */
+  private _watchSoulFile(soulPath: string): void {
+    if (this._soulWatcher) {
+      try { this._soulWatcher.close(); } catch { /* already closed */ }
+      this._soulWatcher = null;
+    }
+
+    const dir = path.dirname(soulPath);
+    const base = path.basename(soulPath);
+    try {
+      const watcher = fs.watch(dir, (_eventType, filename) => {
+        // filename is null on some platforms — invalidate conservatively.
+        if (!filename || path.basename(filename.toString()) === base) {
+          this._soulLoaded = false;
+        }
+      });
+      // Never hold the process open: one-shot `ask` mode must still exit.
+      watcher.unref?.();
+      // An error after the watch is established (dir removed, inotify exhausted)
+      // must not become an unhandled 'error' event.
+      watcher.on('error', (err) => {
+        log.debug({ err, soulPath }, 'SOUL.md watch failed — serving cached identity');
+        try { watcher.close(); } catch { /* already closed */ }
+        if (this._soulWatcher === watcher) this._soulWatcher = null;
+      });
+      this._soulWatcher = watcher;
+    } catch (err) {
+      // e.g. the directory does not exist, or the platform/filesystem refuses
+      // watches. Cached value stands until restart.
+      log.debug({ err, soulPath }, 'SOUL.md watch unavailable — identity cached until restart');
+    }
   }
 
   /**
@@ -944,16 +1168,9 @@ export class Orchestrator {
       log.warn({ err, jobId }, 'Memory context injection failed, continuing without memory');
     }
 
-    // Load SOUL.md for agent identity (fixes bug: file was created but never read)
-    const soulPath = this._config.agent.identity.soul_file.replace(/^~/, os.homedir());
-    let soulContent = '';
-    try {
-      if (fs.existsSync(soulPath)) {
-        soulContent = fs.readFileSync(soulPath, 'utf-8').trim();
-      }
-    } catch {
-      // SOUL.md missing or unreadable — use default identity
-    }
+    // Load SOUL.md for agent identity (fixes bug: file was created but never read).
+    // PERF-03: served from cache — no sync filesystem I/O on the task path.
+    const soulContent = this._loadSoulIdentity();
 
     // Create per-task context compressor if compression is enabled
     let compressor: ContextCompressor | null = null;
@@ -1021,8 +1238,10 @@ export class Orchestrator {
     // Classify task for routing
     const classification = this._router.classifyTask(sanitizedPrompt);
 
-    // Build custom tools (permissions + memory tools + recall_context)
-    const customTools = this._createCustomTools();
+    // Custom tools (permissions + memory tools + recall_context).
+    // PERF-06: built once at boot — nothing in the definitions is per-task. The
+    // per-job binding is canUseTool below, which stays per task.
+    const customTools = this._getCustomTools();
 
     // SEC-21: bind the tool-hook chain to this job and expose it to the SDK as
     // PreToolUse/PostToolUse. This is the pre-execution enforcement point; the
@@ -1257,8 +1476,28 @@ export class Orchestrator {
     let consecutiveNonToolTurns = 0;
     const STALE_LOOP_THRESHOLD = 3;
 
-    // Tool-level hook tracking: map toolCallId → call start timestamp
-    const _toolCallStartTimes = new Map<string, number>();
+    // PERF-01: Tool-level bookkeeping, keyed by toolCallId.
+    // Replaces the old `[...history].reverse().find(...)` scan that ran on every
+    // tool_result — that was O(history) per event, i.e. O(n²) over a session, with
+    // a full array copy each time. One entry object carries both the call start
+    // timestamp (hook timing) and the tool_call content (name + args), so there is
+    // a single map to keep consistent: set on tool_call, deleted on tool_result.
+    const pendingToolCalls = new Map<string, PendingToolCall>();
+
+    // Seed from prior history so a failover hop still resolves tool_calls emitted
+    // before the hop, exactly as the history scan did. Replaying in order and
+    // deleting on tool_result leaves only the still-unresolved calls.
+    for (const prior of taskContext.history) {
+      if (prior.type === 'tool_call') {
+        const c = prior.content as ToolCallEventContent;
+        if (c?.toolCallId) {
+          pendingToolCalls.set(c.toolCallId, { startedAt: prior.timestamp?.getTime?.() ?? Date.now(), call: c });
+        }
+      } else if (prior.type === 'tool_result') {
+        const c = prior.content as ToolResultEventContent;
+        if (c?.toolCallId) pendingToolCalls.delete(c.toolCallId);
+      }
+    }
 
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
@@ -1378,7 +1617,7 @@ export class Orchestrator {
             // and the old `!allow` branch here could not stop anything anyway,
             // it only wrote a synthetic "blocked" tool_result into Zora's own
             // transcript while the real tool ran.
-            _toolCallStartTimes.set(toolCallContent.toolCallId, Date.now());
+            pendingToolCalls.set(toolCallContent.toolCallId, { startedAt: Date.now(), call: toolCallContent });
 
             // Secrets still must not reach disk: SecretRedactHook's rewrite
             // already happened pre-execution, so read it back rather than
@@ -1401,14 +1640,12 @@ export class Orchestrator {
             const toolResultContent = event.content as ToolResultEventContent;
             const hasFailed = Boolean(toolResultContent.error);
 
-            // Find the matching tool_call in history to get name + args
-            const matchingCall = [...taskContext.history].reverse().find(
-              e => e.type === 'tool_call' &&
-                (e.content as ToolCallEventContent).toolCallId === toolResultContent.toolCallId,
-            );
+            // PERF-01: O(1) lookup of the matching tool_call (name + args) instead of
+            // copying and reverse-scanning the whole history on every tool_result.
+            const matchingCall = pendingToolCalls.get(toolResultContent.toolCallId);
 
             if (matchingCall) {
-              const callContent = matchingCall.content as ToolCallEventContent;
+              const callContent = matchingCall.call;
               const args = callContent.arguments ?? {};
 
               // ERR-12: Record failure/success in persistent negative cache
@@ -1452,7 +1689,7 @@ export class Orchestrator {
             // SEC-21: after-hooks now run from the SDK's PostToolUse hook, which
             // sees the real tool response rather than one reconstructed from a
             // streamed event. Only the timing bookkeeping remains here.
-            _toolCallStartTimes.delete(toolResultContent.toolCallId);
+            pendingToolCalls.delete(toolResultContent.toolCallId);
           }
 
           // (ERR-09: stale-state tracking is done on 'done' events below)
@@ -1598,7 +1835,7 @@ export class Orchestrator {
               errorContent.message ?? 'provider error',
             ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
             try {
-              await this._retryQueue.enqueue(taskContext, error.message, this._config.failover.max_retries);
+              await this._enqueueRetry(taskContext, error.message);
             } catch {
               // Max retries exceeded or enqueue failed
             }
@@ -1638,7 +1875,7 @@ export class Orchestrator {
             err.message,
           ).catch(e => { log.debug({ e }, 'notifyError failed (non-critical)'); });
           try {
-            await this._retryQueue.enqueue(taskContext, err.message, this._config.failover.max_retries);
+            await this._enqueueRetry(taskContext, err.message);
           } catch {
             // Max retries exceeded
           }
@@ -1996,10 +2233,35 @@ export class Orchestrator {
   }
 
   /**
+   * PERF-06: Returns the shared custom-tool list, building it on first use.
+   *
+   * The definitions used to be rebuilt — ~12 objects, their JSON schemas and all
+   * their closures — on every submitTask(). Nothing in them is per-task: every
+   * handler closes over long-lived orchestrator state (policy engine, memory
+   * manager, validation pipeline) or over `this`, so one list serves every job.
+   * The per-job binding lives entirely in `canUseTool`, which submitTask() still
+   * builds per task via _buildTokenAwareCanUseTool(jobId).
+   *
+   * boot() warms this so the subsystems the handlers close over are the current
+   * ones; shutdown() drops it so a re-boot cannot serve tools bound to the
+   * previous generation of subsystems.
+   *
+   * The array is never mutated downstream (providers only map over it), so
+   * sharing one instance across concurrent tasks is safe.
+   */
+  private _getCustomTools(): CustomToolDefinition[] {
+    this._customTools ??= this._buildCustomTools();
+    return this._customTools;
+  }
+
+  /**
    * Creates custom tools available to the agent during execution.
    * Includes: permission tools, memory tools (search/save/forget), recall_context.
+   *
+   * PERF-06: call _getCustomTools() instead — this is the uncached builder and
+   * is meant to run once per boot.
    */
-  private _createCustomTools(): CustomToolDefinition[] {
+  private _buildCustomTools(): CustomToolDefinition[] {
     const permissionTools: CustomToolDefinition[] = [
       {
         name: 'check_permissions',
@@ -2104,7 +2366,12 @@ export class Orchestrator {
       (opts) => this.submitTask({ prompt: opts.prompt }),
     );
 
-    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances
+    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances.
+    // PERF-06 note: this is the one tool with closure state (live child PIDs and
+    // the per-project spawn lock). Building it once per boot rather than once per
+    // task is what it was always written for — the max_children cap and the
+    // duplicate-launch lock are process-wide guards, and rebuilding them per task
+    // silently reset both.
     const pmConfig = (this._config as unknown as Record<string, unknown>)['pm'] as
       | { projects?: Array<{ name: string; port: number; icon?: string; color?: string; project_dir: string }>; max_children?: number }
       | undefined;
