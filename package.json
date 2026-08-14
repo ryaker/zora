@@ -51,7 +51,7 @@
     "orchestrator"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.76",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.232",
     "@chat-adapter/telegram": "^4.19.0",
     "@clack/prompts": "^1.0.1",
     "@nodesecure/js-x-ray": "^13.0.0",
