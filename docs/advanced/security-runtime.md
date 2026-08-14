@@ -128,24 +128,38 @@ approval gate under `[approval]` in the same file. Neither is in `policy.toml`.
 enabled = true
 allowed_users = ["123456789"]   # your Telegram numeric user ID
 mode = "polling"
-# bot_token is deliberately omitted — see below
+bot_token = "env:ZORA_TELEGRAM_TOKEN"   # never a literal — see below
 
 [approval]
 enabled = true
 timeout_s = 300   # auto-deny after 5 minutes
 ```
 
-**Leave `bot_token` out of the file.** The daemon reads
-`steering.telegram.bot_token` first and falls back to the `TELEGRAM_BOT_TOKEN`
-environment variable (`src/cli/daemon.ts:244`). There is **no `env:` prefix
-resolution anywhere in the codebase** — writing `bot_token = "env:SOMETHING"`
-sends the literal string `env:SOMETHING` to Telegram as your token, and the
-gateway fails with an authentication error rather than reading the variable.
-Omit the key and export the variable instead:
+**Keep the token out of the file.** Two ways, both real:
 
 ```bash
+# 1. env: reference in config.toml (shown above)
+export ZORA_TELEGRAM_TOKEN="123456:ABCdef..."
+
+# 2. omit bot_token entirely — the daemon falls back to this fixed variable
 export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
 ```
+
+`env:NAME` is resolved once, at config-load time, by
+`src/config/env-resolver.ts` (SEC-26). It applies to credential-bearing fields —
+anything whose key ends in `token`, `secret`, `password`, `api_key`,
+`access_key`, `private_key`, `credential` or `authorization`, plus every value
+under `[mcp.servers.*.env]` and `[mcp.servers.*.headers]`. The `${env:NAME}`
+spelling used by the MCP examples works too.
+
+If the named variable is unset or empty, **Zora refuses to start** and names the
+variable and the field. It never falls back to the literal string and never
+substitutes an empty credential — an unresolved reference used to be handed to
+Telegram verbatim, which failed with an opaque auth error while leaving the user
+believing the credential had been moved out of the file.
+
+`api_key_env` on a provider is *not* resolved: that field already holds the name
+of an environment variable, which is the same indirection by another spelling.
 
 `[approval]` reads `enabled` and `timeout_s`. There is no `channel` key —
 delivery goes to whichever gateway is configured.
@@ -482,11 +496,12 @@ chmod 700 ~/.zora
 chmod 600 ~/.zora/config.toml ~/.zora/policy.toml
 
 # Move plaintext token to environment variable
-# In ~/.zora/config.toml, delete the line:
+# In ~/.zora/config.toml, replace:
 #   bot_token = "123456:ABCdef..."
-# There is no `env:` indirection — remove the key entirely and add this to
-# your shell profile instead:
-export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
+# with:
+#   bot_token = "env:ZORA_TELEGRAM_TOKEN"
+# and add this to your shell profile:
+export ZORA_TELEGRAM_TOKEN="123456:ABCdef..."
 ```
 
 ---

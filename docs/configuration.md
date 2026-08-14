@@ -233,7 +233,7 @@ Optional Telegram bot integration for remote steering.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `false` | Enable the Telegram gateway. |
-| `bot_token` | string | -- | Telegram bot token (from BotFather). |
+| `bot_token` | string | -- | Telegram bot token (from BotFather). Use `"env:VAR"` to read it from the environment instead of storing it here — see [Secrets in config](#secrets-in-config). |
 | `allowed_users` | string[] | `[]` | Telegram usernames allowed to steer the agent. |
 | `rate_limit_per_min` | integer | `30` | Maximum messages per minute from Telegram. |
 
@@ -266,6 +266,44 @@ Each key under `mcp.servers` defines an MCP server connection.
 | `args` | string[] | Command arguments (for `stdio` transport). |
 | `env` | object | Environment variables to pass to the server. |
 | `headers` | object | HTTP headers for server connections. |
+
+---
+
+## Secrets in config
+
+Any credential-bearing field may hold `"env:NAME"` instead of the credential
+itself. The reference is resolved once, when config is loaded
+(`src/config/env-resolver.ts`), so every consumer sees the real value and none
+of them has to remember to do the lookup.
+
+```toml
+[steering.telegram]
+bot_token = "env:ZORA_TELEGRAM_TOKEN"
+
+[mcp.servers.mem0]
+env = { MEM0_API_KEY = "env:MEM0_API_KEY" }
+```
+
+**Which fields.** Any field whose key ends in `token`, `secret`, `password`,
+`passwd`, `pwd`, `api_key`, `apikey`, `access_key`, `private_key`, `credential`,
+`credentials` or `authorization` — plus every value under
+`[mcp.servers.<name>.env]` and `[mcp.servers.<name>.headers]`, which is where
+API keys live regardless of what the key is called. The `${env:NAME}` spelling
+works as well as `env:NAME`.
+
+**A missing variable stops startup.** If the named variable is unset or set to
+an empty string, config loading fails with an error naming both the variable and
+the field. Zora never falls back to the literal `"env:NAME"` string and never
+substitutes an empty credential — silently doing either is what made this
+mechanism worth nothing before v0.12.0.
+
+**Not resolved:** `api_key_env` on a provider. That field is *defined* as the
+name of an environment variable; the provider reads the variable itself.
+Resolving it would put a secret where a name is expected.
+
+**Not covered:** an `env:` reference in a non-credential field is left as the
+literal string, and a warning naming the field is logged. Nothing else in the
+TOML is substituted.
 
 ---
 

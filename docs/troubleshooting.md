@@ -195,12 +195,15 @@ The dashboard polls provider status periodically. If a provider's auth/quota sta
 ### Bot doesn't respond to messages
 
 1. **Telegram not enabled.** Set `steering.telegram.enabled = true` in `config.toml`.
-2. **Missing bot token.** Set `steering.telegram.bot_token` to your BotFather token.
+2. **Missing bot token.** Set `steering.telegram.bot_token` to your BotFather
+   token, or to `"env:VAR"` and export the token as `VAR`. If the daemon exits
+   at startup naming a variable, that variable is not exported in the
+   environment the daemon runs in.
 3. **User not allowed.** Add your Telegram username to `steering.telegram.allowed_users`:
    ```toml
    [steering.telegram]
    enabled = true
-   bot_token = "123456:ABC-DEF..."
+   bot_token = "env:ZORA_TELEGRAM_TOKEN"
    allowed_users = ["your_username"]
    ```
 4. **Rate limited.** If you're sending messages faster than `rate_limit_per_min`, messages are dropped.
