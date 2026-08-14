@@ -492,37 +492,63 @@ it is a semantic change (upsert rather than insert), not a drop-in. Closing this
 would complete S0; until then the fix is real but partial, and the docs should
 say so plainly so consumers don't assume `executeWithParams` makes them safe.
 
-### N2. `DELETE` is a no-op — nodes are never removed
+### N2. ~~`DELETE` is a no-op~~ → **CORRECTED: ungrouped `COUNT` ignores deletions**
+
+> **Correction, 2026-08-14, after maintainer pushback.** This section originally
+> claimed `DELETE` was a no-op and ranked it the #1 fix. **That was wrong.**
+> `DELETE` and `DETACH DELETE` both work correctly. The bug is in `COUNT`, which
+> is what I used as the oracle — so the finding was an artifact of the test, not
+> of the database. The real bug is below; it is narrower than claimed but still
+> real, and it is what produced the false positive.
+
+**`DELETE` works.** Verified by row listing rather than by counting:
 
 ```js
-db.execute('CREATE (:C {n:9})');
-db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1
-db.execute('MATCH (n:C) DELETE n');          // no error
-db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1   ← still there
-db.checkpoint();
-db.execute('MATCH (n:C) RETURN COUNT(*)');   // 1   ← still there
+db.execute('CREATE (:C {v:1})'); db.execute('CREATE (:C {v:2})'); db.execute('CREATE (:C {v:3})');
+db.execute('MATCH (n:C) RETURN n.v');        // [1, 2, 3]
+db.execute('MATCH (n:C {v:2}) DELETE n');
+db.execute('MATCH (n:C) RETURN n.v');        // [1, 3]     ← deleted
+db.execute('MATCH (n:C {v:2}) RETURN n.v');  // []         ← gone
+db.execute('MATCH (n:C) DELETE n');
+db.execute('MATCH (n:C) RETURN id(n)');      // []         ← all gone
 ```
 
-No error, no effect, survives a checkpoint. **This also reproduces on 0.1.21**, so
-it is long-standing rather than a regression.
+**`DETACH DELETE` works too** — node removed *and* edges removed. My earlier
+"detaches but does not delete" claim was the same `COUNT` artifact.
 
-*My original report missed this, and the reason is worth recording: the first
-probe asserted only that `DELETE` did not throw, never that the node was gone.
-A test that checks for the absence of an error is not a test of the operation.*
+**The actual bug: bare ungrouped `COUNT` returns a stale cardinality.**
 
-`DETACH DELETE` (newly parsing in 0.1.23) has the same shape — it removes the
-edges but leaves the node:
+With 3 nodes created and 1 deleted (2 genuinely remaining):
 
-```
-before: A count 1, edges 1
-after MATCH (n:A) DETACH DELETE n:  A count 1, edges 0
-```
+| Query | Correct | Actual |
+|---|---|---|
+| `MATCH (n:N) RETURN COUNT(*)` | 2 | **3** |
+| `MATCH (n:N) RETURN count(n)` | 2 | **3** |
+| `MATCH (n:N) RETURN labels(n), COUNT(*)` | 2 | 2 ✓ |
+| `MATCH (n:N) WHERE n.v > 0 RETURN COUNT(*)` | 2 | 2 ✓ |
 
-So it detaches without deleting. Consumers get silent partial execution.
+The discriminator is sharp and points straight at the cause: an aggregate with a
+**grouping key** or a **`WHERE` predicate** is correct, while the bare form is
+stale. That is the signature of a fast path that answers ungrouped counts from a
+stored per-label cardinality which is incremented on create and **not decremented
+on delete**, while any query that has to materialise rows counts them honestly.
 
-Combined impact: **there is no way to remove a node from the graph.** For any
-long-running store that is unbounded growth with no retention or pruning path —
-and it makes GDPR/right-to-erasure style requirements unimplementable.
+Survives `checkpoint()`. **Reproduces identically on 0.1.21**, so it is
+long-standing, not a 0.1.23 regression.
+
+**Impact.** Narrower than a broken `DELETE`, but not cosmetic: `COUNT` is the
+natural way to test existence, drive pagination, report store size, or assert in
+tests — and it silently over-reports after any deletion, with no error. It is
+also, demonstrably, capable of convincing a careful reader that a working
+`DELETE` is broken.
+
+**Suggested fix:** decrement the cardinality on delete, or drop the fast path and
+count materialised rows. A regression test asserting
+`COUNT(*) === RETURN <prop>` row count after a delete would have caught it.
+
+*Process note for anyone using these probes: the original error was using
+`COUNT(*)` to verify a mutation. Verify deletions by listing rows or ids, never
+by counting — the count is the thing under test.*
 
 ### N3. Relationship direction is ignored — precisely characterised
 
@@ -546,9 +572,9 @@ graph here is append-only and forward-traversable only.
 
 ## Revised priority for the next release
 
-1. **N2 — make `DELETE` / `DETACH DELETE` actually delete.** Silent no-op on a
-   data-removal operation is the most dangerous behaviour in this report: callers
-   believe data is gone when it is not.
+1. **N2 — fix ungrouped `COUNT` so it reflects deletions.** Not the data-loss
+   bug originally claimed here — `DELETE` works — but it silently over-reports
+   after any deletion, with no error.
 2. **N3 — honour relationship direction.** Silent wrong answers, and it disables
    inbound traversal entirely.
 3. **N1 — parameterize `CREATE`** to finish S0.
