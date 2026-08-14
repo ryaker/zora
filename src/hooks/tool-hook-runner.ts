@@ -31,6 +31,31 @@ export interface ToolHook {
   run(ctx: ToolCallContext): Promise<ToolHookResult>;
 }
 
+/**
+ * SEC-23: does a hook's `tools` filter cover this tool call?
+ *
+ * The filters were written against Zora's own lowercase tool vocabulary
+ * (`bash`, `shell`, `run_command`) at a time when the hook chain ran over Zora's
+ * *observed* event stream. Since SEC-21 the chain runs from the SDK's
+ * `PreToolUse` hook, where the tool name is the SDK's — `Bash`, `Read`, `Write`.
+ * `['bash', ...].includes('Bash')` is false, so `ShellSafetyHook` — the hook
+ * whose entire job is refusing `rm -rf /` and `curl | sh` — matched nothing and
+ * was skipped on every real call. `SensitiveFileGuardHook` was unaffected only
+ * because it has no `tools` filter and lowercases the name itself.
+ *
+ * Matching is therefore case-insensitive, and MCP-prefixed names
+ * (`mcp__zora-tools__memory_save`) are compared on their base name too, since
+ * that is the name a filter would sensibly be written against.
+ */
+export function toolFilterMatches(filter: string[], tool: string): boolean {
+  const lower = tool.toLowerCase();
+  const base = (tool.split('__').pop() ?? tool).toLowerCase();
+  return filter.some(f => {
+    const lf = f.toLowerCase();
+    return lf === lower || lf === base;
+  });
+}
+
 export class ToolHookRunner {
   private readonly _hooks: ToolHook[] = [];
 
@@ -57,7 +82,7 @@ export class ToolHookRunner {
 
     for (const hook of this._hooks) {
       if (hook.phase !== 'before' && hook.phase !== 'both') continue;
-      if (hook.tools && hook.tools.length > 0 && !hook.tools.includes(ctx.tool)) continue;
+      if (hook.tools && hook.tools.length > 0 && !toolFilterMatches(hook.tools, ctx.tool)) continue;
 
       const result = await hook.run({ ...ctx, arguments: args });
       if (!result.allow) {
@@ -76,7 +101,7 @@ export class ToolHookRunner {
   async runAfter(ctx: ToolCallContext): Promise<void> {
     for (const hook of this._hooks) {
       if (hook.phase !== 'after' && hook.phase !== 'both') continue;
-      if (hook.tools && hook.tools.length > 0 && !hook.tools.includes(ctx.tool)) continue;
+      if (hook.tools && hook.tools.length > 0 && !toolFilterMatches(hook.tools, ctx.tool)) continue;
 
       try {
         await hook.run(ctx);

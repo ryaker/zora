@@ -5,6 +5,22 @@
 export { PolicyEngine } from './policy-engine.js';
 export type { ValidationResult } from './policy-engine.js';
 
+// SEC-23: the single place SDK enforcement options are assembled.
+export {
+  buildEnforcedSdkOptions,
+  deriveDisallowedTools,
+  ENFORCEMENT_OPTION_KEYS,
+  SHELL_TOOL_NAMES,
+  NETWORK_TOOL_NAMES,
+} from './enforced-sdk-options.js';
+export type {
+  BuildEnforcedSdkOptionsInput,
+  EnforcedSdkOptions,
+  EnforcedCanUseTool,
+  EnforcedPermissionMode,
+  EnforcementOptionKey,
+} from './enforced-sdk-options.js';
+
 export { SecretsManager } from './secrets-manager.js';
 export { AuditLogger } from './audit-logger.js';
 export type { AuditEntryInput, AuditFilter, ChainVerificationResult } from './audit-logger.js';

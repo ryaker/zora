@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ToolHookRunner, type ToolHook, type ToolCallContext } from '../../../src/hooks/tool-hook-runner.js';
+import { ToolHookRunner, toolFilterMatches, type ToolHook, type ToolCallContext } from '../../../src/hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../../../src/hooks/built-in/shell-safety.js';
 import { RateLimitHook } from '../../../src/hooks/built-in/rate-limit.js';
 import { SecretRedactHook } from '../../../src/hooks/built-in/secret-redact.js';
@@ -176,5 +176,37 @@ describe('SecretRedactHook', () => {
   it('does not redact regular string values', async () => {
     const r = await SecretRedactHook.run(baseCtx('bash', { command: 'echo hello', path: '/tmp/file.txt' }));
     expect(r.modifiedArgs).toBeUndefined();
+  });
+});
+
+// ─── SEC-23: tool-filter matching ────────────────────────────────────
+
+describe('toolFilterMatches — SEC-23', () => {
+  it('matches case-insensitively, so an SDK tool name reaches a lowercase filter', () => {
+    // The hook `tools` filters were written for Zora's own lowercase vocabulary.
+    // Since SEC-21 the chain runs from the SDK's PreToolUse hook, where the name
+    // is 'Bash'. `['bash'].includes('Bash')` is false — which is why
+    // ShellSafetyHook was skipped on every real call until this landed.
+    expect(toolFilterMatches(['bash', 'shell'], 'Bash')).toBe(true);
+    expect(toolFilterMatches(['bash', 'shell'], 'bash')).toBe(true);
+    expect(toolFilterMatches(['Bash'], 'bash')).toBe(true);
+  });
+
+  it('does not match an unrelated tool', () => {
+    expect(toolFilterMatches(['bash', 'shell'], 'Read')).toBe(false);
+    expect(toolFilterMatches([], 'Bash')).toBe(false);
+  });
+
+  it('matches an MCP-prefixed name on its base name', () => {
+    expect(toolFilterMatches(['memory_save'], 'mcp__zora-tools__memory_save')).toBe(true);
+    expect(toolFilterMatches(['memory_save'], 'mcp__zora-tools__memory_forget')).toBe(false);
+  });
+
+  it('runs a filtered hook against the SDK spelling of the tool', async () => {
+    const runner = new ToolHookRunner();
+    runner.register(ShellSafetyHook);
+    const result = await runner.runBefore(baseCtx('Bash', { command: 'mkfs /dev/sda1' }));
+    expect(result.allow).toBe(false);
+    expect(result.blockedBy).toBe('shell-safety');
   });
 });
