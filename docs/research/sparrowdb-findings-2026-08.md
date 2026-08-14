@@ -567,8 +567,12 @@ wrong in both directions: it returns outbound neighbours, and it can never retur
 inbound ones. **There is no way to ask "what points at this node."**
 
 That breaks the whole class of query directed edges exist for: who depends on
-this, what supersedes this, who reports to whom. Combined with N2, a knowledge
-graph here is append-only and forward-traversable only.
+this, what supersedes this, who reports to whom.
+
+*(An earlier revision added "combined with N2, the graph is append-only" here.
+That followed from the mistaken `DELETE` claim and is withdrawn — deletion
+works, so the graph is mutable. N3 stands on its own: it is forward-traversable
+only.)*
 
 ## Revised priority for the next release
 
