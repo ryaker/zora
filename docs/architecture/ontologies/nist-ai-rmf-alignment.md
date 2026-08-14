@@ -30,7 +30,7 @@ The NIST AI RMF organizes AI risk management into four core functions:
 | GV-1.5 | Policies for human oversight are established | DashboardServer provides real-time SSE event stream at localhost:8070. TelegramGateway enables async mobile steering. SteeringManager.always_flag config enables human approval gates for defined action categories | src/dashboard/server.ts, src/steering/telegram-gateway.ts, src/types.ts ActionsPolicy |
 | GV-2.1 | AI risk is integrated into organizational risk management | PolicyEngine integrates risk controls at task execution time. BudgetPolicy limits per-session resource consumption | src/security/policy-engine.ts |
 | GV-4.1 | Risk tolerance is defined | BudgetPolicy (max_actions_total, max_actions_by_type, max_tokens_total) and FilesystemPolicy / ShellPolicy allowlists define operational risk tolerance declaratively | src/types.ts BudgetPolicy, src/types.ts FilesystemPolicy |
-| GV-6.2 | Roles and responsibilities for AI risk are defined | CLI subcommands (zora-agent audit, check-permissions, request-permissions, steer) define operator touchpoints | src/cli/audit-commands.ts, src/cli/steer-commands.ts |
+| GV-6.2 | Roles and responsibilities for AI risk are defined | CLI subcommands (zora-agent audit, security, steer, approve/reject) define operator touchpoints; check_permissions / request_permissions are agent-facing tools, not CLI commands | src/cli/audit-commands.ts, src/cli/steer-commands.ts, src/cli/security-commands.ts |
 
 ---
 

@@ -5,7 +5,7 @@ Zora uses two TOML files for configuration:
 - **`config.toml`** -- Agent behavior, providers, routing, memory, steering, and notifications.
 - **`policy.toml`** -- Security policy: filesystem access, shell commands, network, budgets, and dry-run mode.
 
-Both files live in `~/.zora/` by default and are created by `zora init`.
+Both files live in `~/.zora/` by default and are created by `zora-agent init`.
 
 ---
 
@@ -50,7 +50,7 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
 | `enabled` | boolean | yes | Whether this provider is active. |
-| `model` | string | no | Model identifier (e.g. `"claude-opus-5"`, `"gemini-2.5-flash"`). Provider-specific default if omitted -- `claude-opus-5` for `claude-sdk`. |
+| `model` | string | no | Model identifier (e.g. `"claude-opus-5"`, `"gemini-2.5-pro"`). Provider-specific default if omitted -- `claude-opus-5` for `claude-sdk`. `zora-agent init` writes `gemini-2.5-pro` for `gemini-cli`. |
 | `effort` | string | no | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. The main intelligence/latency/cost dial. Left unset by default so the SDK's own default applies. `"xhigh"` requires Opus 4.7+ / Sonnet 5; `"max"` requires Opus 4.6+ / Sonnet 4.6+. Claude only. |
 | `max_turns` | integer | no | Maximum conversation turns per task. Default: `200`. |
 | `max_concurrent_jobs` | integer | no | Concurrency limit for this provider. |
@@ -151,7 +151,7 @@ Persistent memory system for context across sessions. Zora's memory operates in 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file (Tier 1). Loaded into every session's system prompt. Only editable by humans via `zora memory edit`. |
+| `long_term_file` | string | `"~/.zora/memory/MEMORY.md"` | Path to the long-term memory file (Tier 1). Loaded into every session's system prompt. Only editable by humans via `zora-agent memory edit`. |
 | `daily_notes_dir` | string | `"~/.zora/memory/daily"` | Directory for daily note files (Tier 2). Each day produces a `YYYY-MM-DD.md` file. |
 | `items_dir` | string | `"~/.zora/memory/items"` | Directory for structured memory items (Tier 3). Each item stored as a JSON file. |
 | `categories_dir` | string | `"~/.zora/memory/categories"` | Directory for category summary files. Auto-generated from item categories. |
@@ -170,8 +170,13 @@ Persistent memory system for context across sessions. Zora's memory operates in 
 |-------|------|---------|-------------|
 | `auto_extract` | boolean | `true` | Enable automatic memory extraction after task completion. When enabled, the agent is prompted to extract key facts from completed work. |
 | `auto_extract_interval` | integer | `10` | Number of completed tasks between automatic extraction runs. Only applies when `auto_extract = true`. |
-| `salience_half_life_days` | integer | `14` | Half-life in days for the recency decay function. After this many days without access, a memory item's recency score drops to 50%. Lower values make the agent forget faster. |
-| `salience_reinforcement_weight` | float | `0.3` | Weight multiplied by `access_count` in the salience formula. Higher values make frequently accessed items score higher. |
+
+Salience scoring itself is not configurable. `SalienceScorer`
+(`src/memory/salience-scorer.ts`) is constructed with no arguments by
+`MemoryManager`, so its recency half-life is fixed at 14 days, and the frequency
+term is a fixed function of `access_count` rather than a weighted one. Keys for
+tuning either of those are not read by anything — setting them in `config.toml`
+has no effect.
 
 #### Example
 
@@ -186,11 +191,9 @@ max_context_items = 5
 max_category_summaries = 3
 auto_extract = true
 auto_extract_interval = 10
-salience_half_life_days = 14
-salience_reinforcement_weight = 0.3
 ```
 
-Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora init`.
+Paths support `~` expansion. Relative paths resolve from `~/.zora/`. All directories are created automatically by `zora-agent init`.
 
 ### `[security]`
 

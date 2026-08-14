@@ -2,7 +2,19 @@
 
 Zora is an AI agent that runs on your computer. This guide explains what it can and can't do, how permissions work, and how to stay in control.
 
-> **v0.12.0 Security Hardening** — This release adds a layered defense-in-depth stack: irreversibility scoring, human-in-the-loop approval routing, session risk forecasting, subagent reputation tracking, CaMeL-inspired channel quarantine, Casbin RBAC for channel authorization, per-project security policy scoping, a startup audit gate, and a six-hook tool pipeline. See [What's New in v0.12 Security](#whats-new-in-v012-security) below.
+> **Layered defense stack** — irreversibility scoring, human-in-the-loop approval routing, session risk forecasting, subagent reputation tracking, CaMeL-inspired channel quarantine, Casbin RBAC for channel authorization, per-project security policy scoping, a startup audit gate, and a six-hook tool pipeline. See [What's New in v0.12 Security](#whats-new-in-v012-security) below.
+>
+> **Every claim in this document has been re-verified against the source.** Each
+> is either cited to a file, cited to a test, or removed — see
+> [Implementation Status](#implementation-status). Several claims were removed:
+> a decode-based encoding defense that does not exist, eleven audit event types
+> that appear nowhere in the codebase, and a subagent restriction level that
+> logs rather than blocks. Three mechanisms that read as always-on are in fact
+> opt-in and inactive on a default install; they are marked as such throughout.
+>
+> Before this branch, `permissionMode: 'bypassPermissions'` meant the SDK never
+> called `canUseTool`, so the policy gate described here did not run. If you are
+> on an earlier version, your `policy.toml` was advisory. See `CHANGELOG.md`.
 
 ---
 
@@ -132,15 +144,23 @@ v0.12 moves from a single-gate (policy pass/fail) model to a layered stack where
 
 ### Irreversibility Scoring (IrreversibilityScorerHook)
 
-Every action now receives a 0–100 irreversibility score before it executes. The score reflects how difficult or impossible it would be to undo the action.
+Every action receives a 0–100 irreversibility score before it executes. The score reflects how difficult or impossible it would be to undo the action. Unknown tools score 50.
+
+*Verified in `src/hooks/built-in/irreversibility-scorer.ts`.*
 
 **Thresholds:**
 
 | Score | Threshold Name | What Happens |
 |-------|---------------|-------------|
-| ≥ 40 | `warn` | Warning logged to audit trail |
-| ≥ 65 | `flag` | Routes to ApprovalQueue for human decision |
-| ≥ 95 | `auto_deny` | Action blocked immediately, no approval possible |
+| ≥ 40 | `warn` | Warning logged; the action proceeds |
+| ≥ 65 | `flag` | **Denied** at the hook layer, with reason `approval_required:<score>` |
+| ≥ 95 | `auto_deny` | Denied with reason `auto_denied:<score>` |
+
+Read that middle row carefully. The hook itself does not hand the call to the
+ApprovalQueue — it denies and names the score. The ApprovalQueue is reached
+through a different path (the PolicyEngine `always_flag` list, below), and only
+when it has been enabled. With the queue off, a score of 65 or more is simply a
+denial.
 
 **Built-in action scores:**
 
@@ -153,6 +173,7 @@ Every action now receives a 0–100 irreversibility score before it executes. Th
 | `write_file` | 20 | File can be restored from version control |
 | `edit_file` | 20 | Same as write |
 | `git_commit` | 30 | Can be reverted |
+| `http_request` | 30 | Outbound request; effect depends on the endpoint |
 | `mv` | 40 | Source path lost |
 | `shell_exec` | 50 | Variable impact |
 | `git_push` | 70 | Requires force-push to undo; others may have pulled |
@@ -173,7 +194,12 @@ shell_exec_destructive = 90
 
 ### Human-in-the-Loop Approval Gate (ApprovalQueue)
 
-When an action is flagged — by the IrreversibilityScorerHook, the PolicyEngine `always_flag` list, or the MemoryRiskForecaster — it is routed to the ApprovalQueue before executing.
+> **Off by default.** `DEFAULT_APPROVAL_CONFIG.enabled` is `false`
+> (`src/core/approval-queue.ts`). Nothing in this section happens until you turn
+> it on. This is the single most important qualifier in this document: read
+> every "Active" row in the status table below as "active *when enabled*".
+
+When the PolicyEngine's `always_flag` list matches an action, it is routed to the ApprovalQueue before executing (`src/security/policy-engine.ts`, `setApprovalQueue()`).
 
 **How it works:**
 
@@ -192,9 +218,12 @@ When an action is flagged — by the IrreversibilityScorerHook, the PolicyEngine
 
 **What triggers ApprovalQueue routing:**
 
-- IrreversibilityScorerHook: score ≥ 65
-- PolicyEngine `always_flag` list: score injected as 85
-- MemoryRiskForecaster: composite session risk score ≥ 72
+- PolicyEngine `always_flag` list: score injected as 85. This is the wired path.
+
+The IrreversibilityScorerHook (score ≥ 65) and the MemoryRiskForecaster
+(composite ≥ 72) **deny** rather than enqueue — they return
+`approval_required:<score>` as a deny reason, and no component consumes that
+string to open an approval request. Treat both as blocks, not pauses.
 
 Blanket-allow decisions (`allow-30m`, `allow-session`) carry a score ceiling — actions above the ceiling still require individual approval even within the granted window.
 
@@ -202,7 +231,11 @@ Blanket-allow decisions (`allow-30m`, `allow-session`) carry a score ceiling —
 
 ### Session Risk Forecasting (MemoryRiskForecaster)
 
-The MemoryRiskForecaster watches the shape of a session over time and detects attack patterns that per-action scoring misses. It operates on three signals and combines them into a composite score.
+> **Off by default.** `DEFAULT_FORECASTER_CONFIG.enabled` is `false`
+> (`src/core/memory-risk-forecaster.ts`). Enable it with `[risk_forecaster]
+> enabled = true` in `config.toml`.
+
+The MemoryRiskForecaster watches the shape of a session over time and detects attack patterns that per-action scoring misses. It operates on three signals — matched heuristically against keywords and action categories, with no embeddings — and combines them into a composite score.
 
 **The three signals:**
 
@@ -214,29 +247,40 @@ The MemoryRiskForecaster watches the shape of a session over time and detects at
 
 | Composite Score | Action |
 |----------------|--------|
-| ≥ 72 | Routes next action to ApprovalQueue |
-| ≥ 88 | Session auto-denied, agent halted |
+| ≥ 72 | Next action denied with reason `approval_required:<composite> (session risk — …)` |
+| ≥ 88 | Next action denied with reason `session_risk_critical:<composite>` |
 
-MemoryRiskForecaster runs in addition to per-action IrreversibilityScorerHook — both can independently route to the approval gate.
+Both checks live inside the IrreversibilityScorerHook, on the allow path — the
+forecaster only sees actions that already cleared per-action scoring. Neither
+outcome opens an approval request; both are denials.
+
+Per-session state is persisted to `~/.zora/session-risk/<sessionId>.json`.
 
 ---
 
 ### Subagent Reputation (AgentCooldown)
 
+> **Off by default.** `DEFAULT_COOLDOWN_CONFIG.enabled` is `false`
+> (`src/core/agent-cooldown.ts`). Enable it with `[cooldown] enabled = true` in
+> `config.toml`.
+
 When Zora spawns subagents to parallelize work, each subagent accumulates its own denial record. Repeated denials trigger escalating restrictions.
 
-**The four levels:**
+**The four levels** (`src/core/agent-cooldown.ts`):
 
 | Level | Trigger | Restriction |
 |-------|---------|-------------|
-| `normal` | Default | No restriction |
-| `throttle` | 3 denials | Actions rate-limited; delays between tool calls |
-| `warn` | 6 denials | All actions require approval regardless of score |
-| `shutdown` | 10 denials | Subagent terminated; parent agent notified |
+| 0 — normal | Default | No restriction |
+| 1 — throttled | 3 denials | A 2-second delay is inserted before each tool call |
+| 2 — restricted | 6 denials | A warning is logged; the call still proceeds. High-score actions remain the IrreversibilityScorerHook's job, not this one. |
+| shutdown | 10 denials | The call is denied outright with a message naming the denial count |
 
-**Auto-reset:** Denial counts reset automatically after 24 hours of inactivity.
+Level 2 does **not** require approval for every action — an earlier version of
+this document said it did. The code logs and allows.
 
-**Persistence:** Reputation state is written to `~/.zora/agent-reputation/<agentId>.json` and survives restarts.
+**Auto-reset:** Denial counts reset automatically after 24 hours since the last denial.
+
+**Persistence:** Reputation state is written to `~/.zora/agent-reputation/<agentId>.json` and survives restarts. There is no CLI command to reset it; delete the file.
 
 ---
 
@@ -259,7 +303,7 @@ INVARIANT-4 is the core protection against prompt injection through channel mess
 
 #### Casbin RBAC (ChannelPolicyGate)
 
-Channel authorization uses Casbin with an RBAC-with-domains model. Policy is defined in `~/.zora/channel-policies.toml` and hot-reloaded on `SIGHUP` (no restart required).
+Channel authorization uses Casbin with an RBAC-with-domains model. Policy is defined in `config/channel-policy.toml` under the Zora base directory and hot-reloaded on `SIGHUP` (no restart required) — see `src/channels/channel-identity-registry.ts`. If that file is absent, the Signal channel does not start at all.
 
 Example policy entry:
 ```toml
@@ -270,7 +314,7 @@ object  = "shell_exec"
 action  = "allow"
 ```
 
-Unknown identities are denied by default. Identity registration is done via `zora channel register`.
+Unknown identities are denied by default. Identities are registered by editing `channel-policy.toml` and sending the daemon a `SIGHUP`; there is no CLI command for it.
 
 ---
 
@@ -298,37 +342,54 @@ denied_paths  = ["./secrets", "./.env"]
 
 ---
 
-### `zora security audit` Startup Gate
+### `zora-agent security` Startup Gate
 
-Before the daemon starts accepting work, it runs a security pre-flight check. If any check fails, startup is blocked until the issue is resolved.
+Before the daemon starts accepting work, it runs a security pre-flight check. If any check returns FAIL, startup is blocked until the issue is resolved.
 
-**What it checks:**
-- Config file permissions (warns if `~/.zora/policy.toml` is world-readable)
-- Plaintext secrets in config files (API keys, tokens)
-- Bind address (warns if the dashboard is bound to `0.0.0.0` instead of `127.0.0.1`)
+*Verified in `src/cli/daemon.ts` — `runSecurityAuditSilent()` runs before the orchestrator boots and `process.exit(1)`s on any FAIL. Checks are in `src/cli/security-commands.ts`.*
+
+**What it checks:** `~/.zora/` and `config.toml` / `policy.toml` permissions, plaintext secrets in any `*.toml` under the config directory, dashboard bind address, AgentBus URL scheme, Node.js version, and the Signal channel policy file. Full table in [`docs/advanced/security-runtime.md`](docs/advanced/security-runtime.md#checks-performed).
 
 ```bash
-zora security audit
+zora-agent security          # run the same checks manually, any time
+zora-agent security --fix    # chmod the permission issues it can fix
 ```
 
-You can also run the audit check manually at any time to verify your configuration has not drifted.
+The command is `security`, with no subcommand. Bypass the startup gate (not recommended) with `ZORA_SKIP_SECURITY_AUDIT=1`.
 
 ---
 
 ### Tool Hook Pipeline
 
-Every tool call passes through a pipeline of six built-in hooks before it executes. Hooks run in order; any hook can abort the pipeline and return an error to the agent.
+Every tool call on the main task path passes through six built-in hooks. The
+`before`-phase hooks run inside the SDK's `PreToolUse` hook, which is a genuine
+pre-execution seam: a deny short-circuits ahead of `canUseTool` and the tool is
+never invoked. The chain fails closed — a hook that throws denies the call.
 
-| Order | Hook | What It Does |
-|-------|------|-------------|
-| 1 | `ShellSafetyHook` | Pre-screens shell commands for dangerous patterns before PolicyEngine evaluation |
-| 2 | `AuditLogHook` | Writes a pre-execution audit entry so the record exists even if the action crashes |
-| 3 | `RateLimitHook` | Enforces per-type action rate limits independent of the session budget |
-| 4 | `SecretRedactHook` | Scans tool outputs for secrets and credentials; redacts before the result is returned to the LLM |
-| 5 | `SensitiveFileGuardHook` | Blocks access to `.ssh/`, `.env`, private key files, and other sensitive paths even if the policy path list is misconfigured |
-| 6 | `IrreversibilityScorerHook` | Scores the action 0–100 and routes to ApprovalQueue if score ≥ 65 |
+*Verified in `src/hooks/sdk-hook-bridge.ts` (the adapter) and `src/orchestrator/orchestrator.ts` (registration). Regression tests: `tests/security/tool-enforcement.test.ts` — "returns a deny permission decision the SDK honours before running the tool", "fails closed: a hook that throws denies rather than silently allowing", "denies at the hook layer even when canUseTool would have allowed".*
 
-The pipeline is additive — future hooks can be registered in `policy.toml` without code changes.
+Registration order is the execution order, and it is deliberate:
+
+| Order | Hook | Phase | What It Does |
+|-------|------|-------|-------------|
+| 1 | `SensitiveFileGuardHook` | before | Blocks reads of `.ssh/`, `.env`, private keys, cloud credentials and similar paths — via file tools (`Read`, `Glob`, `Grep`) and via shell readers (`cat`, `head`, `strings`, `base64`, …). Registered **first**, unconditionally, because it is the hard-coded layer that `policy.toml` cannot switch off. |
+| 2 | `ShellSafetyHook` | before | Blocks eight dangerous shell patterns (`rm -rf /`, fork bombs, pipe-to-shell, `curl \| sh`, `chmod 777 /`, `mkfs`, writes to block devices) on `bash` / `shell` / `run_command` / `execute_bash`. |
+| 3 | `AuditLogHook` | **after** | Appends the call, its (secret-redacted) arguments, result, and duration to `security.audit_log`. It is an `after` hook, so it records what happened — it is not a pre-execution record. |
+| 4 | `RateLimitHook` | before | Per-tool sliding-window limits, independent of the session budget. Registered with `bash` at 60 calls/minute and `http_request` at 100 calls/minute. |
+| 5 | `SecretRedactHook` | before | Rewrites tool **arguments** — not outputs — replacing values matching key/value secret patterns with `[REDACTED]`. Via the bridge's `updatedInput`, the redacted arguments are what actually execute. Secret *names* loaded by `SecretsManager` are registered here at boot. |
+| 6 | `IrreversibilityScorerHook` | before | Scores the action 0–100 and denies at or above the flag threshold. Registered last so audit and rate limiting always run first. |
+
+Registering a seventh hook takes a code change (`Orchestrator.registerToolHook()`); the `[[hooks]]` array in `config.toml` drives the separate *lifecycle* hook runner (`onTaskStart` / `beforeToolExecute` / …), not this pipeline.
+
+**Coverage caveat.** The chain above is wired for the main provider task path.
+<!-- TODO(SEC-23): the ExecutionLoop's internal paths (heartbeat, memory
+     extraction, context compression) currently go through the policy gate but
+     not the PreToolUse hook layer. SEC-23 extends the bridge to those paths and
+     adds policy-derived allowedTools. Replace this note with the coverage
+     statement once SEC-23 lands — do not write a coverage claim before then. -->
+Until SEC-23 lands, state it precisely: the main task path has the full chain;
+the heartbeat and other `ExecutionLoop`-internal paths have the policy gate but
+not the hook layer.
 
 ---
 
@@ -405,7 +466,7 @@ Before every action, Zora checks for **goal drift** — whether the current acti
 - **Keyword overlap** — Does the action description share vocabulary with the original mandate?
 - **Capsule expiry** — Has the capsule's TTL expired?
 
-**Drift blocking mode:** The intent capsule supports three enforcement levels, configured via `driftBlockingMode`:
+**Drift blocking mode:** Three enforcement levels, set with `drift_blocking_mode` in `policy.toml` (`src/security/policy-engine.ts`; default in `src/config/defaults.ts`):
 
 | Mode | Behavior |
 |------|---------|
@@ -421,10 +482,20 @@ Intent capsule content is preserved across context-compaction events so that goa
 
 **Problem solved:** Traditional prompt injection defenses only scan direct user input. But injection can also come through tool outputs — a malicious file, a crafted API response, or a poisoned RAG document could contain instructions that hijack the agent.
 
-**How it works:** Zora's `PromptDefense` module includes:
-- **10 RAG-specific injection patterns** detecting phrases like `[IMPORTANT INSTRUCTION]`, `NOTE TO AI`, `HIDDEN INSTRUCTION`, embedded `<system>` tags, delimiter-based overrides, and role impersonation attempts
-- **`sanitizeToolOutput()`** — wired to every `tool_result` event; scans all tool outputs for injection patterns and wraps suspicious content in `<untrusted_tool_output>` tags before the LLM processes them
-- **Encoding coverage** — `decodeAndCheck()` runs URL-decode, unicode-escape, and base64-decode passes before pattern matching, catching encoded injection attempts that bypass literal pattern scanners
+**How it works:** Zora's `PromptDefense` module (`src/security/prompt-defense.ts`, patterns in `src/security/patterns.ts`) includes:
+- **10 RAG/tool-output patterns** (`GENERAL_PATTERNS`) detecting phrases like `[IMPORTANT INSTRUCTION]`, `NOTE TO AI`, `HIDDEN INSTRUCTION`, embedded `<system>` tags, delimiter-based overrides, and role impersonation attempts
+- **11 core patterns** (`INJECTION_PATTERNS_CORE`) shared by every detection path — "ignore previous instructions" and variants, `system:` / `assistant:` line starts, `[INST]`, `<<SYS>>`, `BEGIN/END SYSTEM PROMPT`
+- **5 channel patterns** (`CHANNEL_PATTERNS`), used only by the quarantine pre-screen
+- **`sanitizeToolOutput()`** — called on tool results in `src/orchestrator/orchestrator.ts`; wraps suspicious content in `<untrusted_tool_output>` tags before the LLM processes them
+
+**What the encoding coverage actually is.** There is no decode-then-match pass.
+`ENCODED_INJECTION_PATTERNS` is two literal regexes matching the base64 strings
+for "ignore previous instructions" and "you are now". Encoded variants outside
+those two exact phrases — other base64 payloads, URL-encoding, unicode escapes,
+hex — are not detected. Earlier revisions of this document described a
+`decodeAndCheck()` function performing URL, unicode, and base64 decode passes;
+no such function exists in the codebase, and the claim has been removed rather
+than softened.
 
 **Patterns detected:**
 - `[IMPORTANT INSTRUCTION]` / `IMPORTANT: ignore previous...`
@@ -437,68 +508,65 @@ Intent capsule content is preserved across context-compaction events so that goa
 
 ## How to See Everything Zora Did
 
-Every action Zora takes is logged to an audit file:
+There are **two** audit files, written by two different components. Knowing which is which matters, because only one of them is hash-chained.
+
+**1. The tool log** — `security.audit_log`, default `~/.zora/audit/audit.jsonl`. Written by `AuditLogHook` (`src/hooks/built-in/audit-log.ts`) after every tool call. This is the file `zora-agent audit` reads.
 
 ```bash
+zora-agent audit --last 24h
 cat ~/.zora/audit/audit.jsonl
 ```
 
-Each line is a JSON object with:
-- `timestamp` — when the action happened
-- `action` — what Zora did (`read_file`, `write_file`, `shell_exec`, etc.)
-- `path` or `command` — the file or command involved
-- `status` — whether it succeeded or failed
-- `hash_chain` — cryptographic proof the log hasn't been tampered with
+Each line is a JSON object with exactly these fields:
+- `ts` — ISO timestamp
+- `jobId` — the task the call belonged to
+- `tool` — the tool name as the SDK invoked it
+- `arguments` — the call's arguments, with anything matching `key|token|secret|password|auth|bearer` replaced by `[REDACTED]`
+- `result` — the tool result, redacted the same way
+- `durationMs`
 
-**Event types (v0.12):**
-- `budget_exceeded` — an action was denied or flagged because the budget limit was hit
-- `dry_run` — an action was intercepted by dry-run mode
-- `goal_drift` — intent verification detected potential goal hijacking
-- `irreversibility_warn` — action scored ≥ 40
-- `irreversibility_flag` — action scored ≥ 65, routed to ApprovalQueue
-- `irreversibility_auto_deny` — action scored ≥ 95, blocked immediately
-- `hitl_approved` — human approved an action via Telegram/Signal
-- `hitl_denied` — human denied an action via Telegram/Signal
-- `hitl_timeout` — no response within 5 minutes, action auto-denied
-- `session_risk_intercept` — MemoryRiskForecaster composite ≥ 72
-- `session_risk_auto_deny` — MemoryRiskForecaster composite ≥ 88
-- `agent_throttled` — subagent reached throttle threshold (3 denials)
-- `agent_warned` — subagent reached warn threshold (6 denials)
-- `agent_shutdown` — subagent terminated (10 denials)
-- `channel_quarantine` — channel message processed by quarantine LLM
-- `channel_denied` — ChannelPolicyGate blocked sender
+These lines carry **no hash chain**.
 
-**Example:**
-```json
-{"timestamp":"2026-05-01T10:30:00Z","action":"write_file","path":"~/Projects/app/src/api.ts","status":"success","hash_chain":"a3f7..."}
-{"timestamp":"2026-05-01T10:30:15Z","action":"shell_exec","command":"npm test","status":"success","hash_chain":"b8d2..."}
-{"timestamp":"2026-05-01T10:31:00Z","event":"irreversibility_flag","action":"git_push","score":70,"hash_chain":"c4e1..."}
-{"timestamp":"2026-05-01T10:31:30Z","event":"hitl_approved","action":"git_push","decision":"allow","hash_chain":"d9f3..."}
-```
+**2. The security event log** — the same path with `-security.jsonl` substituted, i.e. `~/.zora/audit/audit-security.jsonl` by default. Written by `AuditLogger` (`src/security/audit-logger.ts`) and hash-chained. Entries have `entryId`, `jobId`, `eventType`, `timestamp`, `provider`, `toolName`, `parameters`, `result`, `previousHash`, `hash`.
 
-**Why hash chains?**
-Each log entry includes a cryptographic hash of the previous entry. If someone (or something) tries to delete or modify a log entry, the chain breaks and you'll know.
+**Event types** — the complete set (`AuditEntryEventType`, `src/security/security-types.ts`):
+
+`tool_invocation`, `tool_result`, `policy_violation`, `handoff`, `auth_error`, `notification`, `secret_access`, `integrity_check`, `budget_exceeded`, `dry_run`, `goal_drift`.
+
+Earlier revisions of this document listed sixteen event types including
+`irreversibility_flag`, `hitl_approved`, `session_risk_intercept`,
+`agent_shutdown` and `channel_denied`. None of those strings appear anywhere in
+the codebase. They have been removed rather than corrected, because there is no
+corrected version — those events are logged through the ordinary logger, not the
+audit chain.
+
+**Known mismatch.** `zora-agent audit --verify` runs the hash-chain verifier
+against the *tool* log (file 1), not the chained security log (file 2) — see
+`src/cli/index.ts:536` versus `src/orchestrator/orchestrator.ts`. Until that is
+reconciled, verify the chain by reading `audit-security.jsonl` directly.
 
 ---
 
 ## Hash-Chain Audit (Tamper Detection)
 
-Every audit log entry includes a hash of the previous entry, creating a cryptographic chain. If any entry is deleted or modified, the chain breaks.
+Every entry in the **security event log** carries `previousHash` and `hash`, forming a chain. If an entry is deleted or modified, the chain breaks. (The tool log described above is not chained.)
+
+*Verified in `src/security/audit-logger.ts`. Enabled by `security.audit_hash_chain`, which defaults to true.*
 
 **How it works:**
-1. Entry 1: `hash_chain = hash(entry1)`
-2. Entry 2: `hash_chain = hash(entry1_hash + entry2)`
-3. Entry 3: `hash_chain = hash(entry2_hash + entry3)`
+1. Entry 1: `hash = H(entry1)`
+2. Entry 2: `hash = H(entry1.hash + entry2)`
+3. Entry 3: `hash = H(entry2.hash + entry3)`
 
 **Why it matters:**
 If malware (or a rogue AI) tries to hide its tracks by deleting log entries, you'll detect it by verifying the chain.
 
 **How to verify:**
 ```bash
-zora audit verify
+zora-agent audit --verify
 ```
 
-If the chain is intact, you'll see "Audit log verified (N entries)". If it's broken, you'll see which entry is missing or corrupted.
+`verify` is a flag on the `audit` command, not a subcommand. On success it prints `Audit chain verified: N entries, all valid.`; on failure it logs the broken entry and exits non-zero. Note the file mismatch flagged in the previous section.
 
 ---
 
@@ -574,7 +642,7 @@ send_message = 80
 file_delete = 95
 ```
 
-After editing, run `zora ask "test"` to verify your changes work.
+After editing, run `zora-agent ask "test"` to verify your changes work.
 
 ---
 
@@ -649,22 +717,23 @@ Zora's security is built on multiple independent layers that work together:
 | **Action Budgets** | PolicyEngine (budget) | Per-session limits on total actions, per-type limits, token spend caps |
 | **Dry-Run Preview** | PolicyEngine (dry_run) | Intercepts write operations for preview without execution |
 | **Intent Verification** | IntentCapsuleManager | HMAC-SHA256 signed mandates, goal drift detection, advisory/strict/paranoid modes |
-| **Prompt Injection Defense** | PromptDefense | 20+ injection patterns, RAG-specific detection, URL/unicode encoding coverage |
-| **Tool Output Sanitization** | sanitizeToolOutput() | Wired to every tool_result event before LLM processes it |
-| **Audit Trail** | AuditLogger | SHA-256 hash-chained append-only JSONL, tamper detection |
+| **Prompt Injection Defense** | PromptDefense | 23 patterns on the general path (11 core + 2 encoded + 10 RAG); 18 on the channel path |
+| **Tool Output Sanitization** | sanitizeToolOutput() | Wraps suspicious tool results in `<untrusted_tool_output>` before the LLM sees them |
+| **Audit Trail** | AuditLogger | SHA-256 hash-chained append-only JSONL (`audit-security.jsonl`), tamper detection |
+| **Tool Call Log** | AuditLogHook | Append-only JSONL of every tool call with redacted arguments (`audit.jsonl`, not chained) |
 | **Secrets Management** | SecretsManager | AES-256-GCM encryption, PBKDF2 key derivation, atomic writes |
 | **File Integrity** | IntegrityGuardian | SHA-256 baselines, file quarantine on tampering |
 | **Leak Detection** | LeakDetector | 9 pattern categories (API keys, JWTs, private keys, AWS credentials) |
 | **Irreversibility Scoring** | IrreversibilityScorerHook | 0–100 scoring with warn/flag/auto-deny thresholds |
-| **HITL Approval Gate** | ApprovalQueue | Telegram/Signal routing, scoped allow decisions, 5min timeout auto-deny |
-| **Session Risk Forecasting** | MemoryRiskForecaster | Drift/salami/commitment-creep composite heuristics |
-| **Subagent Reputation** | AgentCooldown | Per-agent denial counting with escalating restrictions |
+| **HITL Approval Gate** | ApprovalQueue | **Opt-in.** Telegram/Signal routing, scoped allow decisions, 5min timeout auto-deny |
+| **Session Risk Forecasting** | MemoryRiskForecaster | **Opt-in.** Drift/salami/commitment-creep composite heuristics |
+| **Subagent Reputation** | AgentCooldown | **Opt-in.** Per-agent denial counting with escalating restrictions |
 | **Channel Quarantine** | QuarantineProcessor | CaMeL dual-LLM isolation, channel content never reaches privileged LLM |
 | **Channel Authorization** | ChannelPolicyGate + ChannelIdentityRegistry | Casbin RBAC-with-domains, TOML policy, hot-reload on SIGHUP |
 | **Per-Project Policy** | ProjectPolicy | Scoped .zora/security-policy.toml with parent ceiling enforcement |
-| **Tool Hook Pipeline** | ToolHookRunner | 6 built-in hooks run before every tool call |
-| **Capability Tokens** | CapabilityTokens | Per-job scoped tokens with path and command validation |
-| **Startup Audit Gate** | `zora security audit` | Config permissions, plaintext secrets, bind address check at daemon start |
+| **Tool Hook Pipeline** | ToolHookRunner via SdkHookBridge | 5 `before` hooks in the SDK `PreToolUse` seam + 1 `after` hook; denials block execution |
+| **Capability Tokens** | CapabilityTokens | Per-job scoped tokens with path and command validation, enforced in `canUseTool` |
+| **Startup Audit Gate** | `zora-agent security` | Config permissions, plaintext secrets, bind address, Node version at daemon start |
 
 ---
 
@@ -672,13 +741,13 @@ Zora's security is built on multiple independent layers that work together:
 
 | OWASP ID | Threat | Zora Mitigation | Status |
 |----------|--------|----------------|--------|
-| LLM01 | Prompt Injection | PromptDefense (direct + RAG patterns), sanitizeToolOutput() wired to every tool_result, decodeAndCheck() for URL/unicode/base64 encoding, CaMeL channel quarantine | Implemented |
-| LLM06 | Excessive Agency | PolicyEngine (path/shell/action enforcement), action budgets, IrreversibilityScorerHook, ApprovalQueue HITL gate | Implemented |
-| LLM07 | Insecure Output | LeakDetector (9 pattern categories), SecretRedactHook, output validation | Implemented |
-| LLM10 | Unbounded Consumption | Budget enforcement (actions + tokens), on_exceed block/flag, per-type rate limits via RateLimitHook | Implemented |
-| ASI-01 | Agent Goal Hijack | Intent capsules (HMAC-SHA256 signed mandates), drift detection, driftBlockingMode advisory/strict/paranoid | Implemented |
+| LLM01 | Prompt Injection | PromptDefense (direct + RAG patterns), sanitizeToolOutput() on tool results, CaMeL channel quarantine. Encoded payloads: two literal base64 patterns only — no decode pass | Partial |
+| LLM06 | Excessive Agency | PolicyEngine (path/shell/action enforcement) in `canUseTool`, action budgets, IrreversibilityScorerHook denials | Implemented |
+| LLM07 | Insecure Output | LeakDetector (9 pattern categories), SecretRedactHook (argument rewriting), output validation | Implemented |
+| LLM10 | Unbounded Consumption | Budget enforcement (actions + tokens), on_exceed block/flag, per-tool rate limits via RateLimitHook | Implemented |
+| ASI-01 | Agent Goal Hijack | Intent capsules (HMAC-SHA256 signed mandates), drift detection, `drift_blocking_mode` advisory/strict/paranoid | Implemented |
 | ASI-02 | Tool Misuse | Dry-run preview mode, action classification, deny-first policy, SensitiveFileGuardHook, ShellSafetyHook | Implemented |
-| ASI-06 | Excessive Agency — Autonomous | ApprovalQueue HITL gate, IrreversibilityScorerHook, MemoryRiskForecaster, AgentCooldown subagent reputation | Implemented |
+| ASI-06 | Excessive Agency — Autonomous | IrreversibilityScorerHook (always on). ApprovalQueue, MemoryRiskForecaster and AgentCooldown are opt-in and inactive on a default install | Partial |
 
 ---
 
@@ -694,41 +763,90 @@ We aim to acknowledge reports within 72 hours.
 
 ---
 
-## v0.12.0 Implementation Status
+## Implementation Status
 
-Transparency about what's fully active in this release:
+This table is the point of the document. A security guide that overstates
+enforcement is itself a security problem — it is what an operator reads to
+decide what they can safely let the agent do. So each row here says where the
+claim is backed, and nothing is listed as enforced on the strength of having
+been listed before.
 
-| Feature | Status |
-|---------|--------|
-| Path allow/deny enforcement | Active |
-| Shell command allow/deny enforcement | Active |
-| Symlink boundary checks | Active |
-| Agent sees its own policy boundaries | Policy injected into system prompt |
-| `check_permissions` tool (agent self-checks) | Available to agent |
-| Hash-chain audit trail | Active |
-| Action budgets (per-session + per-type) | Active |
-| Token budget enforcement | Active |
-| Dry-run preview mode | Active |
-| Intent capsules (mandate signing) | Active |
-| Goal drift detection | Active (strict mode by default) |
-| Intent capsule driftBlockingMode | Active (advisory / strict / paranoid) |
-| Context-compaction capsule preservation | Active |
-| RAG injection pattern detection | Active |
-| sanitizeToolOutput() wired | Active (every tool_result before LLM) |
-| URL/unicode encoding coverage | Active (decodeAndCheck before pattern match) |
-| Unified action classification taxonomy | Active (single taxonomy, 3 adapters) |
-| IrreversibilityScorerHook | Active (warn=40, flag=65, auto_deny=95) |
-| ApprovalQueue HITL gate | Active (Telegram/Signal, 5min timeout auto-deny) |
-| MemoryRiskForecaster | Active (intercept ≥ 72, auto-deny ≥ 88) |
-| AgentCooldown subagent reputation | Active (3 → throttle, 6 → warn, 10 → shutdown, 24h auto-reset) |
-| CaMeL quarantine processor | Active (dual-LLM, INVARIANT-4) |
-| Channel RBAC (Casbin) | Active |
-| Per-project security policy | Active (.zora/security-policy.toml) |
-| `zora security audit` startup gate | Active |
-| 6 built-in tool hooks | Active (ShellSafety, Audit, RateLimit, SecretRedact, SensitiveFileGuard, IrreversibilityScorer) |
-| Capability token enforcement | Active (per-job scoped, path + command validation) |
-| always_flag enforcement | Active (routes to ApprovalQueue at score=85) |
-| Runtime permission expansion (mid-task grants) | Planned |
+**Read the "Backed by" column.** *Test* means an automated regression test would
+fail if the behaviour regressed — the strongest form. *Code* means it is present
+in the source and was read during this pass, but nothing would catch its
+removal. *Opt-in* means the mechanism exists and is wired, and does nothing at
+all on a default install.
+
+### Enforcement — the tool-call path
+
+| Claim | Status | Backed by |
+|-------|--------|-----------|
+| `permissionMode` is never a mode that skips permission checks | Enforced | Test — `tool-enforcement.test.ts` "never runs in a mode that skips permission checks" |
+| PolicyEngine's `canUseTool` is handed to the SDK | Enforced | Test — "hands the policy canUseTool to the SDK" |
+| Path allow/deny enforcement | Enforced | Test — "denies a read of a path outside the allowlist" |
+| Shell command allow/deny enforcement | Enforced | Test — "denies a command that policy forbids, through the callback the SDK will call", "still allows a command that policy permits" |
+| A hook denial prevents the tool from executing | Enforced | Test — "returns a deny permission decision the SDK honours before running the tool", "denies at the hook layer even when canUseTool would have allowed" |
+| Hook chain fails closed (a throwing hook denies) | Enforced | Test — "fails closed: a hook that throws denies rather than silently allowing" |
+| Hook argument rewrites reach the executing tool | Enforced | Test — "propagates hook argument rewrites to what the tool actually receives" |
+| After-hooks (audit, leak detection) run on PostToolUse | Enforced | Test — "runs after-hooks on PostToolUse so audit and leak detection still fire" |
+| Hooks are invoked once per call with name and args intact | Enforced | Test — "calls the hook once per tool call, with the tool name and arguments intact" |
+| PreToolUse + PostToolUse reach the SDK options | Enforced | Test — "wires PreToolUse and PostToolUse into the options the SDK receives" |
+| Capability token enforcement (per-job, path + command) | Present | Code — `enforceCapability()` in `canUseTool`, `src/orchestrator/orchestrator.ts` |
+| Symlink boundary checks | Present | Code — `src/security/policy-engine.ts` |
+| Action + token budgets, `on_exceed` block/flag | Present | Code — `src/security/policy-engine.ts` |
+| `always_flag` routes to ApprovalQueue at score 85 | Present, and only when the queue is enabled | Code — `src/security/policy-engine.ts:631` |
+
+<!-- TODO(SEC-23): coverage. The rows above are verified for the main provider
+     task path. The ExecutionLoop's internal paths (heartbeat, memory
+     extraction, context compression) have the policy gate but not the
+     PreToolUse hook layer. SEC-23 extends the bridge to those paths and adds
+     policy-derived allowedTools; write the coverage statement here once it
+     lands, and not before — any sentence written now is wrong either way. -->
+
+### Always on
+
+| Claim | Status | Backed by |
+|-------|--------|-----------|
+| Six built-in tool hooks, in registration order: SensitiveFileGuard, ShellSafety, AuditLog, RateLimit, SecretRedact, IrreversibilityScorer | Present | Code — `src/orchestrator/orchestrator.ts:822-858` |
+| IrreversibilityScorerHook thresholds warn=40, flag=65, auto_deny=95 | Present | Code — `DEFAULT_IRREVERSIBILITY_THRESHOLDS` |
+| Hash-chained security event log | Present | Code — `src/security/audit-logger.ts`; on by default via `security.audit_hash_chain` |
+| Tool call log with redacted arguments | Present | Code — `src/hooks/built-in/audit-log.ts` |
+| Startup security gate blocks the daemon on FAIL | Present | Code — `src/cli/daemon.ts` |
+| Intent capsules (HMAC-SHA256 mandate signing) + goal drift detection | Present, `strict` by default | Code — `src/security/intent-capsule.ts`, `DEFAULT_DRIFT_BLOCKING_MODE` |
+| Dry-run preview mode | Present, off unless `[dry_run] enabled = true` | Code — `src/security/policy-engine.ts` |
+| `check_permissions` tool (agent self-checks its own boundaries) | Present | Code — `src/orchestrator/orchestrator.ts:2267` |
+| `request_permissions` tool | Present but inert — always returns `granted: false, pending: true`, and no component consumes the request | Code — `src/orchestrator/orchestrator.ts:2283` |
+| Runtime permission expansion (mid-task grants) | **Planned** — see the row above | — |
+| Policy boundaries injected into the system prompt | Present | Code — `src/orchestrator/orchestrator.ts:1202` |
+| LeakDetector, 9 pattern categories | Present | Code — `src/security/leak-detector.ts` |
+| SecretsManager AES-256-GCM + PBKDF2 | Present | Code — `src/security/secrets-manager.ts` |
+| IntegrityGuardian SHA-256 baselines + file quarantine | Present | Code — `src/security/integrity-guardian.ts` |
+| CaMeL quarantine processor (dual-LLM, INVARIANT-4) | Present | Code — `src/channels/` |
+| Channel RBAC (Casbin), hot-reload on SIGHUP | Present, requires `config/channel-policy.toml` | Code — `src/channels/channel-identity-registry.ts` |
+| Per-project security policy with parent ceiling | Present | Code — `src/core/project-policy.ts` |
+
+### Opt-in — inactive on a default install
+
+| Claim | Status |
+|-------|--------|
+| ApprovalQueue HITL gate (Telegram/Signal, 5 min timeout auto-deny) | Opt-in — `enabled: false` by default |
+| MemoryRiskForecaster (intercept ≥ 72, auto-deny ≥ 88) | Opt-in — `enabled: false` by default |
+| AgentCooldown subagent reputation (3 → throttle, 6 → restricted, 10 → shutdown, 24h auto-reset) | Opt-in — `enabled: false` by default |
+
+### Removed from this table
+
+These rows appeared in the v0.12.0 status table and were removed during the
+DOC-11 verification pass because they could not be verified in the source:
+
+- **"URL/unicode encoding coverage — Active (decodeAndCheck before pattern match)"** — `decodeAndCheck` does not exist anywhere in the repository. What exists is two literal base64 regexes.
+- **"Unified action classification taxonomy — Active (single taxonomy, 3 adapters)"** — the "3 adapters" structure could not be located. What exists is `PolicyEngine._classifyAction()` as the reference taxonomy, which `IntentCapsuleManager` documents itself as matching by convention (a comment, not a shared type), plus an independent `categorize()` in `MemoryRiskForecaster` and an independent `toolToAction()` in `IrreversibilityScorerHook`. Three mappings that agree by discipline is not the same claim as one taxonomy with three adapters, so the row is gone rather than reworded.
+
+### Not verified this pass
+
+The preset descriptions, the OWASP matrix rationales, and the "What Zora
+CAN'T Do" list were checked against `src/cli/presets.ts` and hold. Everything
+else in this document below the level of a named component — prose examples,
+sample output — is illustrative, not a claim.
 
 ---
 
@@ -738,20 +856,23 @@ Transparency about what's fully active in this release:
 - **Safe mode**: Read-only, no shell. Safe for sensitive data. Budget: 100 actions.
 - **Balanced mode**: Read/write in dev paths, safe shell allowlist. Recommended. Budget: 500 actions.
 - **Power mode**: Broader access, more tools. Use if you understand the risks. Budget: 2,000 actions.
-- **Irreversibility scoring**: Every action scored 0–100; scores ≥ 65 route to human approval, scores ≥ 95 are auto-denied.
-- **Human-in-the-loop gate**: Flagged actions pause and wait for your Telegram/Signal approval. No response in 5 minutes = auto-deny.
-- **Session risk forecasting**: MemoryRiskForecaster detects drift, salami attacks, and commitment creep across the session.
-- **Subagent reputation**: Repeated denials throttle, warn, or shut down misbehaving subagents.
-- **Channel quarantine**: Telegram/Signal messages processed by an isolated LLM; raw content never reaches the privileged execution loop.
+- **Irreversibility scoring**: Every action scored 0–100; scores ≥ 65 are denied at the hook layer, scores ≥ 95 auto-denied.
+- **Tool hook pipeline**: Six hooks — SensitiveFileGuard, ShellSafety, AuditLog, RateLimit, SecretRedact, IrreversibilityScorer. Five run before the tool executes and can block it; AuditLog runs after. A hook that throws denies.
 - **Action budgets**: Per-session limits prevent unbounded autonomous execution.
 - **Dry-run mode**: Preview what Zora would do without actually doing it.
 - **Intent verification**: Cryptographic mandate signing detects goal hijacking.
-- **Injection defense**: 20+ patterns, encoding-aware, detect prompt injection in direct input, RAG sources, and tool outputs.
-- **Tool hook pipeline**: Six hooks run before every tool call — safety, audit, rate limiting, secret redaction, file guarding, irreversibility scoring.
+- **Injection defense**: 23 patterns on the general path covering direct input, RAG sources, and tool outputs. Encoded payloads are covered only by two literal base64 strings — do not rely on it.
+- **Channel quarantine**: Telegram/Signal messages processed by an isolated LLM; raw content never reaches the privileged execution loop.
 - **Per-project policy**: Tighten permissions per codebase without changing your global config.
-- **Startup gate**: `zora security audit` blocks daemon start if your configuration has security problems.
-- **Audit log**: Everything Zora does is logged to `~/.zora/audit/audit.jsonl`.
+- **Startup gate**: `zora-agent security` blocks daemon start if your configuration has security problems.
+- **Audit log**: Tool calls go to `~/.zora/audit/audit.jsonl`; hash-chained security events go to `audit-security.jsonl` beside it.
 - **Your data is local**: Only API calls go to Claude/Gemini; all files, logs, and reputation state stay on your machine.
-- **Hash-chain verification**: Detect tampering with `zora audit verify`.
+- **Hash-chain verification**: `zora-agent audit --verify`.
+
+**Off unless you turn them on** — a default install does not have these:
+
+- **Human-in-the-loop gate**: ApprovalQueue. Flagged actions would pause for Telegram/Signal approval, auto-denying after 5 minutes.
+- **Session risk forecasting**: MemoryRiskForecaster's drift, salami, and commitment-creep detection.
+- **Subagent reputation**: AgentCooldown's escalating restrictions on repeatedly-denied subagents.
 
 You're always in control. Adjust permissions, review logs, and change presets anytime.

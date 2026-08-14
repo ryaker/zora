@@ -293,58 +293,69 @@ max_irreversibility_score = 25
 
 ## Startup Security Audit
 
-Every time the daemon starts, Zora runs a self-audit of its configuration files and environment.
+Every time the daemon starts, Zora runs a self-audit of its configuration files
+and environment. The gate lives in `src/cli/daemon.ts` (it calls
+`runSecurityAuditSilent()` before the orchestrator boots) and the checks
+themselves in `src/cli/security-commands.ts`.
 
 ### Running the Audit Manually
 
 ```bash
-zora security              # full audit
-zora security --fix        # auto-fix WARN issues (does not touch FAIL issues)
-zora security --json       # machine-readable output
+zora-agent security                  # full audit, human-readable
+zora-agent security --fix            # auto-fix the permission issues it can (chmod corrections)
+zora-agent security --format json    # machine-readable output
 ```
+
+Those are the only two options the command registers
+(`src/cli/security-commands.ts`). `--format` accepts `text` (the default) or
+`json`; any other value falls back to `text`.
 
 ### Output Format
 
 ```
-$ zora security
-✓ PASS  ~/.zora/ permissions (700)
+$ zora-agent security
+✓ PASS  ~/.zora permissions (700)
 ✓ PASS  config.toml permissions (600)
 ✓ PASS  policy.toml permissions (600)
-✗ FAIL  Bot token found in plaintext in config.toml:44
-         → Move to env: ZORA_TELEGRAM_TOKEN and use env:ZORA_TELEGRAM_TOKEN
-⚠ WARN  Node.js 18.x — upgrade to 20 LTS for security patches
-⚠ WARN  ~/.zora/skills/ contains 1 unaudited skill: custom-reporter.skill
-         → Run: zora-agent skill audit
+✗ FAIL  Plaintext secret in config.toml (config.toml:44)
+⚠ WARN  Node.js >= 20 LTS
+✓ PASS  Daemon binds to localhost only
 
-Summary: 3 PASS, 1 FAIL, 2 WARN
-
-FAILs block startup. Fix with: zora security --explain
+Summary: 4 PASS, 1 FAIL, 1 WARN
 ```
+
+FAILs block startup. Each FAIL carries its own message naming the remediation
+(for a plaintext secret, the environment variable to move it to); there is no
+separate `--explain` flag.
 
 ### Checks Performed
 
-| Check | Severity | Auto-Fix? |
-|-------|----------|-----------|
-| `~/.zora/` directory permissions (expect 700) | FAIL | Yes |
-| `config.toml` permissions (expect 600) | FAIL | Yes |
-| `policy.toml` permissions (expect 600) | FAIL | Yes |
-| Plaintext secrets in any config file | FAIL | No — requires manual remediation |
-| Symlinks in `~/.zora/` pointing outside | FAIL | No |
-| Node.js version below 20 LTS | WARN | No |
-| Unaudited skills in `~/.zora/skills/` | WARN | No |
-| PolicyEngine `[safety]` section absent | WARN | No (informational) |
-| `auto_deny` threshold at default 95 | INFO | No |
+There are three severities — `PASS`, `FAIL`, `WARN`. There is no `INFO` level.
 
-FAILs block daemon startup entirely. WARNs are logged but do not block startup. INFO items are surfaced only when running `zora security` manually.
+| # | Check | Severity when failing | Auto-fix with `--fix`? |
+|---|-------|----------------------|------------------------|
+| 1 | `~/.zora/` directory permissions (expect 700) | FAIL (WARN if the directory does not exist yet) | Yes — `chmod 700` |
+| 2 | `config.toml` permissions (expect 600) | FAIL | Yes — `chmod 600` |
+| 3 | `policy.toml` permissions (expect 600), for both the project and the global copy | FAIL | Yes — `chmod 600` |
+| 4 | Plaintext secrets in any `*.toml` under the config dir, reported one finding per line with `file:line` | FAIL | No — requires manual remediation |
+| 5 | Daemon bind address is localhost, not `0.0.0.0` | FAIL | No |
+| 6 | AgentBus URL uses HTTPS for non-local hosts | WARN | No |
+| 7 | Node.js >= 20 LTS | WARN | No |
+| 8 | Signal channel configured but `channel-policy.toml` missing | WARN | No |
+
+FAILs block daemon startup entirely. WARNs are logged at boot but do not block
+startup.
 
 ### Disabling Startup Audit
 
-If you need to skip the audit for scripted deployments (not recommended):
+If you need to skip the audit for scripted deployments (not recommended), set an
+environment variable — there is no config key for this:
 
-```toml
-[safety.audit]
-startup_check = false
+```bash
+ZORA_SKIP_SECURITY_AUDIT=1 zora-agent daemon start
 ```
+
+The daemon logs a warning when it takes that path.
 
 ---
 
@@ -352,9 +363,13 @@ startup_check = false
 
 ### Actions Are Being Blocked Unexpectedly
 
-1. Run `zora-agent audit --last 20` and look for `[BLOCKED]` entries.
-2. Each entry includes the action name, the score it received, and which threshold triggered.
-3. To understand which rule is matching, run `zora-agent audit --last 1 --explain`.
+1. Run `zora-agent audit --last 1h` and look for `policy_violation` entries.
+   `--last` takes a duration (`30m`, `24h`, `7d`) — a bare number is ignored and
+   falls back to the 24h default.
+2. Narrow to just the denials with `zora-agent audit --type policy_violation`,
+   or to one task with `zora-agent audit --job <jobId>`.
+3. Each entry prints its entry ID, event type, job ID, timestamp, and the tool
+   name. The deny reason itself is in the daemon log, not the audit CLI output.
 
 If the score seems wrong, override it for the specific tool in `policy.toml`:
 
@@ -366,37 +381,43 @@ git_push = 50   # adjust downward if you're comfortable with your repo
 ### Approval Messages Not Arriving
 
 - Verify `ZORA_TELEGRAM_TOKEN` is set in your environment.
-- Run `zora security` — a misconfigured token shows as FAIL.
+- Run `zora-agent security` — a misconfigured token shows as FAIL.
 - Check `~/.zora/logs/safety.log` for delivery errors.
 - Test the bot directly: send `/start` to your bot in Telegram.
 
 ### Session Flagged Despite Low Individual Action Scores
 
-The session risk forecaster is elevating the effective threshold. Check `~/.zora/logs/forecaster.log` for the current composite score breakdown.
+The session risk forecaster is elevating the effective threshold. Per-session
+state — the drift, salami, and commitment-creep components of the composite
+score — is persisted as JSON under `~/.zora/session-risk/<sessionId>.json`
+(`MemoryRiskForecaster`, `src/core/memory-risk-forecaster.ts`).
 
-To temporarily disable the forecaster for a session without changing your config:
+The forecaster is off unless you turn it on, and there is no CLI flag for it.
+Disable it by editing `config.toml`:
 
-```bash
-zora-agent start --no-forecaster
+```toml
+[risk_forecaster]
+enabled = false
 ```
 
 ### Agent Stuck in Restricted or Suspended State
 
-Check the reputation log:
+Per-subagent reputation is persisted as JSON under
+`~/.zora/agent-reputation/<agentId>.json` (`AgentCooldown`,
+`src/core/agent-cooldown.ts`). Read the file to see the denial count and current
+state.
+
+The CLI registers no `reputation` command. To reset a subagent that was
+incorrectly suspended, delete its reputation file:
 
 ```bash
-zora-agent audit --filter reputation
-```
-
-If a subagent was incorrectly suspended, reset its reputation manually:
-
-```bash
-zora-agent reputation reset <agent-id>
+rm ~/.zora/agent-reputation/<agent-id>.json
 ```
 
 ### Startup Blocked by Security Audit FAIL
 
-Run `zora security --explain` for remediation steps specific to each failing check.
+Re-run `zora-agent security`. Each failing check prints its own remediation hint
+on the `→` line beneath it.
 
 Common fixes:
 

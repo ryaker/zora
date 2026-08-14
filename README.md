@@ -171,13 +171,13 @@ max_irreversibility_score = 60  # nothing above a git commit
 **Startup Security Audit.** Every time the daemon starts, Zora scans its own configuration:
 
 ```bash
-$ zora security
+$ zora-agent security
 ✓ PASS  ~/.zora/ permissions (700)
 ✓ PASS  config.toml permissions (600)
 ✗ FAIL  Bot token found in plaintext in config.toml:44
 ⚠ WARN  Node.js 18.x — upgrade to 20 LTS
 
-zora security --fix   # auto-fixes WARN issues
+zora-agent security --fix   # auto-fixes WARN issues
 ```
 
 FAILs block daemon startup. WARNs log and continue. All opt-in via config — enable only what you need.
@@ -449,7 +449,7 @@ Zora is in active development (v0.11.0). Core features work reliably today.
 | Local/offline execution via Ollama | ✅ Working |
 | PolicyEngine (file-based, compaction-proof) | ✅ Working |
 | Action budgets + runaway loop prevention | ✅ Working |
-| Startup security audit (`zora security`) | ✅ Working |
+| Startup security audit (`zora-agent security`) | ✅ Working |
 | Irreversibility scoring (0–100 per action) | ✅ Working |
 | Session risk forecasting (drift/salami/creep) | ✅ Working |
 | Agent reputation + cooldown system | ✅ Working |
