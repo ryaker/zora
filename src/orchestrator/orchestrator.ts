@@ -39,6 +39,8 @@ import { HookRunner } from '../hooks/hook-runner.js';
 import { ToolHookRunner } from '../hooks/tool-hook-runner.js';
 import { SdkHookBridge, buildSdkHooks } from '../hooks/sdk-hook-bridge.js';
 import { buildEnforcedSdkOptions } from '../security/enforced-sdk-options.js';
+// SEC-24: the one tool-name normaliser. Every tool-name comparison in src/ uses it.
+import { toolFilterMatches, DESTRUCTIVE_TOOL_NAMES } from '../security/tool-names.js';
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
@@ -836,6 +838,10 @@ export class Orchestrator {
       parameters: { agentName: this._config.agent.name },
       result: {},
     });
+    // SEC-24: these limits are written in Zora's lowercase vocabulary and the
+    // SDK calls the tool `Bash`. Until RateLimitHook started matching through
+    // toolFilterMatches(), `l.tool === ctx.tool` was false on every real call
+    // and the 60-shell-calls-per-minute ceiling had never once been applied.
     this._toolHookRunner.register(new RateLimitHook([
       { tool: 'bash', maxCalls: 60, windowMs: 60_000 },
       { tool: 'http_request', maxCalls: 100, windowMs: 60_000 },
@@ -1285,15 +1291,12 @@ export class Orchestrator {
       const existingCanUseTool = taskContext.canUseTool;
       const allowedTools = new Set(capability.allowedTools);
       taskContext.canUseTool = async (toolName, input, opts) => {
-        // Normalize: SDK tool names may be prefixed (e.g. "Read", "Bash")
-        // Match against allowedTools by base name (case-insensitive)
-        const baseName = toolName.split('__').pop() ?? toolName;
-        const isAllowed =
-          allowedTools.has(toolName) ||
-          allowedTools.has(baseName) ||
-          allowedTools.has(baseName.toLowerCase()) ||
-          allowedTools.has(toolName.toLowerCase());
-        if (!isAllowed) {
+        // SEC-24: this was a hand-rolled four-way match — a fifth private
+        // convention for comparing tool names, written here because the shared
+        // one did not exist yet. It happened to be right; the identical
+        // improvisations in RateLimitHook and IrreversibilityScorerHook were
+        // not. One normaliser, used everywhere, is the whole point.
+        if (!toolFilterMatches(allowedTools, toolName)) {
           log.warn(
             { tool: toolName, channelId: capability.channelId, role: capability.role },
             'Tool blocked by channel capability set'
@@ -1302,8 +1305,11 @@ export class Orchestrator {
         }
         // Apply additional destructive ops check
         if (!capability.destructiveOpsAllowed) {
-          const destructiveTools = new Set(['Bash', 'bash', 'Write', 'write_file', 'Edit', 'edit_file']);
-          if (destructiveTools.has(baseName) || destructiveTools.has(toolName)) {
+          // SEC-24: the inline set spelled `Bash`/`bash` and `Write`/`write_file`
+          // twice each to work around the missing normaliser — and still let
+          // `MultiEdit` and `NotebookEdit` through, so an untrusted channel could
+          // modify files with them. The shared list covers every alias once.
+          if (toolFilterMatches(DESTRUCTIVE_TOOL_NAMES, toolName)) {
             log.warn({ tool: toolName }, 'Destructive op blocked — capability.destructiveOpsAllowed=false');
             return { behavior: 'deny', message: `Destructive operation '${toolName}' not permitted for your access level.` };
           }

@@ -3,8 +3,16 @@
  */
 
 import type { ToolHook, ToolCallContext, ToolHookResult } from '../tool-hook-runner.js';
+import { normalizeToolName, toolFilterMatches } from '../../security/tool-names.js';
 
 export interface RateLimitConfig {
+  /**
+   * The tool this limit applies to, or `'*'` for every tool.
+   *
+   * Matched with `toolFilterMatches()`, so `'bash'` covers the SDK's `Bash` and
+   * an MCP-qualified name matches on its base. Write it in whichever vocabulary
+   * reads best at the registration site.
+   */
   tool: string;
   maxCalls: number;
   windowMs: number;
@@ -19,11 +27,18 @@ export class RateLimitHook implements ToolHook {
   constructor(private readonly _limits: RateLimitConfig[]) {}
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
-    const limit = this._limits.find(l => l.tool === ctx.tool || l.tool === '*');
+    // SEC-24: this used to be `l.tool === ctx.tool`. The orchestrator registers
+    // `{ tool: 'bash', maxCalls: 60, windowMs: 60_000 }` and the SDK calls the
+    // tool `Bash`, so the strict comparison never matched and the shell rate
+    // limit had never throttled a single real call. Same root cause as SEC-23's
+    // ShellSafetyHook: two spellings, no shared normaliser.
+    const limit = this._limits.find(l => l.tool === '*' || toolFilterMatches([l.tool], ctx.tool));
     if (!limit) return { allow: true };
 
     const now = Date.now();
-    const key = ctx.tool;
+    // Window key is normalised too, so a provider that reports `Bash` and one
+    // that reports `bash` share a budget instead of getting one each.
+    const key = normalizeToolName(ctx.tool);
     const calls = (this._windows.get(key) ?? []).filter(t => now - t < limit.windowMs);
     calls.push(now);
     this._windows.set(key, calls);

@@ -10,6 +10,7 @@ import { createLogger } from '../../utils/logger.js';
 import type { ToolHook, ToolCallContext, ToolHookResult } from '../tool-hook-runner.js';
 import { getGlobalForecaster } from '../../core/memory-risk-forecaster.js';
 import { getAgentPolicy, checkScoreLimit } from '../../core/project-policy.js';
+import { normalizeToolName } from '../../security/tool-names.js';
 
 const log = createLogger('irreversibility-scorer');
 
@@ -22,32 +23,76 @@ export interface IrreversibilityConfig {
   };
 }
 
-/** Map tool names to action keys for scoring lookup */
-function toolToAction(tool: string): string {
-  const mapping: Record<string, string> = {
-    bash: 'shell_exec',
-    shell: 'shell_exec',
-    execute_bash: 'shell_exec',
-    run_command: 'shell_exec',
-    write_file: 'write_file',
-    create_file: 'write_file',
-    edit_file: 'edit_file',
-    str_replace_editor: 'edit_file',
-    read_file: 'read_file',
-    git_commit: 'git_commit',
-    git_push: 'git_push',
-    mkdir: 'mkdir',
-    cp: 'cp',
-    mv: 'mv',
-    delete_file: 'file_delete',
-    rm: 'file_delete',
-    send_message: 'send_message',
-    spawn_agent: 'spawn_agent',
-    spawn_zora_agent: 'spawn_agent',
-    http_request: 'http_request',
-    fetch: 'http_request',
-  };
-  return mapping[tool] ?? tool;
+/**
+ * Tool name → action key, for the `[actions.scores]` lookup.
+ *
+ * SEC-24: every key here is a *normalised* tool name (MCP prefix stripped,
+ * lowercase), because that is the only form `toolToAction()` ever looks up.
+ * Adding a PascalCase key would be dead weight.
+ *
+ * The SDK's own spellings — `Bash`, `Read`, `Write`, `Edit` — used to be absent
+ * entirely: the map held only Zora's lowercase vocabulary and the lookup was
+ * `mapping[tool]`, so a real call fell through to `mapping[tool] ?? tool` with
+ * an unknown key and was scored at the 50-point default for *everything*.
+ * `Read` was scored 50 instead of 5; `Write` and `Edit` 50 instead of 20; and a
+ * `[actions.scores]` entry raising `shell_exec` above the flag threshold had no
+ * effect on `Bash` at all, so the ApprovalQueue gate for destructive shell
+ * operations was evaluated against a category the user never configured.
+ */
+const TOOL_ACTION_MAP: Record<string, string> = {
+  // ── shell ──
+  bash: 'shell_exec',
+  bashoutput: 'shell_exec',
+  killshell: 'shell_exec',
+  shell: 'shell_exec',
+  execute_bash: 'shell_exec',
+  execute_command: 'shell_exec',
+  run_command: 'shell_exec',
+  // ── writes ──
+  write: 'write_file',
+  write_file: 'write_file',
+  create_file: 'write_file',
+  edit: 'edit_file',
+  edit_file: 'edit_file',
+  multiedit: 'edit_file',
+  notebookedit: 'edit_file',
+  str_replace_editor: 'edit_file',
+  // ── reads ──
+  read: 'read_file',
+  read_file: 'read_file',
+  glob: 'read_file',
+  grep: 'read_file',
+  // ── git ──
+  git_commit: 'git_commit',
+  git_push: 'git_push',
+  // ── filesystem ──
+  mkdir: 'mkdir',
+  cp: 'cp',
+  mv: 'mv',
+  delete_file: 'file_delete',
+  rm: 'file_delete',
+  // ── outbound ──
+  send_message: 'send_message',
+  http_request: 'http_request',
+  fetch: 'http_request',
+  webfetch: 'http_request',
+  websearch: 'http_request',
+  // ── agents ──
+  task: 'spawn_agent',
+  spawn_agent: 'spawn_agent',
+  spawn_zora_agent: 'spawn_agent',
+};
+
+/**
+ * Map a tool name to its action key for scoring lookup.
+ *
+ * Exported so `tests/security/tool-name-normalization.test.ts` can assert that
+ * every name the SDK actually calls resolves to a scored category — a check
+ * that fails loudly if the map drifts from the SDK's vocabulary again.
+ */
+export function toolToAction(tool: string): string {
+  const normalized = normalizeToolName(tool);
+  return TOOL_ACTION_MAP[normalized] ?? normalized;
 }
 
 export class IrreversibilityScorerHook implements ToolHook {
