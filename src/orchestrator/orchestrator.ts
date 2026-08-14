@@ -265,6 +265,26 @@ export class Orchestrator {
    * but no flagCallback is registered. Must be called BEFORE boot().
    * After boot(), use policyEngine.setApprovalQueue() directly.
    */
+  /**
+   * PERF-04: Schedules a background timer that never keeps the process alive.
+   *
+   * All five self-rescheduling background loops (auth check, retry poll, daily
+   * consolidation, integrity check, memory extraction) go through here. They are
+   * housekeeping: a process with nothing else to do should exit rather than sit
+   * in the event loop waiting for the next tick. The daemon stays alive on its
+   * dashboard HTTP listener and cron handles, not on these.
+   *
+   * @param fn Callback to run when the timer fires.
+   * @param ms Delay in milliseconds.
+   * @returns The timer handle, so callers can still clearTimeout() it on shutdown.
+   */
+  private _scheduleBackground(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(fn, ms);
+    // unref() is Node-only; the optional call keeps this safe under other typings.
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  }
+
   setApprovalQueue(queue: ApprovalQueue): void {
     this._approvalQueue = queue;
     // If already booted, propagate immediately
@@ -363,7 +383,7 @@ export class Orchestrator {
     // cause _parseIntervalMinutes to receive a number and silently return the default.
     const integrityIntervalMs = this._parseIntervalMinutes(String(sec.integrity_interval ?? '5m')) * 60 * 1000;
     const scheduleIntegrityCheck = () => {
-      this._integrityCheckTimeout = setTimeout(async () => {
+      this._integrityCheckTimeout = this._scheduleBackground(async () => {
         try {
           const result = await this._integrityGuardian.checkIntegrity();
           if (!result.valid) {
@@ -495,7 +515,7 @@ export class Orchestrator {
     // R4: Schedule periodic auth checks (every 5 minutes) using self-rescheduling
     // setTimeout to avoid overlapping async executions
     const scheduleAuthCheck = () => {
-      this._authCheckTimeout = setTimeout(async () => {
+      this._authCheckTimeout = this._scheduleBackground(async () => {
         try {
           await this._authMonitor.checkAll();
         } catch (err) {
@@ -510,7 +530,7 @@ export class Orchestrator {
     // TaskContext (state continuity) instead of re-submitting just the original prompt.
     // retry_after_cooldown: if false, skip the retry poll entirely.
     const scheduleRetryPoll = () => {
-      this._retryPollTimeout = setTimeout(async () => {
+      this._retryPollTimeout = this._scheduleBackground(async () => {
         // Guard: skip all retries if retry_after_cooldown is disabled
         if (!this._failoverController.shouldRetryAfterCooldown()) {
           scheduleRetryPoll();
@@ -548,6 +568,14 @@ export class Orchestrator {
     // R9: Start HeartbeatSystem and RoutineManager — daemon-only.
     // Skip in one-shot ask mode (skipChannels=true) so node-cron handles
     // don't keep the event loop alive after the task completes.
+    //
+    // PERF-04: this gate is NOT redundant now that the five background timers
+    // above are unref'd. Those are ours to unref; node-cron's are not — it
+    // schedules its own internal setTimeout in scheduler/runner and exposes no
+    // handle on ScheduledTask, so there is nothing here to unref. Until that
+    // changes, skipping the cron systems entirely is the only way one-shot
+    // `ask` mode exits. The gate is also semantically right for the Signal
+    // channel below: a one-shot ask should not open a channel listener at all.
     if (!this._skipChannels) {
       // Use heartbeat_provider if set (typically a free/local Ollama) to keep
       // background routine costs at zero. Falls back to rank-1 if not set.
@@ -585,7 +613,7 @@ export class Orchestrator {
 
     // Schedule daily note consolidation (check once per day)
     const scheduleConsolidation = () => {
-      this._consolidationTimeout = setTimeout(async () => {
+      this._consolidationTimeout = this._scheduleBackground(async () => {
         try {
           const reflectFn = this._reflectorWorker
             ? async (content: string): Promise<void> => {
@@ -603,7 +631,7 @@ export class Orchestrator {
       }, 24 * 60 * 60 * 1000); // 24 hours
     };
     // Run first check shortly after boot (30 seconds), then daily
-    this._consolidationTimeout = setTimeout(async () => {
+    this._consolidationTimeout = this._scheduleBackground(async () => {
       try {
         const reflectFn = this._reflectorWorker
           ? async (content: string): Promise<void> => {
@@ -623,7 +651,7 @@ export class Orchestrator {
     if (this._config.memory.auto_extract && this._config.memory.auto_extract_interval > 0) {
       const extractIntervalMs = this._config.memory.auto_extract_interval * 60 * 1000; // minutes → ms
       const scheduleExtractInterval = () => {
-        this._memoryExtractIntervalTimeout = setTimeout(async () => {
+        this._memoryExtractIntervalTimeout = this._scheduleBackground(async () => {
           try {
             // Interval-based extraction: consolidate recent daily notes as a fallback
             // for sessions that completed without triggering per-task extraction.

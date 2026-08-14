@@ -8,6 +8,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { Orchestrator } from '../../../src/orchestrator/orchestrator.js';
@@ -171,4 +173,92 @@ describe('PERF-03 — SOUL.md identity cache', () => {
 
     expect(soul(orchestrator)._loadSoulIdentity()).toBe('second identity');
   });
+});
+
+// ─── PERF-04 ─────────────────────────────────────────────────────
+
+const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), '../../../..');
+
+/** The five self-rescheduling background loops. */
+const BACKGROUND_TIMER_FIELDS = [
+  '_authCheckTimeout',
+  '_retryPollTimeout',
+  '_consolidationTimeout',
+  '_integrityCheckTimeout',
+  '_memoryExtractIntervalTimeout',
+] as const;
+
+interface TimerInternals {
+  _authCheckTimeout: NodeJS.Timeout | null;
+  _retryPollTimeout: NodeJS.Timeout | null;
+  _consolidationTimeout: NodeJS.Timeout | null;
+  _integrityCheckTimeout: NodeJS.Timeout | null;
+  _memoryExtractIntervalTimeout: NodeJS.Timeout | null;
+}
+
+describe('PERF-04 — background timers are unref\'d', () => {
+  let testDir: string;
+  let orchestrator: Orchestrator;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `zora-perf04-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await fsp.mkdir(testDir, { recursive: true });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    if (orchestrator?.isBooted) await orchestrator.shutdown();
+    vi.restoreAllMocks();
+    await fsp.rm(testDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('every background timer is scheduled without a ref on the event loop', async () => {
+    const config = makeConfig(testDir, path.join(testDir, 'SOUL.md'));
+    config.memory.long_term_file = path.join(testDir, 'memory', 'MEMORY.md');
+    config.memory.daily_notes_dir = path.join(testDir, 'memory', 'daily');
+    config.memory.items_dir = path.join(testDir, 'memory', 'items');
+    config.memory.categories_dir = path.join(testDir, 'memory', 'categories');
+    config.memory.auto_extract = true;
+    config.memory.auto_extract_interval = 10;
+    config.security.policy_file = path.join(testDir, 'policy.toml');
+    config.security.audit_log = path.join(testDir, 'audit', 'audit.jsonl');
+    config.steering.enabled = false;
+    config.notifications.enabled = false;
+
+    orchestrator = new Orchestrator({
+      config,
+      policy: makePolicy(),
+      providers: [new MockProvider({ name: 'primary', rank: 1 })],
+      baseDir: testDir,
+      skipChannels: true,
+    });
+    await orchestrator.boot();
+
+    const timers = orchestrator as unknown as TimerInternals;
+    for (const field of BACKGROUND_TIMER_FIELDS) {
+      const timer = timers[field];
+      expect(timer, `${field} should be scheduled after boot`).toBeTruthy();
+      // hasRef() === false is what lets the process exit with the timer pending.
+      expect(timer!.hasRef(), `${field} must be unref'd`).toBe(false);
+    }
+  }, 30_000);
+
+  it('a booted orchestrator lets the process exit without shutdown()', () => {
+    const tsx = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
+    if (!fs.existsSync(tsx)) return; // tsx unavailable — nothing to probe with.
+
+    const probe = path.join(REPO_ROOT, 'tests', 'fixtures', 'perf04-exit-probe.ts');
+    const result = spawnSync(tsx, [probe, '--no-shutdown'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+
+    // A timeout kill (SIGTERM, null status) is exactly the regression: a ref'd
+    // timer kept the event loop alive after the task finished.
+    expect(result.signal, 'exit probe hung — a background timer is still ref\'d').toBeNull();
+    expect(result.stdout).toContain('EXIT_PROBE_OK');
+    expect(result.status).toBe(0);
+  }, 90_000);
 });
