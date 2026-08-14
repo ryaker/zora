@@ -109,8 +109,16 @@ function outgoingEdges(file: string, source: string, known: Set<string>): string
   // allowlist-staleness check silently unfalsifiable: a module could become
   // reachable by `import './x.js'` and still be reported as stranded.
   for (const m of source.matchAll(/^\s*import\s*['"](\.[^'"]+)['"]\s*;?\s*$/gm)) specifiers.add(m[1]);
-  // Worker threads are spawned by URL, not imported — the graph tier does this.
-  for (const m of source.matchAll(/new URL\(\s*['"](\.[^'"]+)['"]/g)) specifiers.add(m[1]);
+
+  // There is deliberately no `new URL('./x.js', import.meta.url)` rule here.
+  // An earlier version had one, on the assumption that the graph tier spawned
+  // its worker that way. It does not — it is self-hosting, spawning
+  // `new Worker(import.meta.url)` (or an eval'd bootstrap), and reaches
+  // `worker-bootstrap.ts` by ordinary static import. The rule matched zero call
+  // sites in `src/`, and `new URL()` does not load or execute a module, so
+  // keeping it could only ever mark something reachable that is not. If a
+  // worker is ever spawned from a URL literal, add the edge for the *Worker
+  // constructor* rather than for every `new URL()`.
 
   const edges: string[] = [];
   for (const specifier of specifiers) {

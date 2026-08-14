@@ -224,19 +224,31 @@ export const DEFAULT_COOLDOWN_CONFIG: CooldownConfig = {
  */
 export function cooldownConfigFrom(raw: unknown): CooldownConfig {
   const table = (raw as Record<string, unknown> | undefined) ?? undefined;
-  const num = (key: string, fallback: number): number => {
-    const value = table?.[key];
-    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-  };
   if (!table) return { ...DEFAULT_COOLDOWN_CONFIG };
+
+  /**
+   * Fall back to the default for anything that is not a positive finite number.
+   * The fallback is read from DEFAULT_COOLDOWN_CONFIG rather than repeated as a
+   * literal: duplicating them gave each setting two sources of truth, so
+   * changing a default silently applied only to installs with no [cooldown]
+   * table at all.
+   */
+  const positive = (key: string, fallback: number): number => {
+    const value = table[key];
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  // A non-boolean `enabled` was previously cast, not checked — so `enabled =
+  // "false"` in TOML is a truthy string and would have switched cooldown ON.
+  const enabled = typeof table['enabled'] === 'boolean' ? table['enabled'] : DEFAULT_COOLDOWN_CONFIG.enabled;
+
   return {
     ...DEFAULT_COOLDOWN_CONFIG,
-    enabled: (table['enabled'] as boolean) ?? false,
-    level1Threshold: num('level1_threshold', 3),
-    level2Threshold: num('level2_threshold', 6),
-    shutdownThreshold: num('shutdown_threshold', 10),
-    resetAfterHours: num('reset_after_hours', 24),
-    level1DelayMs: num('level1_delay_ms', 2000),
+    enabled,
+    level1Threshold: positive('level1_threshold', DEFAULT_COOLDOWN_CONFIG.level1Threshold),
+    level2Threshold: positive('level2_threshold', DEFAULT_COOLDOWN_CONFIG.level2Threshold),
+    shutdownThreshold: positive('shutdown_threshold', DEFAULT_COOLDOWN_CONFIG.shutdownThreshold),
+    resetAfterHours: positive('reset_after_hours', DEFAULT_COOLDOWN_CONFIG.resetAfterHours),
+    level1DelayMs: positive('level1_delay_ms', DEFAULT_COOLDOWN_CONFIG.level1DelayMs),
   };
 }
 

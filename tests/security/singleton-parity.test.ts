@@ -31,8 +31,8 @@ import { fileURLToPath } from 'node:url';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
 import { DEFAULT_CONFIG } from '../../src/config/defaults.js';
 import { MockProvider } from '../fixtures/mock-provider.js';
-import { getGlobalCooldown } from '../../src/core/agent-cooldown.js';
-import { getGlobalForecaster } from '../../src/core/memory-risk-forecaster.js';
+import { getGlobalCooldown, cooldownConfigFrom, DEFAULT_COOLDOWN_CONFIG } from '../../src/core/agent-cooldown.js';
+import { getGlobalForecaster, forecasterConfigFrom, DEFAULT_FORECASTER_CONFIG } from '../../src/core/memory-risk-forecaster.js';
 import type { ZoraPolicy } from '../../src/types.js';
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
@@ -66,12 +66,24 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
-/** Every `export function initGlobalX(...)` / `initX(...)` in `src/`. */
+/**
+ * Every `export function initX(...)` / `export const initX = (...)` in `src/`.
+ *
+ * The arrow forms match nothing today. They are here because a guard that only
+ * recognises one declaration syntax stops guarding the moment someone writes
+ * the other, and nothing would say so.
+ */
 function globalInitialisers(): { fn: string; file: string }[] {
   const found: { fn: string; file: string }[] = [];
+  const patterns = [
+    /^export function (init[A-Z][A-Za-z0-9_]*)\s*\(/gm,
+    /^export (?:const|let) (init[A-Z][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\(|function\b)/gm,
+  ];
   for (const file of walk(SRC_ROOT)) {
-    for (const m of fs.readFileSync(file, 'utf-8').matchAll(/^export function (init[A-Z][A-Za-z0-9_]*)\s*\(/gm)) {
-      found.push({ fn: m[1], file: path.relative(SRC_ROOT, file).split(path.sep).join('/') });
+    const source = fs.readFileSync(file, 'utf-8');
+    const relative = path.relative(SRC_ROOT, file).split(path.sep).join('/');
+    for (const pattern of patterns) {
+      for (const m of source.matchAll(pattern)) found.push({ fn: m[1], file: relative });
     }
   }
   return found.sort((a, b) => a.fn.localeCompare(b.fn));
@@ -148,6 +160,24 @@ describe('SEC-29 — a booted Orchestrator holds both enforcement singletons', (
     config.agent.log_level = 'error';
     config.agent.workspace = path.join(baseDir, 'workspace');
 
+    // Both singletons are process-global and vitest shares a worker process
+    // across test files. If some other suite initialises them first, the
+    // post-boot assertions below would pass without boot() having done
+    // anything — this file would keep reporting green while guarding nothing,
+    // which is the failure mode it exists to prevent, one level up. Verified
+    // today by removing the boot-path wiring and running the *whole* suite:
+    // the assertions below still fail. This pins that property instead of
+    // relying on it.
+    expect(
+      getGlobalForecaster(),
+      'a forecaster already exists before boot() — another suite initialised it, so this ' +
+        'test can no longer prove boot() is what wires it. Isolate this file or reset the global.',
+    ).toBeNull();
+    expect(
+      getGlobalCooldown(),
+      'a cooldown already exists before boot() — see above',
+    ).toBeNull();
+
     orchestrator = new Orchestrator({
       config,
       policy: testPolicy,
@@ -167,4 +197,69 @@ describe('SEC-29 — a booted Orchestrator holds both enforcement singletons', (
       'no cooldown after boot — subagent-tool falls back to no cooldown at all',
     ).not.toBeNull();
   }, 40_000);
+});
+
+// ─── Config parsing: a malformed table must not change enforcement ───
+
+/**
+ * These parsers decide how hard the agent brakes. They read a user-editable
+ * TOML table, so "what does a wrong value do" is part of the enforcement
+ * surface, not a tidiness question.
+ *
+ * All three of these were live in the daemon's copy before it moved here; the
+ * move is what made them one function worth testing instead of two blocks of
+ * inline literals.
+ */
+describe('SEC-29 — malformed config falls back instead of weakening enforcement', () => {
+  it('rejects a maxEvents that would make the rolling window unbounded', () => {
+    // `record()` trims with `events.slice(-maxEvents)` behind
+    // `events.length > maxEvents`. At 0 that is `slice(-0)` — the whole array —
+    // so the guard is always true, nothing is ever dropped, and session history
+    // grows for the life of the process.
+    expect(forecasterConfigFrom({ max_events: 0 }).maxEvents).toBe(DEFAULT_FORECASTER_CONFIG.maxEvents);
+    expect(forecasterConfigFrom({ max_events: -5 }).maxEvents).toBe(DEFAULT_FORECASTER_CONFIG.maxEvents);
+    expect(forecasterConfigFrom({ max_events: 2.5 }).maxEvents).toBe(DEFAULT_FORECASTER_CONFIG.maxEvents);
+    expect(forecasterConfigFrom({ max_events: 10 }).maxEvents).toBe(10);
+  });
+
+  it('refuses an auto-deny threshold below the intercept threshold', () => {
+    // Inverted thresholds do not disable escalation — they auto-deny every
+    // score in the gap that should merely have been intercepted, so the agent
+    // silently refuses more than intended while looking like a tuning change.
+    const inverted = forecasterConfigFrom({ intercept_threshold: 88, auto_deny_threshold: 72 });
+    expect(inverted.autoDenyThreshold).toBeGreaterThanOrEqual(inverted.interceptThreshold);
+    // A correctly ordered pair is left alone.
+    const ordered = forecasterConfigFrom({ intercept_threshold: 60, auto_deny_threshold: 80 });
+    expect(ordered.interceptThreshold).toBe(60);
+    expect(ordered.autoDenyThreshold).toBe(80);
+  });
+
+  it('does not let a non-boolean `enabled` switch enforcement on', () => {
+    // `enabled` was cast, not checked. TOML `enabled = "false"` is a *string*,
+    // and every non-empty string is truthy — so the one spelling a user is most
+    // likely to reach for while trying to turn something OFF turned it ON.
+    expect(forecasterConfigFrom({ enabled: 'false' }).enabled).toBe(false);
+    expect(cooldownConfigFrom({ enabled: 'no' }).enabled).toBe(false);
+    expect(forecasterConfigFrom({ enabled: true }).enabled).toBe(true);
+    expect(cooldownConfigFrom({ enabled: true }).enabled).toBe(true);
+  });
+
+  it('rejects non-positive cooldown thresholds', () => {
+    expect(cooldownConfigFrom({ level1_threshold: -1 }).level1Threshold)
+      .toBe(DEFAULT_COOLDOWN_CONFIG.level1Threshold);
+    expect(cooldownConfigFrom({ shutdown_threshold: 0 }).shutdownThreshold)
+      .toBe(DEFAULT_COOLDOWN_CONFIG.shutdownThreshold);
+    expect(cooldownConfigFrom({ level1_threshold: 5 }).level1Threshold).toBe(5);
+  });
+
+  it('takes its fallbacks from the DEFAULT_* constants, not from copies', () => {
+    // Repeating the defaults as literals gave every setting two sources of
+    // truth: changing a DEFAULT_* applied only to installs with no table at
+    // all, and silently not to anyone who had configured the section.
+    const fromEmptyTable = forecasterConfigFrom({});
+    expect(fromEmptyTable.interceptThreshold).toBe(DEFAULT_FORECASTER_CONFIG.interceptThreshold);
+    expect(fromEmptyTable.autoDenyThreshold).toBe(DEFAULT_FORECASTER_CONFIG.autoDenyThreshold);
+    expect(fromEmptyTable.maxEvents).toBe(DEFAULT_FORECASTER_CONFIG.maxEvents);
+    expect(cooldownConfigFrom({}).shutdownThreshold).toBe(DEFAULT_COOLDOWN_CONFIG.shutdownThreshold);
+  });
 });
