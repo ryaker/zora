@@ -8,6 +8,7 @@
 
 import express from 'express';
 import { readFileSync } from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
@@ -74,8 +75,18 @@ export class DashboardServer {
   private readonly _authToken: string | undefined;
   private readonly _authMiddleware: import('express').RequestHandler | null;
   private readonly _indexHtmlPath: string;
-  /** Cached index.html content — read once at startup to avoid blocking the event loop on every GET /. */
+  /**
+   * Fully-rendered index.html (token already injected) — built once and reused.
+   * Both the disk read and the token-injection regex work used to run per request;
+   * neither depends on anything request-scoped, so both are hoisted out of the
+   * hot path. `start()` warms this asynchronously; the sync read below is only a
+   * fallback for the first request when the server was never started (tests).
+   */
   private _indexHtmlCache: string | undefined;
+  /** Pre-rendered static JSON/SVG bodies — computed on first request, then reused. */
+  private _policyResponseCache: unknown | undefined;
+  private _projectResponseCache: unknown | undefined;
+  private _faviconCache: string | undefined;
 
   constructor(options: DashboardOptions) {
     this._options = options;
@@ -442,54 +453,65 @@ export class DashboardServer {
         res.status(503).json({ ok: false, error: 'Policy not available' });
         return;
       }
-      // Derive a human-readable preset from shell mode
-      const preset = p.shell.mode === 'deny_all' ? 'safe'
-        : p.shell.mode === 'allowlist' ? 'balanced'
-        : 'power';
-      // Return paths as-configured (~ unexpanded) to avoid leaking the
-      // server's home directory path to browser clients.
-      res.json({
-        ok: true,
-        policy: {
-          preset,
-          allowedPaths: p.filesystem.allowed_paths ?? [],
-          deniedPaths: p.filesystem.denied_paths ?? [],
-          allowedCommands: p.shell.allowed_commands ?? [],
-          blockedCommands: p.shell.denied_commands ?? [],
-        },
-      });
+      // The policy is fixed for the process lifetime, so the response body is
+      // built once instead of on every dashboard poll.
+      if (this._policyResponseCache === undefined) {
+        // Derive a human-readable preset from shell mode
+        const preset = p.shell.mode === 'deny_all' ? 'safe'
+          : p.shell.mode === 'allowlist' ? 'balanced'
+          : 'power';
+        // Return paths as-configured (~ unexpanded) to avoid leaking the
+        // server's home directory path to browser clients.
+        this._policyResponseCache = {
+          ok: true,
+          policy: {
+            preset,
+            allowedPaths: p.filesystem.allowed_paths ?? [],
+            deniedPaths: p.filesystem.denied_paths ?? [],
+            allowedCommands: p.shell.allowed_commands ?? [],
+            blockedCommands: p.shell.denied_commands ?? [],
+          },
+        };
+      }
+      res.json(this._policyResponseCache);
     });
 
     // GET /api/project — project identity for multi-instance differentiation
     this._app.get('/api/project', (_req, res) => {
-      // Normalize: trim whitespace and enforce the same 40-char cap as the config loader.
-      // Using || (not ??) so empty strings and whitespace-only values fall through to the fallback.
-      const normalize = (v?: string): string | undefined => {
-        const trimmed = v?.trim();
-        return trimmed ? trimmed.slice(0, 40) : undefined;
-      };
+      // Derived entirely from constructor options, so compute it once.
+      if (this._projectResponseCache === undefined) {
+        // Normalize: trim whitespace and enforce the same 40-char cap as the config loader.
+        // Using || (not ??) so empty strings and whitespace-only values fall through to the fallback.
+        const normalize = (v?: string): string | undefined => {
+          const trimmed = v?.trim();
+          return trimmed ? trimmed.slice(0, 40) : undefined;
+        };
 
-      const projectName =
-        normalize(this._options.projectConfig?.name) ??
-        normalize(this._options.agentName) ??
-        'Zora';
+        const projectName =
+          normalize(this._options.projectConfig?.name) ??
+          normalize(this._options.agentName) ??
+          'Zora';
 
-      res.json({
-        name: projectName,
-        description: this._options.projectConfig?.description ?? null,
-        color: this._options.projectConfig?.color ?? null,
-        icon: this._options.projectConfig?.icon ?? null,
-        port: this._options.port ?? 8070,
-      });
+        this._projectResponseCache = {
+          name: projectName,
+          description: this._options.projectConfig?.description ?? null,
+          color: this._options.projectConfig?.color ?? null,
+          icon: this._options.projectConfig?.icon ?? null,
+          port: this._options.port ?? 8070,
+        };
+      }
+      res.json(this._projectResponseCache);
     });
 
     // GET /favicon.svg — dynamic colored favicon matching project.color
     this._app.get('/favicon.svg', (_req, res) => {
-      const color = this._options.projectConfig?.color ?? '#ffb347';
+      if (this._faviconCache === undefined) {
+        const color = this._options.projectConfig?.color ?? '#ffb347';
+        this._faviconCache =
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="${color}"/><text x="16" y="22" text-anchor="middle" font-size="16" fill="#0a0b0f" font-family="monospace" font-weight="bold">Z</text></svg>`;
+      }
       res.setHeader('Content-Type', 'image/svg+xml');
-      res.send(
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="${color}"/><text x="16" y="22" text-anchor="middle" font-size="16" fill="#0a0b0f" font-family="monospace" font-weight="bold">Z</text></svg>`
-      );
+      res.send(this._faviconCache);
     });
 
     // Catch-all: serve index.html for SPA routing (with token injection).
@@ -554,29 +576,28 @@ export class DashboardServer {
     }
   }
 
+  /** Inject __ZORA_TOKEN__ into raw index.html when auth is enabled. */
+  private _renderIndex(raw: string): string {
+    if (!this._authToken) return raw;
+    const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
+    // Case-insensitive replace so minified/transformed HTML still works
+    const patched = raw.replace(/<\/head>/i, `${script}</head>`);
+    if (patched !== raw) return patched;
+    // </head> not found — prepend script to body as fallback
+    return raw.replace(/<body/i, `${script}<body`) || raw;
+  }
+
   /** Serve index.html with __ZORA_TOKEN__ injected when auth is enabled. */
   private _serveIndex(res: import('express').Response): void {
     try {
-      // Use cached HTML to avoid blocking the event loop on disk I/O per request.
+      // Cached, already-rendered HTML — no disk I/O and no regex work per request.
       // Token injection is deterministic at startup, so the cache is valid for the
       // lifetime of the process.
-      if (!this._indexHtmlCache) {
-        this._indexHtmlCache = readFileSync(this._indexHtmlPath, 'utf-8');
-      }
-      let html = this._indexHtmlCache;
-      if (this._authToken) {
-        const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
-        // Case-insensitive replace so minified/transformed HTML still works
-        const patched = html.replace(/<\/head>/i, `${script}</head>`);
-        if (patched === html) {
-          // </head> not found — prepend script to body as fallback
-          html = html.replace(/<body/i, `${script}<body`) || html;
-        } else {
-          html = patched;
-        }
+      if (this._indexHtmlCache === undefined) {
+        this._indexHtmlCache = this._renderIndex(readFileSync(this._indexHtmlPath, 'utf-8'));
       }
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(html);
+      res.send(this._indexHtmlCache);
     } catch (err) {
       log.error({ err }, 'Failed to serve index.html');
       if (!res.headersSent) {
@@ -591,6 +612,19 @@ export class DashboardServer {
   async start(): Promise<void> {
     const port = this._options.port ?? 8070;
     const host = this._options.host ?? '127.0.0.1';
+
+    // Warm the index.html cache off the request path. Best-effort: a missing
+    // frontend build (dev/test) leaves the cache unset and _serveIndex() falls
+    // back to its sync read, preserving the existing error handling.
+    if (this._indexHtmlCache === undefined) {
+      try {
+        const raw = await fsp.readFile(this._indexHtmlPath, 'utf-8');
+        this._indexHtmlCache = this._renderIndex(raw);
+      } catch {
+        // Frontend not built — _serveIndex() reports the error per request.
+      }
+    }
+
     return new Promise((resolve) => {
       this._server = this._app.listen(port, host, () => {
         log.info({ host, port }, 'Zora Tactical Interface active');
