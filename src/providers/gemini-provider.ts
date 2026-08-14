@@ -209,14 +209,37 @@ export class GeminiProvider implements LLMProvider {
     this._lastRequestAt = new Date();
     const prompt = this._buildPrompt(task);
 
-    const args = ['chat', '--prompt', prompt];
+    // SEC-22: the prompt goes in on stdin, never as an argv entry.
+    //
+    // `prompt` is the full _buildPrompt() output — memory context plus the whole
+    // XML execution history. As an argument that is two separate problems:
+    //
+    //  - E2BIG. Linux caps a single argv entry at MAX_ARG_STRLEN (128 KiB). Any
+    //    non-trivial session blows past that and the spawn fails with an error
+    //    that reads like a Gemini outage, which then trips the circuit breaker
+    //    and triggers a pointless failover.
+    //  - Disclosure. Argv is world-readable: every local process can read the
+    //    entire prompt — memory context, file paths, whatever the user typed —
+    //    out of `ps aux` or /proc/*/cmdline.
+    const args = ['chat'];
 
     if (this._config.model) {
       args.push('--model', this._config.model);
     }
 
-    const child = spawn(this._cliPath, args, { cwd: this._cwd });
+    const child = spawn(this._cliPath, args, {
+      cwd: this._cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     this._activeProcesses.set(task.jobId, child);
+
+    // Write the prompt and close stdin so the CLI knows the input is complete.
+    // An EPIPE here (child died before reading) is reported through the normal
+    // spawn-error path below rather than as an unhandled stream error.
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* surfaced via child 'error'/exit code */ });
+      child.stdin.end(prompt);
+    }
 
     let buffer = '';
     let bufferTruncated = false;
