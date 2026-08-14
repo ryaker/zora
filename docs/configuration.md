@@ -169,7 +169,7 @@ Persistent memory system for context across sessions. Zora's memory operates in 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `auto_extract` | boolean | `true` | Enable automatic memory extraction after task completion. When enabled, the agent is prompted to extract key facts from completed work. |
-| `auto_extract_interval` | integer | `10` | Number of completed tasks between automatic extraction runs. Only applies when `auto_extract = true`. |
+| `auto_extract_interval` | integer | `10` | **Minutes** between interval-based extraction runs — the orchestrator multiplies this by 60,000 ms. Only applies when `auto_extract = true`; a value of `0` or less disables the interval schedule. |
 
 Salience scoring itself is not configurable. `SalienceScorer`
 (`src/memory/salience-scorer.ts`) is constructed with no arguments by

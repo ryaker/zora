@@ -1,8 +1,13 @@
+# Copy this file to ~/.zora/routines/ and restart the daemon.
+# `model_preference` names a provider from config.toml — `zora-agent init`
+# generates "claude" and "gemini" — not a model ID. `max_cost_tier` is a
+# ceiling: "free" would exclude the "included" providers init writes.
+
 [routine]
 name = "job-search"
 schedule = "0 7 * * 1-5"
 model_preference = "gemini"
-max_cost_tier = "free"
+max_cost_tier = "included"
 timeout = "20m"
 
 [task]

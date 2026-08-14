@@ -15,7 +15,7 @@ Common issues and their solutions when running Zora.
 **Fix:**
 1. Open a terminal and run `claude` to start a new interactive Claude session. This refreshes the session token.
 2. Restart the Zora daemon: `zora-agent daemon stop && zora-agent daemon start`.
-3. Verify auth status on the dashboard at `http://localhost:7070`.
+3. Verify auth status on the dashboard at `http://localhost:8070`.
 
 If using `auth_method = "api_key"`:
 1. Verify the environment variable specified in `api_key_env` is set and contains a valid key.
@@ -138,8 +138,8 @@ enabled = false
 
 **Possible causes:**
 
-1. **Port conflict.** The dashboard port (default `7070`) is already in use.
-   - Fix: Change `steering.dashboard_port` in `config.toml`, or stop the process using the port: `lsof -i :7070`.
+1. **Port conflict.** The dashboard port (default `8070`) is already in use.
+   - Fix: Change `steering.dashboard_port` in `config.toml`, or stop the process using the port: `lsof -i :8070`.
 
 2. **Config file missing or invalid.** The daemon cannot parse `config.toml`.
    - Fix: Run `zora-agent init` to generate a fresh config, or validate your TOML syntax.
@@ -173,7 +173,7 @@ zora-agent daemon start
 
 ## Dashboard Not Loading
 
-### Browser shows "connection refused" at localhost:7070
+### Browser shows "connection refused" at localhost:8070
 
 1. **Daemon not running.** Start it: `zora-agent daemon start`.
 2. **Wrong port.** Check `steering.dashboard_port` in `config.toml`.

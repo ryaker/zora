@@ -1,7 +1,11 @@
+# Copy this file to ~/.zora/routines/ and restart the daemon.
+# `model_preference` names a provider from config.toml — `zora-agent init`
+# generates "claude" and "gemini" — not a model ID.
+
 [routine]
 name = "content-pipeline"
 schedule = "0 8 * * 2"
-model_preference = "claude-haiku"
+model_preference = "claude"
 max_cost_tier = "included"
 timeout = "30m"
 
