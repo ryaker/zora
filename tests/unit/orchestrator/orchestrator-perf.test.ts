@@ -445,3 +445,92 @@ describe('PERF-05 — demand-driven retry scheduling', () => {
     expect(orchestrator.retryQueue.size).toBe(0);
   }, 30_000);
 });
+
+// ─── PERF-06 ─────────────────────────────────────────────────────
+
+interface ToolInternals {
+  _buildCustomTools(): Array<{ name: string }>;
+  _getCustomTools(): Array<{ name: string }>;
+  _customTools: Array<{ name: string }> | null;
+  _buildTokenAwareCanUseTool(jobId: string): unknown;
+}
+
+function tools(orchestrator: Orchestrator): ToolInternals {
+  return orchestrator as unknown as ToolInternals;
+}
+
+describe('PERF-06 — custom tools built once at boot', () => {
+  let testDir: string;
+  let orchestrator: Orchestrator;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `zora-perf06-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await fsp.mkdir(testDir, { recursive: true });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const config = makeConfig(testDir, path.join(testDir, 'SOUL.md'));
+    config.memory.long_term_file = path.join(testDir, 'memory', 'MEMORY.md');
+    config.memory.daily_notes_dir = path.join(testDir, 'memory', 'daily');
+    config.memory.items_dir = path.join(testDir, 'memory', 'items');
+    config.memory.categories_dir = path.join(testDir, 'memory', 'categories');
+    config.memory.auto_extract = false;
+    config.security.policy_file = path.join(testDir, 'policy.toml');
+    config.security.audit_log = path.join(testDir, 'audit', 'audit.jsonl');
+    config.steering.enabled = false;
+    config.notifications.enabled = false;
+
+    orchestrator = new Orchestrator({
+      config,
+      policy: makePolicy(),
+      providers: [new MockProvider({ name: 'primary', rank: 1 })],
+      baseDir: testDir,
+      skipChannels: true,
+    });
+    await orchestrator.boot();
+  });
+
+  afterEach(async () => {
+    if (orchestrator?.isBooted) await orchestrator.shutdown();
+    vi.restoreAllMocks();
+    await fsp.rm(testDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('builds the definitions during boot, not on demand', () => {
+    expect(tools(orchestrator)._customTools).not.toBeNull();
+    expect(tools(orchestrator)._customTools!.length).toBeGreaterThan(5);
+  }, 30_000);
+
+  it('does not rebuild the definitions per task', async () => {
+    const build = vi.spyOn(tools(orchestrator), '_buildCustomTools');
+    const first = tools(orchestrator)._getCustomTools();
+
+    await orchestrator.submitTask({ prompt: 'one' });
+    await orchestrator.submitTask({ prompt: 'two' });
+
+    expect(build).not.toHaveBeenCalled();
+    // Same array instance, so the SDK sees stable tool identities across jobs.
+    expect(tools(orchestrator)._getCustomTools()).toBe(first);
+  }, 60_000);
+
+  it('keeps canUseTool per task even though the tool list is shared', () => {
+    const a = tools(orchestrator)._buildTokenAwareCanUseTool('job-a');
+    const b = tools(orchestrator)._buildTokenAwareCanUseTool('job-b');
+    expect(a).not.toBe(b);
+  }, 30_000);
+
+  it('exposes the same tool names as a fresh build', () => {
+    const cached = tools(orchestrator)._getCustomTools().map(t => t.name).sort();
+    const rebuilt = tools(orchestrator)._buildCustomTools().map(t => t.name).sort();
+    expect(cached).toEqual(rebuilt);
+  }, 30_000);
+
+  it('drops the cache on shutdown so a re-boot rebinds to new subsystems', async () => {
+    const before = tools(orchestrator)._getCustomTools();
+    await orchestrator.shutdown();
+    expect(tools(orchestrator)._customTools).toBeNull();
+
+    await orchestrator.boot();
+    expect(tools(orchestrator)._getCustomTools()).not.toBe(before);
+  }, 60_000);
+});

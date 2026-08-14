@@ -209,6 +209,9 @@ export class Orchestrator {
 
   private _booted = false;
 
+  // PERF-06: custom tool definitions, built once per boot rather than per task.
+  private _customTools: CustomToolDefinition[] | null = null;
+
   // PERF-03: SOUL.md identity cache. The file used to be existsSync'd and
   // readFileSync'd on every submitTask(), blocking the event loop per task.
   // It is read once and served from memory; an fs.watch on the containing
@@ -635,6 +638,12 @@ export class Orchestrator {
     // R5 / ERR-08 / PERF-05: RetryQueue polling is demand-driven — see _armRetryPoll().
     this._armRetryPoll();
 
+    // PERF-06: build the custom tool definitions once, now that every subsystem
+    // their handlers close over exists. submitTask() reuses this list; only the
+    // per-job canUseTool closure is rebuilt per task. Assigned (not ??=) so a
+    // re-boot rebinds the tools to the freshly constructed subsystems.
+    this._customTools = this._buildCustomTools();
+
     // R9: Start HeartbeatSystem and RoutineManager — daemon-only.
     // Skip in one-shot ask mode (skipChannels=true) so node-cron handles
     // don't keep the event loop alive after the task completes.
@@ -658,7 +667,7 @@ export class Orchestrator {
         permissionMode: 'default',
         cwd: agentWorkspace,
         canUseTool: this._policyEngine.createCanUseTool(),
-        customTools: this._createCustomTools(),
+        customTools: this._getCustomTools(),
         model: this._config.agent.heartbeat_provider,
         streamTimeout: agentTimeoutMs,
       });
@@ -1014,6 +1023,10 @@ export class Orchestrator {
       this._memoryExtractIntervalTimeout = null;
     }
 
+    // PERF-06: drop the cached tool list so a re-boot rebuilds it against the
+    // newly constructed subsystems rather than the ones being torn down here.
+    this._customTools = null;
+
     // PERF-03: stop watching SOUL.md
     if (this._soulWatcher) {
       try { this._soulWatcher.close(); } catch { /* already closed */ }
@@ -1225,8 +1238,10 @@ export class Orchestrator {
     // Classify task for routing
     const classification = this._router.classifyTask(sanitizedPrompt);
 
-    // Build custom tools (permissions + memory tools + recall_context)
-    const customTools = this._createCustomTools();
+    // Custom tools (permissions + memory tools + recall_context).
+    // PERF-06: built once at boot — nothing in the definitions is per-task. The
+    // per-job binding is canUseTool below, which stays per task.
+    const customTools = this._getCustomTools();
 
     // SEC-21: bind the tool-hook chain to this job and expose it to the SDK as
     // PreToolUse/PostToolUse. This is the pre-execution enforcement point; the
@@ -2218,10 +2233,35 @@ export class Orchestrator {
   }
 
   /**
+   * PERF-06: Returns the shared custom-tool list, building it on first use.
+   *
+   * The definitions used to be rebuilt — ~12 objects, their JSON schemas and all
+   * their closures — on every submitTask(). Nothing in them is per-task: every
+   * handler closes over long-lived orchestrator state (policy engine, memory
+   * manager, validation pipeline) or over `this`, so one list serves every job.
+   * The per-job binding lives entirely in `canUseTool`, which submitTask() still
+   * builds per task via _buildTokenAwareCanUseTool(jobId).
+   *
+   * boot() warms this so the subsystems the handlers close over are the current
+   * ones; shutdown() drops it so a re-boot cannot serve tools bound to the
+   * previous generation of subsystems.
+   *
+   * The array is never mutated downstream (providers only map over it), so
+   * sharing one instance across concurrent tasks is safe.
+   */
+  private _getCustomTools(): CustomToolDefinition[] {
+    this._customTools ??= this._buildCustomTools();
+    return this._customTools;
+  }
+
+  /**
    * Creates custom tools available to the agent during execution.
    * Includes: permission tools, memory tools (search/save/forget), recall_context.
+   *
+   * PERF-06: call _getCustomTools() instead — this is the uncached builder and
+   * is meant to run once per boot.
    */
-  private _createCustomTools(): CustomToolDefinition[] {
+  private _buildCustomTools(): CustomToolDefinition[] {
     const permissionTools: CustomToolDefinition[] = [
       {
         name: 'check_permissions',
@@ -2326,7 +2366,12 @@ export class Orchestrator {
       (opts) => this.submitTask({ prompt: opts.prompt }),
     );
 
-    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances
+    // spawn_zora_agent — PM Zora uses this to launch project-scoped child instances.
+    // PERF-06 note: this is the one tool with closure state (live child PIDs and
+    // the per-project spawn lock). Building it once per boot rather than once per
+    // task is what it was always written for — the max_children cap and the
+    // duplicate-launch lock are process-wide guards, and rebuilding them per task
+    // silently reset both.
     const pmConfig = (this._config as unknown as Record<string, unknown>)['pm'] as
       | { projects?: Array<{ name: string; port: number; icon?: string; color?: string; project_dir: string }>; max_children?: number }
       | undefined;
