@@ -93,6 +93,18 @@ import { SignalResponseGateway } from '../channels/signal/signal-response-gatewa
 
 const log = createLogger('orchestrator');
 
+/**
+ * PERF-01: in-flight tool_call bookkeeping for one provider execution.
+ * Keyed by toolCallId so a tool_result resolves its call in O(1) instead of
+ * rescanning the (unbounded) task history.
+ */
+interface PendingToolCall {
+  /** Wall-clock ms when the tool_call was observed — hook timing bookkeeping. */
+  startedAt: number;
+  /** The tool_call payload (tool name + arguments) awaiting its result. */
+  call: ToolCallEventContent;
+}
+
 export interface OrchestratorOptions {
   config: ZoraConfig;
   policy: ZoraPolicy;
@@ -1257,8 +1269,28 @@ export class Orchestrator {
     let consecutiveNonToolTurns = 0;
     const STALE_LOOP_THRESHOLD = 3;
 
-    // Tool-level hook tracking: map toolCallId → call start timestamp
-    const _toolCallStartTimes = new Map<string, number>();
+    // PERF-01: Tool-level bookkeeping, keyed by toolCallId.
+    // Replaces the old `[...history].reverse().find(...)` scan that ran on every
+    // tool_result — that was O(history) per event, i.e. O(n²) over a session, with
+    // a full array copy each time. One entry object carries both the call start
+    // timestamp (hook timing) and the tool_call content (name + args), so there is
+    // a single map to keep consistent: set on tool_call, deleted on tool_result.
+    const pendingToolCalls = new Map<string, PendingToolCall>();
+
+    // Seed from prior history so a failover hop still resolves tool_calls emitted
+    // before the hop, exactly as the history scan did. Replaying in order and
+    // deleting on tool_result leaves only the still-unresolved calls.
+    for (const prior of taskContext.history) {
+      if (prior.type === 'tool_call') {
+        const c = prior.content as ToolCallEventContent;
+        if (c?.toolCallId) {
+          pendingToolCalls.set(c.toolCallId, { startedAt: prior.timestamp?.getTime?.() ?? Date.now(), call: c });
+        }
+      } else if (prior.type === 'tool_result') {
+        const c = prior.content as ToolResultEventContent;
+        if (c?.toolCallId) pendingToolCalls.delete(c.toolCallId);
+      }
+    }
 
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
@@ -1378,7 +1410,7 @@ export class Orchestrator {
             // and the old `!allow` branch here could not stop anything anyway,
             // it only wrote a synthetic "blocked" tool_result into Zora's own
             // transcript while the real tool ran.
-            _toolCallStartTimes.set(toolCallContent.toolCallId, Date.now());
+            pendingToolCalls.set(toolCallContent.toolCallId, { startedAt: Date.now(), call: toolCallContent });
 
             // Secrets still must not reach disk: SecretRedactHook's rewrite
             // already happened pre-execution, so read it back rather than
@@ -1401,14 +1433,12 @@ export class Orchestrator {
             const toolResultContent = event.content as ToolResultEventContent;
             const hasFailed = Boolean(toolResultContent.error);
 
-            // Find the matching tool_call in history to get name + args
-            const matchingCall = [...taskContext.history].reverse().find(
-              e => e.type === 'tool_call' &&
-                (e.content as ToolCallEventContent).toolCallId === toolResultContent.toolCallId,
-            );
+            // PERF-01: O(1) lookup of the matching tool_call (name + args) instead of
+            // copying and reverse-scanning the whole history on every tool_result.
+            const matchingCall = pendingToolCalls.get(toolResultContent.toolCallId);
 
             if (matchingCall) {
-              const callContent = matchingCall.content as ToolCallEventContent;
+              const callContent = matchingCall.call;
               const args = callContent.arguments ?? {};
 
               // ERR-12: Record failure/success in persistent negative cache
@@ -1452,7 +1482,7 @@ export class Orchestrator {
             // SEC-21: after-hooks now run from the SDK's PostToolUse hook, which
             // sees the real tool response rather than one reconstructed from a
             // streamed event. Only the timing bookkeeping remains here.
-            _toolCallStartTimes.delete(toolResultContent.toolCallId);
+            pendingToolCalls.delete(toolResultContent.toolCallId);
           }
 
           // (ERR-09: stale-state tracking is done on 'done' events below)
