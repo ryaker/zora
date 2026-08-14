@@ -28,6 +28,9 @@ import { QuarantineProcessor } from '../channels/quarantine-processor.js';
 import { ChannelAuditLog } from '../channels/channel-audit-log.js';
 import { ChannelManager } from '../channels/channel-manager.js';
 import { WebhookServer } from '../channels/webhook-server.js';
+import { MailboxChannelAdapter } from '../channels/team/mailbox-channel-adapter.js';
+import { TeamManager } from '../teams/team-manager.js';
+import { Mailbox } from '../teams/mailbox.js';
 import { WebhookValidatorRegistry, createTelegramValidator } from '../channels/webhook-signatures.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
@@ -327,9 +330,36 @@ async function main() {
         }
       }
 
+      // 3. Team mailboxes — INVARIANT-9.
+      // A task in an agent's inbox is untrusted input from a third party that
+      // makes Zora act, so it goes through the same pipeline as Signal and
+      // Telegram rather than being run directly the way GeminiBridge did.
+      //
+      // Which inbox is "ours" is decided by membership, not by new config:
+      // Zora drains the inbox of the agent bearing its own name, in every team
+      // that lists it as an active member. Draining another member's inbox
+      // would mean acting as that agent.
+      const teamAdapterNames: string[] = [];
+      try {
+        const teamManager = new TeamManager(configDir);
+        for (const team of await teamManager.listTeams()) {
+          if (!team.members.some((m) => m.name === config.agent.name && m.isActive)) continue;
+          const teamAdapter = new MailboxChannelAdapter({
+            teamName: team.name,
+            agentName: config.agent.name,
+            mailbox: new Mailbox(teamManager.teamsDir, config.agent.name),
+          });
+          await channelManager.registerAdapter(teamAdapter);
+          teamAdapterNames.push(teamAdapter.name);
+        }
+      } catch (err) {
+        // A broken teams directory must not stop Signal and Telegram starting.
+        log.error({ err }, 'Failed to register team mailbox channels');
+      }
+
       await channelManager.start();
 
-      // 3. Webhook listener — INVARIANT-10.
+      // 4. Webhook listener — INVARIANT-10.
       // Started only for platforms that both deliver by webhook and have a
       // signature validator. Registering a validator is what authorises a
       // platform's route, so the server is never running with a route it
@@ -347,6 +377,7 @@ async function main() {
       const activeAdapters = [];
       if (signalPhone) activeAdapters.push('signal');
       if (telegramRegistered) activeAdapters.push('telegram');
+      activeAdapters.push(...teamAdapterNames);
       log.info({ adapters: activeAdapters.join(', ') }, 'Multi-channel architecture online');
 
       // ApprovalQueue is wired into PolicyEngine via orchestrator.setApprovalQueue() above.
