@@ -100,10 +100,24 @@ its options explicitly, so the key is dropped. Note the `.map()` also strips
 `handler`, so even a hypothetical passthrough could not execute anything.
 
 The correct mechanism is `createSdkMcpServer()` + `mcpServers`, which
-`ExecutionLoop` already implements correctly (`execution-loop.ts:138-166`,
-including the `// The old approach of passing { customTools } to sdkOptions was
-silently ignored` comment). The fix landed in `ExecutionLoop` and never got
-back-ported to `ClaudeProvider`.
+`ExecutionLoop` uses (`execution-loop.ts:138-166`, including the `// The old
+approach of passing { customTools } to sdkOptions was silently ignored`
+comment). The fix landed in `ExecutionLoop` and never got back-ported to
+`ClaudeProvider`.
+
+> **Correction (during implementation).** This section originally said
+> `ExecutionLoop` "already implements correctly". That was wrong, and the truth
+> is worse. It uses the right *mechanism* but the wrong *schema format*: it
+> passes Zora's JSON Schema straight through as `inputSchema`, while the SDK
+> accepts only a Zod schema or raw shape — `tool<Schema extends AnyZodRawShape>`
+> in `sdk.d.ts`, with the runtime string `inputSchema must be a Zod schema or
+> raw shape, received an unrecognized object` in `sdk.mjs`. On 0.2.76 the schema
+> was silently discarded, so heartbeat/extraction/compression tools were
+> advertised to the model **with an empty parameter list** — visible but
+> uncallable with arguments. On 0.3.232 it throws outright. So *neither* path
+> had working custom tools; the provider path had none at all and the
+> `ExecutionLoop` path had them without parameters. Fixed by a
+> `toZodInputSchema()` conversion in the shared builder.
 
 Dead in the main path as a result: `check_permissions`, `request_permissions`,
 `memory_search`, `memory_save`, `memory_forget`, `recall_context`,

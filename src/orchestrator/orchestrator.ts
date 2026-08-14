@@ -2202,6 +2202,17 @@ export class Orchestrator {
     return this._steeringManager;
   }
 
+  /**
+   * FlagManager — human-in-the-loop approval flags, wired from
+   * steering.flag_timeout and steering.notify_on_flag. Exposed so the CLI
+   * (`zora steer` commands) and dashboard can raise and resolve flags against
+   * the same instance the orchestrator constructed.
+   */
+  get flagManager(): FlagManager {
+    this._assertBooted();
+    return this._flagManager;
+  }
+
   get memoryManager(): MemoryManager {
     this._assertBooted();
     return this._memoryManager;

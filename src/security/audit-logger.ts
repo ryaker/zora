@@ -53,7 +53,6 @@ export interface ChainVerificationResult {
 export class AuditLogger {
   private readonly _logPath: string;
   private readonly _hashChain: boolean;
-  private readonly _singleWriter: boolean;
   private _previousHash: string = GENESIS_HASH;
   private _entryCounter = 0;
   private _writeQueue: Promise<void> = Promise.resolve();
@@ -63,21 +62,19 @@ export class AuditLogger {
     this._logPath = auditLogPath;
     this._hashChain = options.hashChain ?? true;
 
-    const requestedSingleWriter = options.singleWriter ?? true;
     // singleWriter=false is unsupported: _appendEntry() mutates shared state
     // (_initialized, _entryCounter, _previousHash) that is not safe for concurrent
     // access. Even when hashChain=false, concurrent writers would race on
     // _entryCounter and _initialized, producing duplicate entryIds or corrupt
-    // initialization. Always promote to singleWriter=true and warn so operators know.
-    if (!requestedSingleWriter) {
+    // initialization. Writes are ALWAYS serialised through _writeQueue regardless
+    // of this option, so the value is never consulted after construction — we only
+    // warn so operators know their config was ignored.
+    if (options.singleWriter === false) {
       log.warn(
         'singleWriter=false is not supported — concurrent writes race on shared mutable state ' +
         '(_entryCounter, _initialized) and would produce duplicate entry IDs or corrupt initialization. ' +
         'Writes will be serialized as if singleWriter=true.',
       );
-      this._singleWriter = true;
-    } else {
-      this._singleWriter = requestedSingleWriter;
     }
   }
 
