@@ -226,3 +226,32 @@ export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
   retryAsApproval: true,
   retryWindowMs: 60_000,
 };
+
+/**
+ * SEC-27: builds an ApprovalConfig from the raw `[approval]` config block.
+ *
+ * `approval` has no entry in the typed config, so reading it means casting
+ * through `Record<string, unknown>` — which is exactly the kind of parsing that
+ * gets copied to a second call site and drifts. It lived in `cli/daemon.ts`,
+ * and the daemon was the only place that built a queue at all: on the
+ * `zora-agent ask` path there was no ApprovalQueue, so every action over the
+ * flag threshold was denied outright with no way to approve it. Same shape as
+ * SEC-29 — a mechanism each caller configures for itself, so some caller
+ * eventually doesn't. `Orchestrator.boot()` now calls this too, which is what
+ * gives both entry points the same gate.
+ */
+export function approvalConfigFrom(raw: unknown): ApprovalConfig {
+  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_APPROVAL_CONFIG };
+  const block = raw as Record<string, unknown>;
+
+  const timeoutSeconds = block['timeout_s'];
+  const seconds = typeof timeoutSeconds === 'number' && Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+    ? timeoutSeconds
+    : DEFAULT_APPROVAL_CONFIG.timeoutMs / 1000;
+
+  return {
+    ...DEFAULT_APPROVAL_CONFIG,
+    enabled: block['enabled'] === true,
+    timeoutMs: seconds * 1000,
+  };
+}

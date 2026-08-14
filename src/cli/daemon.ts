@@ -31,7 +31,7 @@ import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
-import { ApprovalQueue, DEFAULT_APPROVAL_CONFIG } from '../core/approval-queue.js';
+import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { runSecurityAuditSilent } from './security-commands.js';
 import { TelegramGateway, type TelegramConfig } from '../steering/telegram-gateway.js';
 
@@ -162,25 +162,16 @@ async function main() {
 
   // Initialize ApprovalQueue BEFORE orchestrator boot so the send handler
   // is in place if any actions arrive during the startup window.
-  const approvalConfig = (config as unknown as Record<string, unknown>)['approval'] as Record<string, unknown> | undefined;
-  const approvalQueue = new ApprovalQueue({
-    ...DEFAULT_APPROVAL_CONFIG,
-    ...(approvalConfig ? {
-      enabled: (approvalConfig['enabled'] as boolean) ?? false,
-      timeoutMs: (() => {
-        const raw = approvalConfig['timeout_s'] as number | undefined;
-        const s = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 300;
-        return s * 1000;
-      })(),
-    } : {}),
-  });
-
-  // Wire steering.auto_approve_low_risk: pre-activate session blanket allow for low-risk actions.
-  // All tool calls scoring below the flag threshold (default 65) are auto-approved this session.
-  if (config.steering.auto_approve_low_risk && approvalQueue.isEnabled()) {
-    const flagThreshold = (policy.actions?.thresholds?.flag as number | undefined) ?? 65;
-    approvalQueue.setSessionBlanketAllow(flagThreshold);
-  }
+  // SEC-27: the parsing of this block, and the steering.auto_approve_low_risk
+  // blanket-allow that used to follow it here, both moved to
+  // `Orchestrator.boot()` so the `zora-agent ask` path gets the same gate. The
+  // daemon still constructs its own queue because it has something the ask path
+  // does not — a Telegram send handler to deliver approval requests through —
+  // and it must exist before boot() so that handler is wired for any action
+  // arriving in the startup window.
+  const approvalQueue = new ApprovalQueue(
+    approvalConfigFrom((config as unknown as Record<string, unknown>)['approval']),
+  );
 
   const providers = createProviders(config, policy);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });

@@ -3,14 +3,22 @@
  *
  * score < warn threshold    → allow, log debug
  * score ≥ warn threshold    → allow, log warn
- * score ≥ flag threshold    → deny with reason "approval_required:{score}"
+ * score ≥ flag threshold    → escalate to the ApprovalQueue; allow if a human
+ *                             approves, else deny with "approval_required:{score}"
  * score ≥ auto_deny (95+)   → deny with reason "auto_denied:{score}"
+ *
+ * SEC-27: that flag branch used to be a plain deny. The reason string named an
+ * ApprovalQueue that nothing ever called, so the flag threshold behaved as a
+ * second auto-deny threshold and there was no way for a human to say yes. The
+ * queue arrives via `setApprovalQueue()` from `Orchestrator.boot()`; when there
+ * is no enabled queue the branch denies exactly as it did before.
  */
 import { createLogger } from '../../utils/logger.js';
 import type { ToolHook, ToolCallContext, ToolHookResult } from '../tool-hook-runner.js';
 import { getGlobalForecaster } from '../../core/memory-risk-forecaster.js';
 import { getAgentPolicy, checkScoreLimit } from '../../core/project-policy.js';
 import { normalizeToolName } from '../../security/tool-names.js';
+import type { ApprovalQueue } from '../../core/approval-queue.js';
 
 const log = createLogger('irreversibility-scorer');
 
@@ -99,7 +107,62 @@ export class IrreversibilityScorerHook implements ToolHook {
   readonly name = 'irreversibility-scorer';
   readonly phase = 'before' as const;
 
+  private _approvalQueue: ApprovalQueue | undefined;
+
   constructor(private readonly _config: IrreversibilityConfig) {}
+
+  /**
+   * SEC-27: registers the human-in-the-loop gate this hook escalates to.
+   *
+   * Without it the `approval_required:{score}` branch is a dead end: the string
+   * named a queue that was never consulted, so "flag for approval" and "deny
+   * outright" were the same outcome and the whole flag threshold acted as a
+   * second auto-deny threshold. Wired from `Orchestrator.boot()`, so both entry
+   * points get it.
+   */
+  setApprovalQueue(queue: ApprovalQueue): void {
+    this._approvalQueue = queue;
+  }
+
+  /**
+   * SEC-27: asks the human, and denies if there is nobody to ask.
+   *
+   * Fail-closed is preserved on every path that is not an explicit approval:
+   * no queue registered, `approval.enabled=false` (the default, so default
+   * behaviour is exactly what it was before this gap), no send handler
+   * registered, a timeout, or a `deny` reply all end in the same denial the
+   * hook used to return unconditionally. The only new outcome is a human
+   * saying yes.
+   *
+   * The original `approval_required:{score}` reason is kept as the prefix of
+   * the denial rather than replaced, because the audit log and
+   * `tests/unit/hooks/sdk-tool-names.test.ts` both key off that shape.
+   */
+  private async _requestApproval(
+    ctx: ToolCallContext,
+    score: number,
+    reason: string,
+  ): Promise<ToolHookResult> {
+    const queue = this._approvalQueue;
+    if (!queue?.isEnabled()) {
+      return { allow: false, reason };
+    }
+
+    const approved = await queue.request({
+      action: toolToAction(ctx.tool),
+      score,
+      jobId: ctx.jobId,
+      tool: ctx.tool,
+    });
+
+    if (approved) {
+      log.warn({ tool: ctx.tool, score, jobId: ctx.jobId }, 'Action approved by human — proceeding');
+      return { allow: true };
+    }
+
+    log.warn({ tool: ctx.tool, score, jobId: ctx.jobId }, 'Action denied at approval gate');
+    return { allow: false, reason: `${reason} — denied at approval gate` };
+  }
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
     const actionKey = toolToAction(ctx.tool);
@@ -134,7 +197,9 @@ export class IrreversibilityScorerHook implements ToolHook {
 
     if (score >= this._config.thresholds.flag) {
       log.warn({ tool: ctx.tool, score, jobId: ctx.jobId }, 'Action flagged for approval');
-      return { allow: false, reason: `approval_required:${score}` };
+      // SEC-27: escalate rather than dead-end. Denies exactly as before when
+      // there is no enabled queue to escalate to.
+      return await this._requestApproval(ctx, score, `approval_required:${score}`);
     }
 
     if (score >= this._config.thresholds.warn) {
@@ -161,7 +226,14 @@ export class IrreversibilityScorerHook implements ToolHook {
 
       if (forecaster.shouldIntercept(ctx.jobId)) {
         log.warn({ jobId: ctx.jobId, composite: riskScores.composite }, 'Session flagged: elevated risk pattern detected');
-        return { allow: false, reason: `approval_required:${riskScores.composite} (session risk — ${forecaster.getSummary(ctx.jobId)})` };
+        // SEC-27: the session-risk intercept emits the same reason class and so
+        // gets the same gate. The composite score — not the per-action score —
+        // is what the approver is shown, since the composite is what tripped it.
+        return await this._requestApproval(
+          ctx,
+          riskScores.composite,
+          `approval_required:${riskScores.composite} (session risk — ${forecaster.getSummary(ctx.jobId)})`,
+        );
       }
     }
 
