@@ -30,6 +30,7 @@ import { ChannelManager } from '../channels/channel-manager.js';
 import { WebhookServer } from '../channels/webhook-server.js';
 import { MailboxChannelAdapter } from '../channels/team/mailbox-channel-adapter.js';
 import { TeamManager } from '../teams/team-manager.js';
+import { BridgeWatchdog } from '../teams/bridge-watchdog.js';
 import { Mailbox } from '../teams/mailbox.js';
 import { WebhookValidatorRegistry, createTelegramValidator } from '../channels/webhook-signatures.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
@@ -270,6 +271,8 @@ async function main() {
   // INVARIANT-10: only constructed when a platform delivers by webhook AND has
   // a signature validator to authenticate it.
   let webhookServer: WebhookServer | undefined;
+  // ERR-21: one per team mailbox channel, stopped on shutdown.
+  const teamWatchdogs: BridgeWatchdog[] = [];
 
   const channelPolicyPath = path.join(configDir, 'config', 'channel-policy.toml');
   if (fs.existsSync(channelPolicyPath)) {
@@ -351,6 +354,20 @@ async function main() {
           });
           await channelManager.registerAdapter(teamAdapter);
           teamAdapterNames.push(teamAdapter.name);
+
+          // ERR-21: supervise the poller. A team inbox that silently stops
+          // draining looks exactly like an idle team, so nothing would report
+          // it. The health file is per team, since one process may drain
+          // several and a shared file would let one team's heartbeat vouch for
+          // another's.
+          const watchdog = new BridgeWatchdog(teamAdapter, {
+            healthCheckIntervalMs: 30_000,
+            maxStaleMs: 120_000,
+            maxRestarts: 5,
+            stateDir: path.join(configDir, 'state', 'teams', team.name),
+          });
+          await watchdog.start();
+          teamWatchdogs.push(watchdog);
         }
       } catch (err) {
         // A broken teams directory must not stop Signal and Telegram starting.
@@ -422,6 +439,9 @@ async function main() {
         telegramGateway = undefined;
       }
       try {
+        for (const watchdog of teamWatchdogs) {
+          watchdog.stop();
+        }
         if (webhookServer) {
           await webhookServer.stop();
         }

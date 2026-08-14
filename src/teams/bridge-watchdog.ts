@@ -1,18 +1,40 @@
 /**
- * BridgeWatchdog — Monitors the GeminiBridge health and restarts on stale heartbeats.
+ * BridgeWatchdog — Monitors a poller's health and restarts it on stale heartbeats.
  *
  * Spec v0.6 §5.7 "Bridge Watchdog":
  *   - Reads/writes state/bridge-health.json
- *   - Restarts bridge with exponential backoff if heartbeat goes stale.
+ *   - Restarts the supervised poller with exponential backoff if the heartbeat
+ *     goes stale.
+ *
+ * ERR-21 follow-up: the spec says "bridge", and this supervised `GeminiBridge`
+ * — a class constructed nowhere in src/, so the fail-closed fix landed on
+ * something that never runs. It now supervises any `SupervisedPoller`, which in
+ * the daemon is the team `MailboxChannelAdapter`.
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { GeminiBridge } from './gemini-bridge.js';
+
 import { createLogger } from '../utils/logger.js';
 import { writeAtomic } from '../utils/fs.js';
 
 const log = createLogger('bridge-watchdog');
+
+/**
+ * What the watchdog supervises.
+ *
+ * ERR-21 follow-up: this was typed as `GeminiBridge`, which is constructed
+ * nowhere in `src/` — so the fail-closed fix protected a component that never
+ * runs. The watchdog only ever needs three things, and naming them as an
+ * interface lets it supervise whatever actually polls, which today is
+ * `MailboxChannelAdapter`. `GeminiBridge` still satisfies it unchanged.
+ */
+export interface SupervisedPoller {
+  start(): void | Promise<void>;
+  stop(): void | Promise<void>;
+  /** Called after each successful poll cycle; drives the heartbeat. */
+  setOnPollComplete(callback: () => void | Promise<void>): void;
+}
 
 export interface BridgeWatchdogOptions {
   healthCheckIntervalMs: number;
@@ -44,7 +66,7 @@ type ReadResult =
   | { ok: false; reason: 'unusable'; detail: string };
 
 export class BridgeWatchdog {
-  private readonly _bridge: GeminiBridge;
+  private readonly _bridge: SupervisedPoller;
   private readonly _healthCheckIntervalMs: number;
   private readonly _maxStaleMs: number;
   private readonly _maxRestarts: number;
@@ -54,7 +76,7 @@ export class BridgeWatchdog {
   private _restartCount = 0;
   private _checking = false;
 
-  constructor(bridge: GeminiBridge, options: BridgeWatchdogOptions) {
+  constructor(bridge: SupervisedPoller, options: BridgeWatchdogOptions) {
     this._bridge = bridge;
     this._healthCheckIntervalMs = options.healthCheckIntervalMs;
     this._maxStaleMs = options.maxStaleMs;
@@ -170,12 +192,12 @@ export class BridgeWatchdog {
           'Heartbeat stale, restarting bridge',
         );
 
-        this._bridge.stop();
+        await this._bridge.stop();
 
         await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
 
         if (this._running) {
-          this._bridge.start();
+          await this._bridge.start();
           await this.writeHeartbeat();
 
           // Re-read state to avoid overwriting concurrent heartbeat updates.

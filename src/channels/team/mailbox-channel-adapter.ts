@@ -61,6 +61,7 @@ export class MailboxChannelAdapter implements IChannelAdapter {
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
   private _polling = false;
+  private _onPollComplete?: () => void | Promise<void>;
 
   constructor(options: MailboxChannelAdapterOptions) {
     // Unique per team and agent: ChannelManager refuses duplicate adapter
@@ -93,6 +94,18 @@ export class MailboxChannelAdapter implements IChannelAdapter {
 
   onMessage(handler: (msg: ChannelMessage) => Promise<void>): void {
     this._handler = handler;
+  }
+
+  /**
+   * ERR-21: called after each poll cycle that completed without throwing.
+   *
+   * This is the `SupervisedPoller` seam BridgeWatchdog drives its heartbeat
+   * from. It fires on a completed cycle, not on a cycle that found work — an
+   * idle inbox is healthy, and treating it as silence would have the watchdog
+   * restart a perfectly good adapter every staleness window.
+   */
+  setOnPollComplete(callback: () => void | Promise<void>): void {
+    this._onPollComplete = callback;
   }
 
   /**
@@ -138,6 +151,9 @@ export class MailboxChannelAdapter implements IChannelAdapter {
           log.error({ err, team: this._teamName, from: message.from }, 'Team task failed in the channel pipeline');
         }
       }
+      // Deliberately after the drain and inside the try: a cycle that threw
+      // before here did not complete, and must not look alive to the watchdog.
+      if (this._onPollComplete) await this._onPollComplete();
     } catch (err) {
       log.error({ err, team: this._teamName }, 'Mailbox poll error');
     } finally {

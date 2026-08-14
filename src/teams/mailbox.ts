@@ -10,7 +10,24 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeAtomic, withFileLock } from '../utils/fs.js';
+
 import type { MailboxMessage } from './team-types.js';
+
+/**
+ * ERR-22: how long a mailbox operation waits for the inbox lock.
+ *
+ * Well above `withFileLock`'s 5s default, deliberately. The lock serialises, so
+ * with N concurrent senders the last one waits for N turns — a fixed deadline
+ * is therefore a cap on how many agents may write at once, wearing a timeout's
+ * clothing. Observed: 25 concurrent senders pass in ~0.5s idle and blow past 5s
+ * under a loaded machine, which would surface as `send` throwing on a message
+ * that was merely queued behind others.
+ *
+ * Waiting is the right behaviour here. An inbox write is not latency-critical,
+ * and the deadline exists to escape a genuinely wedged lock, not to bound
+ * queueing. It stays finite so a wedge still ends in a loud error.
+ */
+const INBOX_LOCK_TIMEOUT_MS = 60_000;
 
 /**
  * Validates that a name does not contain path separators or traversal sequences.
@@ -78,7 +95,7 @@ export class Mailbox {
 
       existing.push(full);
       await writeAtomic(inboxPath, JSON.stringify(existing, null, 2));
-    });
+    }, { timeoutMs: INBOX_LOCK_TIMEOUT_MS });
   }
 
   /**
@@ -110,7 +127,7 @@ export class Mailbox {
       await writeAtomic(inboxPath, JSON.stringify(all, null, 2));
 
       return snapshot;
-    });
+    }, { timeoutMs: INBOX_LOCK_TIMEOUT_MS });
   }
 
   /**

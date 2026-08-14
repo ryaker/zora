@@ -31,6 +31,7 @@ import { ChannelPolicyGate } from '../../src/channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../../src/channels/capability-resolver.js';
 import { MailboxChannelAdapter } from '../../src/channels/team/mailbox-channel-adapter.js';
 import { Mailbox } from '../../src/teams/mailbox.js';
+import { BridgeWatchdog } from '../../src/teams/bridge-watchdog.js';
 import type { QuarantineProcessor } from '../../src/channels/quarantine-processor.js';
 import type { CapabilitySet, ChannelMessage, StructuredIntent } from '../../src/types/channel.js';
 
@@ -68,6 +69,16 @@ tools = ["read_file", "write_file"]
 destructive_ops = false
 action_budget = 10
 `;
+}
+
+/** Polls a condition against a deadline; load makes it slower, not wrong. */
+async function until(predicate: () => boolean | Promise<boolean>, label: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for: ${label}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
 }
 
 /** Records what the orchestrator was asked to run. */
@@ -134,16 +145,6 @@ describe('INVARIANT-9 — team inbox tasks traverse the channel pipeline', () =>
     await adapter.stop();
     await fs.rm(baseDir, { recursive: true, force: true }).catch(() => {});
   });
-
-  /** Polls a condition against a deadline; load makes it slower, not wrong. */
-  async function until(predicate: () => boolean | Promise<boolean>, label: string): Promise<void> {
-    const deadline = Date.now() + 10_000;
-    for (;;) {
-      if (await predicate()) return;
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for: ${label}`);
-      await new Promise((r) => setTimeout(r, 5));
-    }
-  }
 
   async function sendTask(from: string, text: string): Promise<void> {
     await new Mailbox(baseDir, from).send(TEAM, WORKER, { type: 'task', text });
@@ -226,5 +227,90 @@ describe('INVARIANT-9 — team inbox tasks traverse the channel pipeline', () =>
 
     await new Promise((r) => setTimeout(r, 300));
     expect(submitted).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * ERR-21, finally protecting something that runs.
+ *
+ * BridgeWatchdog was written for GeminiBridge, which is constructed nowhere in
+ * src/ — so the fail-closed fix landed on a component the daemon never starts.
+ * It now supervises any `SupervisedPoller`, and in the daemon that is the team
+ * MailboxChannelAdapter. This asserts the two actually fit together: the
+ * adapter drives the heartbeat, and a wedged adapter gets restarted.
+ */
+describe('ERR-21 — the watchdog supervises the team mailbox adapter', () => {
+  let baseDir: string;
+  let watchdog: BridgeWatchdog | null = null;
+  let adapter: MailboxChannelAdapter | null = null;
+
+  beforeEach(async () => {
+    baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-team-watchdog-'));
+  });
+
+  afterEach(async () => {
+    watchdog?.stop();
+    await adapter?.stop();
+    watchdog = null;
+    adapter = null;
+    await fs.rm(baseDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('takes its heartbeat from the adapter completing a poll', async () => {
+    adapter = new MailboxChannelAdapter({
+      teamName: TEAM,
+      agentName: WORKER,
+      mailbox: new Mailbox(baseDir, WORKER),
+      pollIntervalMs: 20,
+    });
+    // Never stale, so any heartbeat movement is the adapter's doing rather
+    // than a restart writing one.
+    watchdog = new BridgeWatchdog(adapter, {
+      healthCheckIntervalMs: 10_000,
+      maxStaleMs: 3_600_000,
+      maxRestarts: 3,
+      stateDir: path.join(baseDir, 'state'),
+    });
+
+    await watchdog.start();
+    const healthFile = path.join(baseDir, 'state', 'bridge-health.json');
+    const initial = JSON.parse(await fs.readFile(healthFile, 'utf8')) as { lastHeartbeat: string };
+
+    await adapter.start();
+    await until(async () => {
+      const now = JSON.parse(await fs.readFile(healthFile, 'utf8')) as { lastHeartbeat: string };
+      return now.lastHeartbeat !== initial.lastHeartbeat;
+    }, 'the adapter poll to advance the heartbeat');
+  }, 30_000);
+
+  /**
+   * The property that makes the supervision worth having: an adapter whose
+   * poll loop has stopped looks exactly like an idle team, so without the
+   * watchdog nothing reports it.
+   */
+  it('restarts an adapter that has stopped polling', async () => {
+    let starts = 0;
+    // A stand-in for the adapter's SupervisedPoller surface, so the test can
+    // hold it wedged. The real adapter is exercised above; what matters here is
+    // that the watchdog drives start/stop on whatever it supervises.
+    const wedged = {
+      start: () => {
+        starts++;
+      },
+      stop: () => {},
+      setOnPollComplete: () => {
+        /* never fires — this is the wedge */
+      },
+    };
+
+    watchdog = new BridgeWatchdog(wedged, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 30,
+      maxRestarts: 3,
+      stateDir: path.join(baseDir, 'state'),
+    });
+    await watchdog.start();
+
+    await until(() => starts > 0, 'the wedged poller to be restarted');
   }, 30_000);
 });
