@@ -608,34 +608,48 @@ Variable-length outbound also correct: `[:R*1..3]` → `2, 3`; `[:R*2..2]` → `
 Keys are bare names — `{name: 'Alice'}`, not `{'$name': 'Alice'}` — and getting
 it wrong is now loud.
 
-## New in 0.1.24 — multi-hop is variable-length only
+## New in 0.1.24 — chained multi-hop depends on where the labels are
 
-Explicit chained hops fail on **every** form tested:
+> **Correction, 2026-08-14, after maintainer isolation.** An earlier revision of
+> this section said chained multi-hop "fails on every form tested". That was too
+> broad, and the cause was a flaw in my fixtures: all four variants I tried
+> happened to leave the **tail** node unlabeled, so I generalised from a single
+> defect. Chained 2-hop **works when every node in the pattern is labeled.**
+> Reproduced below.
 
-| Pattern | Result |
-|---|---|
-| `MATCH (a:A)-[:R]->()-[:R]->(x)` | `THREW: not found` |
-| `MATCH (a:A)-[:R]->(m)-[:R]->(x)` | `THREW: not found` |
-| `MATCH (a:A)-[:R]->(m:B)-[:R]->(x)` | `THREW: not found` |
-| `MATCH (a:A)-[r1:R]->(m)-[r2:R]->(x)` | `THREW: not found` |
-| `MATCH (a:A)-[:R*2..2]->(x)` | `[{"x.v":3}]` ✓ |
-| `MATCH (a:A)-[:R]->(m) RETURN m.v` | `[{"m.v":2}]` ✓ (1 hop fine) |
+Two fixtures, each a 2-hop chain, expecting `x.v = 3`:
 
-So the standard Cypher way to write a two-hop join is unsupported, and the only
-route to 2+ hops is variable-length syntax. Two asks:
+| | all labeled | mid unlabeled | tail unlabeled |
+|---|---|---|---|
+| **F1** multi-label, same rel type (`A-[:R]->B-[:R]->C`) | `[{"x.v":3}]` ✓ | **`[]`** ✗ silent | **`not found`** ✗ |
+| **F2** single label, different rel types (`N-[:R1]->N-[:R2]->N`) | `[{"x.v":3}]` ✓ | `[{"x.v":3}]` ✓ | **`not found`** ✗ |
 
-1. **The error is `not found`** — the same uninformative string flagged in S3-1.
-   For an unsupported pattern it should say so: *"chained relationship patterns
-   are not supported; use variable-length syntax `[:R*2..2]`"*. As it stands a
-   consumer cannot tell an unsupported pattern from a missing label or a typo.
-2. Supporting the explicit form would remove a real portability edge — this is
-   the shape most Cypher examples and most people's muscle memory use.
+So the rule is: **label every node in a chained pattern and it works.** Two
+distinct defects remain, and they differ in severity:
 
-**Variable-length inbound is unimplemented:** `MATCH (c:C)<-[:R*1..3]-(x)` →
-`not yet implemented`. Honest error, and 1-hop inbound now works — but it means
-**inbound traversal beyond one hop is still unavailable**, so the N3 concern
-survives in reduced form. "What transitively depends on this" cannot be asked;
-"what does this transitively depend on" can.
+**D1 — unlabeled tail throws `not found` (both fixtures).** Loud, so it cannot
+produce a wrong answer, but the message is the same uninformative string flagged
+in S3-1 and gives no hint that adding a label to the tail fixes it. Worth:
+*"the final node in a chained pattern must be labeled"*.
+
+**D2 — unlabeled middle silently returns `[]`, but only in F1.** This is the
+dangerous one: no error, empty result, and it only bites when the chain spans
+multiple labels over the same relationship type — which is exactly the shape a
+heterogeneous knowledge graph uses (`Task -[:MENTIONS]-> Entity -[:MENTIONS]-> Task`).
+F2 shows the same query shape working when the labels are uniform, so a consumer
+can easily validate on the wrong fixture and conclude it works. Silent empties
+that depend on the label topology of the data are very hard to catch downstream.
+
+Variable-length syntax (`[:R*2..2]`, `[:R*1..3]`) works and is unaffected by
+either defect, so it remains a safe fallback. **Variable-length inbound is still
+`not yet implemented`**, so inbound traversal past one hop is unavailable —
+"what does this depend on" is answerable, "what depends on this" is not.
+
+### Consequence for consumers
+
+Chained patterns are usable today provided **every node carries a label**. That
+is a mild constraint and a natural one for a typed ontology, so the earlier
+advice to force variable-length syntax everywhere was unnecessary.
 
 ## Consumer note
 
