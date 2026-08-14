@@ -2218,7 +2218,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "in_progress",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
