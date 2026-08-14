@@ -680,3 +680,63 @@ functions returning `null` (S1-4), no `REMOVE`, no multi-clause statements, no
 edge-property `SET` (S2), `MERGE` dropping edge properties (A2), and the
 platform-package/loader situation (S3-4, upstream #481 — linux-x64 and
 darwin-arm64 only; not a blocker here, Zora runs linux-x64).
+
+---
+
+# Addendum — 0.1.24 parameterized **edge** writes silently no-op
+
+Found while converting Zora's adapter to `executeWithParams` (MEM-33), and
+verified independently afterwards. Same environment; probe:
+`sparrowdb-probe11.mjs`.
+
+**This is the most dangerous behaviour found in any version so far, because it
+fails silently in exactly the pattern recommended for injection safety.**
+
+## Repro
+
+Two nodes exist (`(:A {k:'a1'})`, `(:B {k:'b1'})`). Four ways to create the edge
+between them:
+
+| Call | Params | Result |
+|---|---|---|
+| `execute("MATCH (a:A {k:'a1'}), (b:B {k:'b1'}) CREATE (a)-[:R]->(b)")` | — | edge created ✓ |
+| `executeWithParams(<same literal statement>, {})` | `{}` | edge created ✓ |
+| `executeWithParams("MATCH (a:A {k: $v}), (b:B {k: $w}) CREATE (a)-[:R]->(b)", {v:'a1', w:'b1'})` | bound | **`[]`, no error, NO EDGE** ✗ |
+| `MERGE` form of the above | `{v,w}` **or** `{}` | **throws** |
+
+So `executeWithParams` itself handles edge creation fine — passing `{}` with
+literal endpoints works. What breaks is **binding parameters in the `MATCH`
+portion** of a `MATCH … CREATE` edge statement: the statement is accepted,
+returns an empty result set, and creates nothing.
+
+The `MERGE` variant throwing *even with `{}`* shows that path is unimplemented
+rather than payload-sensitive — which is fine, because it is loud.
+
+## Why this is worse than it looks
+
+The 0.1.23 error message told consumers to move to parameters. A consumer who
+follows that advice for edge writes ends up with **a graph of isolated nodes and
+no edges, with no error at any point.** Every traversal then returns `[]`, which
+is indistinguishable from an empty graph or a genuinely unrelated query — the
+same failure signature as the unlabeled-middle case (D2). In our case a naive
+conversion would have emptied every edge while node-level tests stayed green.
+
+It also interacts badly with the S0 fix: edges are the one write where a
+consumer cannot follow the "bind everything" rule, so they are pushed back to
+interpolating endpoint values — the exact thing parameters exist to prevent.
+
+## Suggested fix and interim guidance
+
+Support parameters in the `MATCH` portion of `MATCH … CREATE`. Until then, and
+more important than the fix: **make it throw.** Accepting a statement, returning
+success, and performing no write is the worst available behaviour; the 0.1.23
+"not yet supported" error was strictly better than this. A single
+`unsupported: parameters in MATCH endpoints of an edge CREATE` would have cost
+us nothing.
+
+**Workaround we adopted**, if it is useful to recommend to others: pin endpoints
+with a surrogate key the *consumer* computes — we use a SHA-256 `zid` derived
+from node identity — so the `MATCH` uses a literal hex digest rather than user
+data. That keeps every user-supplied value bound while sidestepping the bug, and
+it yields a checkable invariant: every single-quoted literal in every emitted
+statement must match `^[0-9a-f]{32}$`.
