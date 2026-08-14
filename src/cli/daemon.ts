@@ -20,6 +20,7 @@ import { OllamaProvider } from '../providers/ollama-provider.js';
 import { EchoProvider } from '../providers/echo-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger, initLogger } from '../utils/logger.js';
+import { expandHome } from '../utils/fs.js';
 import { ChannelIdentityRegistry } from '../channels/channel-identity-registry.js';
 import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
@@ -59,14 +60,19 @@ const log = createLogger('daemon');
 
 function createProviders(config: ZoraConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
+  // PROV-10: see the matching comment in cli/index.ts. The daemon is the worse
+  // case — it is typically started from whatever shell the user happened to be
+  // in, or from a service manager's root directory.
+  const workspace = expandHome(config.agent.workspace);
   for (const pConfig of config.providers) {
     if (!pConfig.enabled) continue;
     switch (pConfig.type) {
       case 'claude-sdk':
-        providers.push(new ClaudeProvider({ config: pConfig }));
+        // SEC-20: explicit — see the matching comment in cli/index.ts.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace }));
         break;
       case 'gemini-cli':
-        providers.push(new GeminiProvider({ config: pConfig }));
+        providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));

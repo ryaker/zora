@@ -30,6 +30,8 @@ import {
   isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent,
 } from '../types.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+import { buildZoraMcpServer } from '../tools/zora-mcp-server.js';
+import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -109,6 +111,15 @@ export type QueryFn = (params: {
   options?: Record<string, unknown>;
 }) => SDKQuery;
 
+/**
+ * SDK-04: default model for the Claude provider.
+ *
+ * Kept as a named constant so the CLI's generated config and the runtime
+ * fallback cannot drift apart — they did, and a new install got a different
+ * model depending on whether `model` was written into config.toml.
+ */
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
+
 // ─── Provider Options ───────────────────────────────────────────────
 
 export interface ClaudeProviderOptions {
@@ -127,8 +138,25 @@ export interface ClaudeProviderOptions {
   /** Allowed tools list for the SDK. */
   allowedTools?: string[];
 
-  /** Permission mode. Defaults to 'bypassPermissions' for autonomous operation. */
-  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  /**
+   * SEC-20: Permission mode. Defaults to 'default', which is the only mode in
+   * which the SDK consults `canUseTool`.
+   *
+   * The SDK's permission-bypass mode is deliberately not offered here: it skips
+   * every permission check, the SDK does not invoke `canUseTool` under it, and
+   * it requires `allowDangerouslySkipPermissions` which Zora never sets. While
+   * it was the default, PolicyEngine, the SEC-10 capability tokens, and the
+   * channel allowlist were all inert on the main task path and policy.toml was
+   * advisory. Anyone who genuinely wants that mode can set the SDK flag
+   * themselves and own the consequences.
+   */
+  permissionMode?: 'default' | 'acceptEdits' | 'plan';
+
+  /**
+   * SEC-21: provider-level SDK hooks. Per-task hooks arrive on
+   * `TaskContext.sdkHooks` and take precedence for the events they define.
+   */
+  hooks?: ZoraSdkHooks;
 }
 
 // ─── Claude Provider ────────────────────────────────────────────────
@@ -145,6 +173,7 @@ export class ClaudeProvider implements LLMProvider {
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
   private readonly _permissionMode: string;
+  private readonly _hooks: ZoraSdkHooks;
 
   /** Active queries indexed by jobId for abort support */
   private readonly _activeQueries: Map<string, { abort: AbortController; query: SDKQuery }> = new Map();
@@ -175,7 +204,9 @@ export class ClaudeProvider implements LLMProvider {
     this._cwd = options.cwd ?? process.cwd();
     this._systemPrompt = options.systemPrompt ?? '';
     this._allowedTools = options.allowedTools ?? [];
-    this._permissionMode = options.permissionMode ?? 'bypassPermissions';
+    // SEC-20: 'default' is the only mode under which the SDK calls canUseTool.
+    this._permissionMode = options.permissionMode ?? 'default';
+    this._hooks = options.hooks ?? {};
     this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK
@@ -267,7 +298,10 @@ export class ClaudeProvider implements LLMProvider {
     // Build SDK options
     const sdkOptions: Record<string, unknown> = {
       abortController,
-      model: this._config.model ?? 'claude-sonnet-4-6',
+      // SDK-04: default to the current Opus generation. 'claude-sonnet-4-6' is
+      // two generations back — it still works, but new installs were getting a
+      // previous-generation default.
+      model: this._config.model ?? DEFAULT_CLAUDE_MODEL,
       cwd: this._cwd,
       permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
@@ -275,8 +309,27 @@ export class ClaudeProvider implements LLMProvider {
       systemPrompt: task.systemPrompt || this._systemPrompt,
     };
 
+    // SDK-01: register Zora's tools as an in-process MCP server. The previous
+    // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
+    // so every Zora tool was dropped before it reached the model (and the .map()
+    // stripped `handler`, so even a passthrough could not have executed).
+    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
+    if (Object.keys(mcpServers).length > 0) {
+      sdkOptions['mcpServers'] = mcpServers;
+    }
+
+    // An allowlist is a filter, not a registry: when `_allowedTools` is empty we
+    // leave `allowedTools` unset so the SDK permits everything (built-ins and the
+    // zora-tools MCP server alike). When it is set, the Zora tools have to be
+    // named explicitly or the filter would drop them.
     if (this._allowedTools.length > 0) {
-      sdkOptions['allowedTools'] = this._allowedTools;
+      sdkOptions['allowedTools'] = [...this._allowedTools, ...zoraToolNames];
+    }
+
+    // SDK-04: reasoning effort, when configured. Left unset otherwise so the
+    // SDK's own default applies rather than Zora pinning one.
+    if (this._config.effort) {
+      sdkOptions['effort'] = this._config.effort;
     }
 
     // Wire policy enforcement into the SDK
@@ -284,13 +337,12 @@ export class ClaudeProvider implements LLMProvider {
       sdkOptions['canUseTool'] = task.canUseTool;
     }
 
-    // Forward custom tools from TaskContext (memory tools, permissions, etc.)
-    if (task.customTools && task.customTools.length > 0) {
-      sdkOptions['customTools'] = task.customTools.map(t => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema,
-      }));
+    // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
+    // ahead of canUseTool and a deny there is a real deny — the SDK never
+    // invokes the tool. Per-task hooks win over provider-level ones per event.
+    const hooks: ZoraSdkHooks = { ...this._hooks, ...(task.sdkHooks ?? {}) };
+    if (Object.keys(hooks).length > 0) {
+      sdkOptions['hooks'] = hooks;
     }
 
     // Build the prompt from task context

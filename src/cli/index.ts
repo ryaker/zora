@@ -39,6 +39,7 @@ import { registerSecretCommands } from './secret-commands.js';
 import { registerSecurityCommands } from './security-commands.js';
 import { runDoctorChecks } from './doctor.js';
 import { createLogger } from '../utils/logger.js';
+import { expandHome } from '../utils/fs.js';
 import { createRequire } from 'node:module';
 
 const log = createLogger('cli');
@@ -58,6 +59,12 @@ program
 function createProviders(config: ZoraConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
 
+  // PROV-10: the agent's filesystem tools must operate in the configured
+  // workspace, not wherever the process was launched from. Both ExecutionLoop
+  // call sites already resolved this; the provider path never did, so `zora ask`
+  // from a random directory pointed the agent at that directory.
+  const workspace = expandHome(config.agent.workspace);
+
   for (const pConfig of config.providers) {
     if (!pConfig.enabled) continue;
 
@@ -68,10 +75,13 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
 
     switch (providerType) {
       case 'claude-sdk':
-        providers.push(new ClaudeProvider({ config: pConfig }));
+        // SEC-20: permissionMode is passed explicitly rather than left to the
+        // provider default, so the enforcement mode is visible at the call site
+        // where someone might otherwise be tempted to loosen it.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace }));
         break;
       case 'gemini-cli':
-        providers.push(new GeminiProvider({ config: pConfig }));
+        providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));

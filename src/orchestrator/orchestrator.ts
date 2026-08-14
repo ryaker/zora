@@ -37,6 +37,7 @@ import { NegativeCache } from '../services/negative-cache.js';
 import { ErrorPatternDetector } from './error-pattern-detector.js';
 import { HookRunner } from '../hooks/hook-runner.js';
 import { ToolHookRunner } from '../hooks/tool-hook-runner.js';
+import { SdkHookBridge } from '../hooks/sdk-hook-bridge.js';
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
@@ -166,6 +167,10 @@ export class Orchestrator {
 
   // Tool-level lifecycle hooks
   private _toolHookRunner: ToolHookRunner = new ToolHookRunner();
+  /** SEC-21: per-job SDK hook bridges, so the log path can see hook arg rewrites. */
+  private readonly _hookBridges: Map<string, SdkHookBridge> = new Map();
+  /** ERR-20: jobId → the provider currently executing it, for cancelTask(). */
+  private readonly _activeJobProviders: Map<string, LLMProvider> = new Map();
 
   // ERR-07: Error normalizer for safe error replay
   private readonly _errorNormalizer: ErrorNormalizer = new ErrorNormalizer();
@@ -1019,6 +1024,12 @@ export class Orchestrator {
     // Build custom tools (permissions + memory tools + recall_context)
     const customTools = this._createCustomTools();
 
+    // SEC-21: bind the tool-hook chain to this job and expose it to the SDK as
+    // PreToolUse/PostToolUse. This is the pre-execution enforcement point; the
+    // stream-observation path below only logs.
+    const hookBridge = new SdkHookBridge(this._toolHookRunner, jobId);
+    this._hookBridges.set(jobId, hookBridge);
+
     // ERR-09: Build initial error budget — maxBudget from failover config, maxTurns from options
     const maxRetries = this._config.failover.max_retries ?? 3;
     const maxTurns = options.maxTurns ?? 0;
@@ -1045,6 +1056,7 @@ export class Orchestrator {
       errorBudget,
       customTools,
       canUseTool: this._buildTokenAwareCanUseTool(jobId),
+      sdkHooks: hookBridge.hooks,
     };
 
     // Channel capability enforcement (INVARIANT-1, INVARIANT-2)
@@ -1102,6 +1114,7 @@ export class Orchestrator {
       selectedProvider = await this._router.selectProvider(hookedContext);
     } catch (err) {
       this._activeTokens.delete(jobId);
+      this._hookBridges.delete(jobId);
       // on_all_providers_down notification — gated by notifications.on_all_providers_down
       this._notifications.notifyAllProvidersDown().catch(e => {
         log.debug({ e }, 'notifyAllProvidersDown failed (non-critical)');
@@ -1133,6 +1146,8 @@ export class Orchestrator {
       execResult = await this._executeWithProvider(selectedProvider, hookedContext, _skillOnEvent, 0, 0, compressor);
     } finally {
       this._activeTokens.delete(jobId);
+      this._hookBridges.delete(jobId);
+      this._activeJobProviders.delete(jobId);
     }
 
     // Post-session: await skill synthesis so CLI mode doesn't exit before confirmation/write
@@ -1152,6 +1167,31 @@ export class Orchestrator {
     });
 
     return execResult;
+  }
+
+  /**
+   * ERR-20: Cancel a running task.
+   *
+   * `LLMProvider.abort(jobId)` has been part of the interface all along and
+   * nothing ever called it, so a task could only be stopped by killing the
+   * daemon. Aborting the provider's AbortController makes its generator finish,
+   * which unwinds `_executeWithProvider` through its normal paths.
+   *
+   * @returns false when the job is not running (already finished, or never existed).
+   */
+  async cancelTask(jobId: string): Promise<boolean> {
+    const provider = this._activeJobProviders.get(jobId);
+    if (!provider) return false;
+
+    log.info({ jobId, provider: provider.name }, 'Cancelling task');
+    await provider.abort(jobId);
+    this._activeJobProviders.delete(jobId);
+    return true;
+  }
+
+  /** Job IDs currently executing. */
+  get activeJobIds(): string[] {
+    return [...this._activeJobProviders.keys()];
   }
 
   /** Tracks errors that have already been through the failover path */
@@ -1223,6 +1263,10 @@ export class Orchestrator {
     // Event batching: buffer session writes, flush every 500ms or on done/error.
     // Wrapped in try/finally to ensure close() runs on ALL exit paths including failover.
     const bufferedWriter = new BufferedSessionWriter(this._sessionManager, taskContext.jobId, 500);
+
+    // ERR-20: remember which provider is running this job so cancelTask(jobId)
+    // has something to abort. Rebound on every failover hop.
+    this._activeJobProviders.set(taskContext.jobId, provider);
 
     try {
       try {
@@ -1327,46 +1371,29 @@ export class Orchestrator {
             toolCalledThisTurn = true;
             consecutiveNonToolTurns = 0;
 
-            // Tool-level before-hooks: record start time and run before-hooks.
-            // Logging happens AFTER hooks so SecretRedactHook can redact args
-            // before they are written to disk or the session log.
+            // SEC-21: this path only observes and logs. Enforcement moved to the
+            // SDK's PreToolUse hook (src/hooks/sdk-hook-bridge.ts), which runs
+            // before the tool executes. Running the hook chain here as well
+            // would double-count rate limits and double-write audit entries —
+            // and the old `!allow` branch here could not stop anything anyway,
+            // it only wrote a synthetic "blocked" tool_result into Zora's own
+            // transcript while the real tool ran.
             _toolCallStartTimes.set(toolCallContent.toolCallId, Date.now());
-            try {
-              const hookBefore = await this._toolHookRunner.runBefore({
-                jobId: taskContext.jobId,
-                tool: toolCallContent.tool,
-                arguments: toolCallContent.arguments as Record<string, unknown> ?? {},
-              });
 
-              // Log the event now (with potentially-redacted args from hooks)
-              const hookedArgs = hookBefore.args;
-              const loggedEvent: AgentEvent = hookedArgs !== (toolCallContent.arguments ?? {})
-                ? { ...event, content: { ...toolCallContent, arguments: hookedArgs } }
-                : event;
-              bufferedWriter.append(loggedEvent);
-              log.debug({ jobId: taskContext.jobId, tool: toolCallContent.tool, arguments: hookedArgs }, 'tool call');
-
-              if (!hookBefore.allow) {
-                // Inject a synthetic tool_result indicating the tool was blocked
-                const blockedEvent: AgentEvent = {
-                  type: 'tool_result',
-                  timestamp: new Date(),
-                  source: 'tool-hook-runner',
-                  content: {
-                    toolCallId: toolCallContent.toolCallId,
-                    result: null,
-                    error: `Tool call blocked by hook: ${toolCallContent.tool}`,
-                  } satisfies ToolResultEventContent,
-                };
-                bufferedWriter.append(blockedEvent);
-                taskContext.history.push(blockedEvent);
-                if (onEvent) onEvent(blockedEvent);
-              }
-            } catch (err) {
-              // If hooks fail, still log the original event so the call isn't lost
-              bufferedWriter.append(event);
-              log.error({ err, tool: toolCallContent.tool, jobId: taskContext.jobId }, 'tool-hook runBefore error (non-critical)');
-            }
+            // Secrets still must not reach disk: SecretRedactHook's rewrite
+            // already happened pre-execution, so read it back rather than
+            // re-running the chain.
+            const rewrittenArgs = this._hookBridges
+              .get(taskContext.jobId)
+              ?.takeRewrittenInput(toolCallContent.toolCallId);
+            const loggedEvent: AgentEvent = rewrittenArgs
+              ? { ...event, content: { ...toolCallContent, arguments: rewrittenArgs } }
+              : event;
+            bufferedWriter.append(loggedEvent);
+            log.debug(
+              { jobId: taskContext.jobId, tool: toolCallContent.tool, arguments: rewrittenArgs ?? toolCallContent.arguments },
+              'tool call',
+            );
           }
 
           // ERR-10: Pattern detection on tool results + ERR-12: record failures/successes
@@ -1422,20 +1449,10 @@ export class Orchestrator {
             // ERR-09: Stale-state — tool_result is a "turn", but only counts if no tool call followed
             // (tracked by text events below)
 
-            // Tool-level after-hooks: run after every tool result
-            const _startMs = _toolCallStartTimes.get(toolResultContent.toolCallId);
+            // SEC-21: after-hooks now run from the SDK's PostToolUse hook, which
+            // sees the real tool response rather than one reconstructed from a
+            // streamed event. Only the timing bookkeeping remains here.
             _toolCallStartTimes.delete(toolResultContent.toolCallId);
-            const _matchingCallForHook = matchingCall;
-            if (_matchingCallForHook) {
-              const _callContentForHook = _matchingCallForHook.content as ToolCallEventContent;
-              await this._toolHookRunner.runAfter({
-                jobId: taskContext.jobId,
-                tool: _callContentForHook.tool,
-                arguments: _callContentForHook.arguments as Record<string, unknown> ?? {},
-                result: toolResultContent.result,
-                durationMs: _startMs !== undefined ? Date.now() - _startMs : undefined,
-              });
-            }
           }
 
           // (ERR-09: stale-state tracking is done on 'done' events below)

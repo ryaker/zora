@@ -9,7 +9,6 @@
 
 import {
   query,
-  createSdkMcpServer,
   type PermissionMode,
   type HookCallback,
   type CanUseTool,
@@ -17,6 +16,7 @@ import {
   type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
+import { buildZoraMcpServer, type CustomToolDefinition } from '../tools/zora-mcp-server.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('execution-loop');
@@ -38,15 +38,11 @@ export interface SdkHookMatcher {
  * Custom tool that Zora can inject into the SDK execution.
  * Used for Zora-specific tools like check_permissions and request_permissions.
  *
- * These are registered as an in-process MCP server via createSdkMcpServer(),
- * which is the SDK's supported mechanism for custom tools.
+ * SDK-01: the definition now lives in `src/tools/zora-mcp-server.ts` alongside
+ * the builder that turns it into a real SDK tool. Re-exported here because most
+ * of the codebase imports it from this module.
  */
-export interface CustomToolDefinition {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  handler: (input: Record<string, unknown>) => Promise<unknown>;
-}
+export type { CustomToolDefinition };
 
 /**
  * ORCH-14: Callback to transform/prune the event history before it's used.
@@ -108,6 +104,12 @@ export interface ZoraExecutionOptions {
   onMessage?: (message: SDKMessage) => void;
   /** ERR-05: Timeout in milliseconds for stream operations (default: 30min) */
   streamTimeout?: number;
+  /**
+   * ERR-20: Optional externally-owned AbortController. Supply one to cancel a
+   * run from outside; otherwise `run()` creates its own, reachable via
+   * `cancel()`.
+   */
+  abortController?: AbortController;
   /** ORCH-14: Optional context transform callback applied before each follow-up */
   transformContext?: TransformContextFn;
   /** INVARIANT-2: Channel tool allowlist — filter applied before SDK invocation */
@@ -122,8 +124,29 @@ const DEFAULT_TOOLS = [
 export class ExecutionLoop {
   private readonly _opts: ZoraExecutionOptions;
 
+  /** ERR-20: the controller for the in-flight run, so cancel() has something to pull. */
+  private _abortController: AbortController | null = null;
+
   constructor(options: ZoraExecutionOptions) {
     this._opts = options;
+  }
+
+  /**
+   * ERR-20: Cancel the in-flight run.
+   *
+   * Aborting the controller the SDK was given makes the generator reject
+   * normally, so `run()`'s existing try/finally unwinds and the caller sees a
+   * rejected promise. Returns false when there is nothing running.
+   */
+  cancel(): boolean {
+    if (!this._abortController || this._abortController.signal.aborted) return false;
+    this._abortController.abort();
+    return true;
+  }
+
+  /** Whether a run is currently in flight. */
+  get isRunning(): boolean {
+    return this._abortController !== null && !this._abortController.signal.aborted;
   }
 
   /**
@@ -135,37 +158,20 @@ export class ExecutionLoop {
     let result = '';
     let sessionId: string | undefined;
 
-    // Register custom tools as an in-process MCP server (the SDK's supported mechanism).
-    // The old approach of passing { customTools } to sdkOptions was silently ignored.
-    const mcpServers: Record<string, McpServerConfig> = {
-      ...(this._opts.mcpServers as Record<string, McpServerConfig> ?? {}),
-    };
+    // SDK-01: register custom tools as an in-process MCP server (the SDK's only
+    // supported mechanism). Shared with ClaudeProvider via buildZoraMcpServer so
+    // the two execution paths cannot drift apart again.
+    const { mcpServers, toolNames: customToolNames } = buildZoraMcpServer(
+      this._opts.customTools,
+      this._opts.mcpServers as Record<string, McpServerConfig> | undefined,
+    );
 
-    const customTools = this._opts.customTools ?? [];
-    const customToolNames: string[] = [];
-    if (customTools.length > 0) {
-      const toolDefs = customTools.map(t => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.input_schema as Record<string, unknown>,
-        handler: async (args: Record<string, unknown>) => {
-          const result = await t.handler(args);
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify(result) }],
-          };
-        },
-      }));
-
-      mcpServers['zora-tools'] = createSdkMcpServer({
-        name: 'zora-tools',
-        version: '1.0.0',
-        tools: toolDefs,
-      });
-
-      customToolNames.push(...customTools.map(t => `mcp__zora-tools__${t.name}`));
-    }
+    // ERR-20: one controller for both the stream timeout and external cancellation.
+    const abortController = this._opts.abortController ?? new AbortController();
+    this._abortController = abortController;
 
     const sdkOptions: Record<string, unknown> = {
+      abortController,
       // INVARIANT-2: apply channel toolAllowlist filter before SDK invocation
       allowedTools: (() => {
         const base = [...(this._opts.allowedTools ?? DEFAULT_TOOLS), ...customToolNames];
@@ -192,18 +198,39 @@ export class ExecutionLoop {
     const streamTimeout = this._opts.streamTimeout ?? 30 * 60 * 1000;
     let timeoutHandle: NodeJS.Timeout | null = null;
     let lastEventTime = Date.now();
+    let timedOut = false;
+
+    /**
+     * ERR-20: abort, don't throw.
+     *
+     * This callback used to `throw`. A throw inside a setTimeout callback does
+     * not reject the awaiting `for await` — it surfaces as an uncaughtException
+     * with no handler in scope, and the surrounding try/finally cannot catch it.
+     * So the timeout meant to protect against a hung stream took the daemon down
+     * instead. Aborting the controller the SDK holds makes the generator reject
+     * normally, which is what the caller is already prepared for.
+     */
+    const armTimeout = (): void => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        const elapsed = Date.now() - lastEventTime;
+        log.error({ timeout: streamTimeout, elapsed, sessionId }, 'Stream timeout exceeded — aborting query');
+        abortController.abort();
+      }, streamTimeout);
+      // Never hold the process open on this timer alone.
+      timeoutHandle.unref?.();
+    };
+
+    // Arm before the first message: a stream that hangs before yielding anything
+    // was previously never covered, because the timer was only set inside the loop.
+    armTimeout();
 
     try {
       for await (const message of query({ prompt, options: sdkOptions as Record<string, unknown> })) {
-        // Clear previous timeout and set new one (reset on each event)
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        // Reset the deadline on each event
         lastEventTime = Date.now();
-
-        timeoutHandle = setTimeout(() => {
-          const elapsed = Date.now() - lastEventTime;
-          log.error({ timeout: streamTimeout, elapsed, sessionId }, 'Stream timeout exceeded');
-          throw new Error(`Stream timeout: No events received for ${streamTimeout}ms`);
-        }, streamTimeout);
+        armTimeout();
 
         // Capture session ID from init message
         const msg = message as Record<string, unknown>;
@@ -222,10 +249,24 @@ export class ExecutionLoop {
         }
       }
 
+      if (timedOut) {
+        throw new Error(`Stream timeout: No events received for ${streamTimeout}ms`);
+      }
       return result;
+    } catch (err) {
+      // An abort surfaces as a generic abort error; say which of the two causes
+      // it was, because "timed out" and "cancelled" want different responses.
+      if (timedOut) {
+        throw new Error(`Stream timeout: No events received for ${streamTimeout}ms`);
+      }
+      if (abortController.signal.aborted) {
+        throw new Error('Execution cancelled');
+      }
+      throw err;
     } finally {
       // Always clear timeout on exit
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      this._abortController = null;
     }
   }
 

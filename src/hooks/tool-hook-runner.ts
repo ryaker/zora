@@ -39,8 +39,20 @@ export class ToolHookRunner {
     log.debug({ hook: hook.name, phase: hook.phase, tools: hook.tools }, 'tool hook registered');
   }
 
-  /** Run all 'before' hooks. Returns allow=false if any hook blocks. */
-  async runBefore(ctx: ToolCallContext): Promise<{ allow: boolean; args: Record<string, unknown> }> {
+  /**
+   * Run all 'before' hooks. Returns allow=false if any hook blocks.
+   *
+   * SEC-21: `reason` and `blockedBy` are additive — every existing caller
+   * destructures `{ allow, args }` and is unaffected. They exist because this
+   * result is now translated into an SDK `PreToolUse` denial, and a denial the
+   * model cannot read is a denial it will retry blindly.
+   */
+  async runBefore(ctx: ToolCallContext): Promise<{
+    allow: boolean;
+    args: Record<string, unknown>;
+    reason?: string;
+    blockedBy?: string;
+  }> {
     let args = { ...ctx.arguments };
 
     for (const hook of this._hooks) {
@@ -50,7 +62,7 @@ export class ToolHookRunner {
       const result = await hook.run({ ...ctx, arguments: args });
       if (!result.allow) {
         log.warn({ jobId: ctx.jobId, tool: ctx.tool, hook: hook.name, reason: result.reason }, 'tool call blocked');
-        return { allow: false, args };
+        return { allow: false, args, reason: result.reason, blockedBy: hook.name };
       }
       if (result.modifiedArgs) {
         args = { ...args, ...result.modifiedArgs };
