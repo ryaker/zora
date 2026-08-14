@@ -25,6 +25,7 @@ import type {
   ProviderCapability,
   CostTier,
   ProviderConfig,
+  ZoraPolicy,
 } from '../types.js';
 import {
   isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent,
@@ -32,6 +33,7 @@ import {
 import { CircuitBreaker } from './circuit-breaker.js';
 import { buildZoraMcpServer } from '../tools/zora-mcp-server.js';
 import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
+import { buildEnforcedSdkOptions } from '../security/enforced-sdk-options.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -149,14 +151,29 @@ export interface ClaudeProviderOptions {
    * channel allowlist were all inert on the main task path and policy.toml was
    * advisory. Anyone who genuinely wants that mode can set the SDK flag
    * themselves and own the consequences.
+   *
+   * SEC-23: narrowed to the single literal `'default'`. It was a three-member
+   * union whose other two members no call site used and neither of which
+   * consults `canUseTool` for every tool. The invariant "permissionMode is
+   * 'default' everywhere" is now checked by the compiler rather than by a grep.
    */
-  permissionMode?: 'default' | 'acceptEdits' | 'plan';
+  permissionMode?: 'default';
 
   /**
    * SEC-21: provider-level SDK hooks. Per-task hooks arrive on
    * `TaskContext.sdkHooks` and take precedence for the events they define.
    */
   hooks?: ZoraSdkHooks;
+
+  /**
+   * SEC-23: the resolved policy, so the provider can put layer [1] of the
+   * enforcement chain — the static `disallowedTools` ban — in front of the
+   * dynamic gates. Both CLI factories pass it. When absent the provider still
+   * runs (the dynamic gates are unaffected) but with no static bans, so leaving
+   * it out is a real, if quiet, weakening; the coverage test asserts the
+   * factories supply it.
+   */
+  policy?: ZoraPolicy;
 }
 
 // ─── Claude Provider ────────────────────────────────────────────────
@@ -172,8 +189,9 @@ export class ClaudeProvider implements LLMProvider {
   private readonly _cwd: string;
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
-  private readonly _permissionMode: string;
   private readonly _hooks: ZoraSdkHooks;
+  /** SEC-23: source for the policy-derived static tool bans. */
+  private readonly _policy: ZoraPolicy | undefined;
 
   /** Active queries indexed by jobId for abort support */
   private readonly _activeQueries: Map<string, { abort: AbortController; query: SDKQuery }> = new Map();
@@ -204,9 +222,8 @@ export class ClaudeProvider implements LLMProvider {
     this._cwd = options.cwd ?? process.cwd();
     this._systemPrompt = options.systemPrompt ?? '';
     this._allowedTools = options.allowedTools ?? [];
-    // SEC-20: 'default' is the only mode under which the SDK calls canUseTool.
-    this._permissionMode = options.permissionMode ?? 'default';
     this._hooks = options.hooks ?? {};
+    this._policy = options.policy;
     this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK
@@ -295,6 +312,37 @@ export class ClaudeProvider implements LLMProvider {
     const queryFn = await this._resolveQueryFn();
     const abortController = new AbortController();
 
+    // SDK-01: register Zora's tools as an in-process MCP server. The previous
+    // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
+    // so every Zora tool was dropped before it reached the model (and the .map()
+    // stripped `handler`, so even a passthrough could not have executed).
+    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
+
+    // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
+    // ahead of canUseTool and a deny there is a real deny — the SDK never
+    // invokes the tool. Per-task hooks win over provider-level ones per event.
+    const hooks: ZoraSdkHooks = { ...this._hooks, ...(task.sdkHooks ?? {}) };
+
+    // SEC-23: the whole enforcement half of the options comes from one builder,
+    // shared with every ExecutionLoop path. This used to be four independent
+    // hand-assembled objects that each decided which defenses to include, which
+    // is precisely how the heartbeat path ended up without a hook chain.
+    //
+    // An allowlist is a filter, not a registry: when `_allowedTools` is empty the
+    // builder returns `undefined` and the key stays unset, so the SDK permits its
+    // built-ins and the zora-tools MCP server alike. When it is set, Zora's own
+    // tools have to be named explicitly or the filter would drop them — hence
+    // `extraAllowedTools`.
+    const enforced = buildEnforcedSdkOptions({
+      // No policy supplied (library embedding, tests) means no *static* bans;
+      // canUseTool and the hook chain are unaffected.
+      policy: this._policy,
+      canUseTool: task.canUseTool,
+      hooks,
+      baseAllowedTools: this._allowedTools.length > 0 ? this._allowedTools : undefined,
+      extraAllowedTools: zoraToolNames,
+    });
+
     // Build SDK options
     const sdkOptions: Record<string, unknown> = {
       abortController,
@@ -303,46 +351,30 @@ export class ClaudeProvider implements LLMProvider {
       // previous-generation default.
       model: this._config.model ?? DEFAULT_CLAUDE_MODEL,
       cwd: this._cwd,
-      permissionMode: this._permissionMode,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
       // Prefer the per-task system prompt, falling back to the provider default.
       systemPrompt: task.systemPrompt || this._systemPrompt,
+      permissionMode: enforced.permissionMode,
+      disallowedTools: enforced.disallowedTools,
     };
 
-    // SDK-01: register Zora's tools as an in-process MCP server. The previous
-    // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
-    // so every Zora tool was dropped before it reached the model (and the .map()
-    // stripped `handler`, so even a passthrough could not have executed).
-    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
     if (Object.keys(mcpServers).length > 0) {
       sdkOptions['mcpServers'] = mcpServers;
     }
-
-    // An allowlist is a filter, not a registry: when `_allowedTools` is empty we
-    // leave `allowedTools` unset so the SDK permits everything (built-ins and the
-    // zora-tools MCP server alike). When it is set, the Zora tools have to be
-    // named explicitly or the filter would drop them.
-    if (this._allowedTools.length > 0) {
-      sdkOptions['allowedTools'] = [...this._allowedTools, ...zoraToolNames];
+    if (enforced.allowedTools) {
+      sdkOptions['allowedTools'] = enforced.allowedTools;
+    }
+    if (enforced.canUseTool) {
+      sdkOptions['canUseTool'] = enforced.canUseTool;
+    }
+    if (Object.keys(enforced.hooks).length > 0) {
+      sdkOptions['hooks'] = enforced.hooks;
     }
 
     // SDK-04: reasoning effort, when configured. Left unset otherwise so the
     // SDK's own default applies rather than Zora pinning one.
     if (this._config.effort) {
       sdkOptions['effort'] = this._config.effort;
-    }
-
-    // Wire policy enforcement into the SDK
-    if (task.canUseTool) {
-      sdkOptions['canUseTool'] = task.canUseTool;
-    }
-
-    // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
-    // ahead of canUseTool and a deny there is a real deny — the SDK never
-    // invokes the tool. Per-task hooks win over provider-level ones per event.
-    const hooks: ZoraSdkHooks = { ...this._hooks, ...(task.sdkHooks ?? {}) };
-    if (Object.keys(hooks).length > 0) {
-      sdkOptions['hooks'] = hooks;
     }
 
     // Build the prompt from task context

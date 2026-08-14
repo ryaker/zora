@@ -16,6 +16,7 @@ import {
   type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
+import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
 import { buildZoraMcpServer, type CustomToolDefinition } from '../tools/zora-mcp-server.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -95,10 +96,22 @@ export interface ZoraExecutionOptions {
   model?: string;
   maxTurns?: number;
   allowedTools?: string[];
+  /**
+   * SEC-23: static tool bans, layer [1] of the enforcement chain. Derived from
+   * `ZoraPolicy` by `buildEnforcedSdkOptions()` — never hand-written at a call
+   * site. Unlike `allowedTools` this removes the tool from the model's context
+   * entirely, so a banned tool costs no turns to discover.
+   */
+  disallowedTools?: string[];
   customTools?: CustomToolDefinition[];
   mcpServers?: Record<string, Record<string, unknown>>;
   agents?: Record<string, SdkAgentDefinition>;
-  hooks?: Partial<Record<string, SdkHookMatcher[]>>;
+  /**
+   * SEC-23: layer [2]. `ZoraSdkHooks` is what `buildSdkHooks()` produces — the
+   * PreToolUse/PostToolUse bridge over `ToolHookRunner`. The looser
+   * `SdkHookMatcher` shape stays accepted for direct SDK hook wiring.
+   */
+  hooks?: ZoraSdkHooks | Partial<Record<string, SdkHookMatcher[]>>;
   canUseTool?: SdkCanUseTool;
   permissionMode?: SdkPermissionMode;
   onMessage?: (message: SDKMessage) => void;
@@ -174,6 +187,11 @@ export class ExecutionLoop {
       abortController,
       // INVARIANT-2: apply channel toolAllowlist filter before SDK invocation
       allowedTools: (() => {
+        // SEC-23: an explicitly empty allowlist is a statement ("this path has
+        // no tool surface"), not an absent one. Honour it before custom tools
+        // get merged in, so a later `customTools` addition on a single-shot
+        // text path cannot quietly re-open the surface.
+        if (this._opts.allowedTools && this._opts.allowedTools.length === 0) return [];
         const base = [...(this._opts.allowedTools ?? DEFAULT_TOOLS), ...customToolNames];
         if (!this._opts.toolAllowlist || this._opts.toolAllowlist.length === 0) return base;
         const allowSet = new Set(this._opts.toolAllowlist);
@@ -183,6 +201,11 @@ export class ExecutionLoop {
         });
       })(),
       permissionMode: this._opts.permissionMode ?? 'default',
+      // SEC-23: layer [1]. Set unconditionally (empty list included) so the key
+      // is always visible in the options the SDK receives — the coverage test
+      // asserts on its presence, and a missing key is exactly how the heartbeat
+      // path lost its gate the first time.
+      disallowedTools: this._opts.disallowedTools ?? [],
       mcpServers,
       agents: this._opts.agents ?? {},
       systemPrompt: this._opts.systemPrompt,

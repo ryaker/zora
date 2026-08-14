@@ -55,8 +55,13 @@ program
 
 /**
  * Creates LLMProvider instances from config.
+ *
+ * SEC-23: `policy` is required, not optional. It is what
+ * `buildEnforcedSdkOptions()` compiles into the static `disallowedTools` ban —
+ * layer [1] of the enforcement chain — and making it a required parameter means
+ * a new call site cannot construct a provider with a weaker gate by omission.
  */
-function createProviders(config: ZoraConfig): LLMProvider[] {
+function createProviders(config: ZoraConfig, policy: ZoraPolicy): LLMProvider[] {
   const providers: LLMProvider[] = [];
 
   // PROV-10: the agent's filesystem tools must operate in the configured
@@ -78,7 +83,8 @@ function createProviders(config: ZoraConfig): LLMProvider[] {
         // SEC-20: permissionMode is passed explicitly rather than left to the
         // provider default, so the enforcement mode is visible at the call site
         // where someone might otherwise be tempted to loosen it.
-        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace }));
+        // SEC-23: policy too — it is the source of the static tool bans.
+        providers.push(new ClaudeProvider({ config: pConfig, permissionMode: 'default', cwd: workspace, policy }));
         break;
       case 'gemini-cli':
         providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
@@ -184,7 +190,7 @@ program
 
     const { config, policy } = await setupContext();
 
-    const providers = createProviders(config);
+    const providers = createProviders(config, policy);
     if (providers.length === 0) {
       log.error('No enabled providers found in config.');
       process.exit(1);

@@ -37,7 +37,8 @@ import { NegativeCache } from '../services/negative-cache.js';
 import { ErrorPatternDetector } from './error-pattern-detector.js';
 import { HookRunner } from '../hooks/hook-runner.js';
 import { ToolHookRunner } from '../hooks/tool-hook-runner.js';
-import { SdkHookBridge } from '../hooks/sdk-hook-bridge.js';
+import { SdkHookBridge, buildSdkHooks } from '../hooks/sdk-hook-bridge.js';
+import { buildEnforcedSdkOptions } from '../security/enforced-sdk-options.js';
 import type { ToolHook } from '../hooks/tool-hook-runner.js';
 import { ShellSafetyHook } from '../hooks/built-in/shell-safety.js';
 import { AuditLogHook } from '../hooks/built-in/audit-log.js';
@@ -662,18 +663,9 @@ export class Orchestrator {
         ? this._config.agent.workspace.replace(/^~/, os.homedir())
         : process.cwd();
       const agentTimeoutMs = this._parseIntervalMs(this._config.agent.default_timeout ?? '2h');
-      const defaultLoop = new ExecutionLoop({
-        systemPrompt: 'You are Zora, a helpful autonomous agent.',
-        permissionMode: 'default',
-        cwd: agentWorkspace,
-        canUseTool: this._policyEngine.createCanUseTool(),
-        customTools: this._getCustomTools(),
-        model: this._config.agent.heartbeat_provider,
-        streamTimeout: agentTimeoutMs,
-      });
 
       this._heartbeatSystem = new HeartbeatSystem({
-        loop: defaultLoop,
+        loop: this._buildHeartbeatLoop(agentWorkspace, agentTimeoutMs),
         baseDir: this._baseDir,
         intervalMinutes: this._parseIntervalMinutes(this._config.agent.heartbeat_interval),
       });
@@ -2154,7 +2146,20 @@ export class Orchestrator {
     const extractFn = async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
         systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
-        permissionMode: 'default',
+        // SEC-23: a single-shot text call over conversation content that may
+        // itself be attacker-influenced. It has no business calling a tool, and
+        // until now it silently inherited ExecutionLoop's DEFAULT_TOOLS —
+        // Read/Write/Edit/Bash/Glob/Grep/WebSearch/WebFetch/Task — with no
+        // canUseTool and no hook chain. The right fix here is not "add the
+        // hooks" but "remove the tool surface": toolSurface 'none' pins
+        // allowedTools to []. The rest of the chain rides along so that adding
+        // a tool back is gated rather than unguarded.
+        ...buildEnforcedSdkOptions({
+          policy: this._policy,
+          toolSurface: 'none',
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => `extract-${taskContext.jobId}`),
+        }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
       });
@@ -2560,6 +2565,45 @@ export class Orchestrator {
   // ── Private helpers ──────────────────────────────────────────────
 
   /**
+   * SEC-23: build the ExecutionLoop the heartbeat runs on.
+   *
+   * Extracted from `boot()` for two reasons. The first is that it is the
+   * least-supervised execution path in the system — scheduled routines, fired
+   * on a timer, with nobody reading the output — and until SEC-23 it had the
+   * *weakest* tool gate: `canUseTool` and nothing else. No `PreToolUse` bridge
+   * meant `ShellSafetyHook`, `SensitiveFileGuardHook`, `RateLimitHook`,
+   * `SecretRedactHook` and `IrreversibilityScorerHook` never ran here at all.
+   * That is worth naming in one place rather than burying inside boot().
+   *
+   * The second is testability: the loop can now be built and its enforcement
+   * chain exercised without starting node-cron and a Signal listener, so
+   * `tests/security/tool-enforcement.test.ts` can assert that a
+   * SensitiveFileGuard-blocked path and a ShellSafety-blocked command are
+   * actually denied *on this path*, not only on the main task path.
+   */
+  private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): ExecutionLoop {
+    return new ExecutionLoop({
+      systemPrompt: 'You are Zora, a helpful autonomous agent.',
+      // Routed through the one shared builder so this path cannot drift away
+      // from the provider path again.
+      ...buildEnforcedSdkOptions({
+        policy: this._policy,
+        canUseTool: this._policyEngine.createCanUseTool(),
+        // The heartbeat is not a submitTask() job, so there is no per-task
+        // jobId to bind to; a stable synthetic one keeps the audit log and
+        // rate-limit accounting attributable.
+        hooks: buildSdkHooks(this._toolHookRunner, () => 'heartbeat'),
+      }),
+      cwd,
+      customTools: this._getCustomTools(),
+      // Use heartbeat_provider if set (typically a free/local Ollama) to keep
+      // background routine costs at zero. Falls back to rank-1 if not set.
+      model: this._config.agent.heartbeat_provider,
+      streamTimeout: streamTimeoutMs,
+    });
+  }
+
+  /**
    * MEM-20: Build the compressFn used by ContextCompressor and ReflectorWorker.
    * Extracted so it can be reused in boot() (for ReflectorWorker) and submitTask().
    */
@@ -2570,7 +2614,15 @@ export class Orchestrator {
     return async (prompt: string): Promise<string> => {
       const compressLoop = new ExecutionLoop({
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
-        permissionMode: 'default',
+        // SEC-23: same reasoning as the extraction loop above — a maxTurns:1
+        // summarisation call over untrusted conversation text gets no tool
+        // surface at all rather than DEFAULT_TOOLS by omission.
+        ...buildEnforcedSdkOptions({
+          policy: this._policy,
+          toolSurface: 'none',
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => 'compress'),
+        }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
         model: this._config.memory?.compression?.model,
