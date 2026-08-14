@@ -9,16 +9,15 @@
  */
 
 export {
-  CypherValidationError,
-  MAX_STRING_LENGTH,
-  escapeNumber,
-  escapeString,
-  escapeValue,
-  formatPropertyMap,
-  nodePattern,
-  validateIdentifier,
-  type PropertyValue,
-} from './cypher.js';
+  GraphIdentifierError,
+  PROPERTY_KEYS,
+  assertEdgeType,
+  assertNodeLabel,
+  assertPropertyKey,
+  assertSurrogateId,
+  surrogateId,
+  type PropertyKey,
+} from './identifiers.js';
 
 export { GraphStore, type GraphStoreOptions } from './graph-store.js';
 
@@ -27,9 +26,12 @@ export { GraphMemoryClient } from './graph-memory-worker.js';
 export {
   loadSparrow,
   resetSparrowLoaderCache,
+  type CypherParams,
+  type CypherValue,
   type SparrowDatabase,
   type SparrowLoadResult,
   type SparrowModule,
+  type SparrowResult,
 } from './sparrow-loader.js';
 
 export {
