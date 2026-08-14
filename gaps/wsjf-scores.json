@@ -2149,7 +2149,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/research/sparrowdb-findings-2026-08.md",
       "wsjf": {
         "usability_value": 2,
@@ -2159,7 +2159,8 @@
         "job_size": 1,
         "score": 19
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-k"
     },
     {
       "id": "SEC-28",
