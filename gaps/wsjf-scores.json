@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 90,
+    "total_gaps": 91,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -2059,7 +2059,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 5,
@@ -2069,7 +2069,8 @@
         "job_size": 1,
         "score": 24
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "agent-j"
     },
     {
       "id": "SEC-26",
@@ -2081,7 +2082,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 6,
@@ -2091,7 +2092,8 @@
         "job_size": 1,
         "score": 22
       },
-      "release_gate": true
+      "release_gate": true,
+      "claimed_by": "agent-j"
     },
     {
       "id": "SEC-27",
@@ -2156,6 +2158,28 @@
         "time_criticality": 5,
         "job_size": 1,
         "score": 19
+      },
+      "release_gate": false
+    },
+    {
+      "id": "SEC-28",
+      "category": "security",
+      "title": "One audit log, one writer: route AuditLogHook through the chained AuditLogger",
+      "severity": "S2",
+      "files_affected": 4,
+      "impact": 5,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 6,
+        "security_risk": 7,
+        "time_criticality": 5,
+        "job_size": 3,
+        "score": 6.7
       },
       "release_gate": false
     }
