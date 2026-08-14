@@ -221,6 +221,70 @@ describe('EventTriggerManager', () => {
     expect(cb2).not.toHaveBeenCalled();
   }, 20_000);
 
+  /**
+   * TEST-20 follow-up — regression guard for a real source race.
+   *
+   * `_poll` awaits `readdir`/`stat` and only then invokes the callback, but it
+   * captured `entry` directly and never re-checked that the watcher was still
+   * registered. `unwatch()` clears the interval, so no *new* poll starts — yet a
+   * poll already past its `stat` still delivered its callback afterwards. On a
+   * fast disk that window is under a millisecond, which is why `unwatches a
+   * specific path` and `unwatchAll stops all watchers` never caught it; hold
+   * `fs.stat` open and it is deterministic.
+   *
+   * This is not a test artefact: `RoutineManager.stopAll()` is what the daemon
+   * calls on shutdown, so the stray callback submits a routine task into an
+   * orchestrator that is already tearing down.
+   */
+  it('drops a callback from a poll already in flight when the watcher is stopped', async () => {
+    const filePath = path.join(testDir, 'inflight.txt');
+    await fs.writeFile(filePath, 'v1');
+
+    const callback = vi.fn();
+    const manager = new EventTriggerManager({ pollIntervalMs: 20 });
+    manager.watch(filePath, 0, callback);
+
+    // Give the watcher a baseline and prove it is live before interfering.
+    await touchUntilDetected(filePath, () => callback.mock.calls.length > 0, 'the watcher to fire');
+
+    // Park the next poll inside `fs.stat`, after it has read the (now changed)
+    // mtime but before it can compare and fire.
+    let entered = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi
+      .spyOn(fs, 'stat')
+      .mockImplementation(async (target: Parameters<typeof realStat>[0]) => {
+        const stat = await realStat(target);
+        if (!entered) {
+          entered = true;
+          await gate;
+        }
+        return stat;
+      });
+
+    try {
+      await fs.writeFile(filePath, 'v2');
+      await until(() => entered, 'a poll to be parked inside fs.stat');
+
+      callback.mockClear();
+      manager.unwatch(filePath);
+      release();
+
+      // The parked poll now resumes and reaches its callback site. Nothing else
+      // is scheduled, so waiting longer cannot change the outcome.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(callback).not.toHaveBeenCalled();
+    } finally {
+      release();
+      statSpy.mockRestore();
+      manager.unwatchAll();
+    }
+  }, 20_000);
+
   it('handles non-existent directory gracefully', async () => {
     const callback = vi.fn();
     const manager = new EventTriggerManager({ pollIntervalMs: 20 });

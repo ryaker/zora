@@ -17,6 +17,18 @@ interface WatchEntry {
   timer: ReturnType<typeof setInterval>;
   mtimes: Map<string, number>;
   lastFired: number;
+  /**
+   * Set by `unwatch`/`unwatchAll` (TEST-20).
+   *
+   * `clearInterval` stops new polls from starting but says nothing about one
+   * already suspended on `readdir`/`stat`. That poll resumes afterwards and,
+   * without this flag, delivers a callback for a watcher the caller has already
+   * torn down — `RoutineManager.stopAll()` runs on daemon shutdown, so the
+   * stray callback submits a routine task into an orchestrator that is closing.
+   * The window is sub-millisecond on a warm cache, which is exactly why it went
+   * unnoticed; under filesystem latency it is reliable.
+   */
+  stopped: boolean;
 }
 
 export class EventTriggerManager {
@@ -44,6 +56,7 @@ export class EventTriggerManager {
       callback,
       mtimes: new Map(),
       lastFired: 0,
+      stopped: false,
       timer: setInterval(() => {
         void this._poll(entry);
       }, this._pollIntervalMs),
@@ -58,6 +71,7 @@ export class EventTriggerManager {
   unwatch(watchPath: string): void {
     const entry = this._watchers.get(watchPath);
     if (entry) {
+      entry.stopped = true;
       clearInterval(entry.timer);
       this._watchers.delete(watchPath);
     }
@@ -68,6 +82,7 @@ export class EventTriggerManager {
    */
   unwatchAll(): void {
     for (const entry of this._watchers.values()) {
+      entry.stopped = true;
       clearInterval(entry.timer);
     }
     this._watchers.clear();
@@ -76,10 +91,13 @@ export class EventTriggerManager {
   private async _poll(entry: WatchEntry): Promise<void> {
     try {
       const files = await this._resolveFiles(entry.watchPath);
+      // Every await below is a point at which `unwatch` may have run (TEST-20).
+      if (entry.stopped) return;
 
       for (const file of files) {
         try {
           const stat = await fs.stat(file);
+          if (entry.stopped) return;
           const mtime = stat.mtimeMs;
           const prevMtime = entry.mtimes.get(file);
 
