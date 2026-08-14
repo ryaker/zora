@@ -10,36 +10,56 @@ The model is: **Prevent → Pause → Prove.**
 | **Pause** | Irreversibility scoring + approval queue | Pauses high-risk actions and waits for your explicit go-ahead |
 | **Prove** | Audit log + session risk forecaster | Records everything; detects emerging risk patterns across a session |
 
-All runtime safety features are **disabled by default**. Enable only what you need.
+Irreversibility scoring and the startup audit are **always on**. The approval
+queue, the session risk forecaster and subagent reputation are **opt-in and
+disabled by default** — enable only what you need.
 
 ---
 
 ## How to Enable
 
-Add a `[safety]` section to `~/.zora/policy.toml`:
+There is no `[safety]` section. Each mechanism has its own top-level table, and
+they are split across the two files by what they configure: *behaviour* goes in
+`config.toml`, *permissions* in `policy.toml`.
+
+In `~/.zora/config.toml`:
 
 ```toml
-[safety]
+[approval]                 # human-in-the-loop gate — src/cli/daemon.ts:194
 enabled = true
+timeout_s = 300            # auto-deny after 5 minutes
 
-[safety.scoring]
+[risk_forecaster]          # session risk — src/cli/daemon.ts:175
 enabled = true
+intercept_threshold = 72
+auto_deny_threshold = 88
+max_events = 50
 
-[safety.approval]
+[cooldown]                 # subagent reputation — src/cli/daemon.ts:156
 enabled = true
-channel = "telegram"   # or "dashboard" — where approval requests appear
-
-[safety.forecaster]
-enabled = true
-
-[safety.reputation]
-enabled = true
-
-[safety.audit]
-startup_check = true
+level1_threshold = 3       # throttle: insert level1_delay_ms before each call
+level2_threshold = 6       # restricted: log a warning, still allow
+shutdown_threshold = 10    # deny outright
+reset_after_hours = 24
+level1_delay_ms = 2000
 ```
 
-Restart the daemon after changing this file:
+In `~/.zora/policy.toml`:
+
+```toml
+[actions.thresholds]       # irreversibility scoring — always on
+warn      = 40
+flag      = 65
+auto_deny = 95
+
+[actions.scores]           # per-action overrides
+git_push = 50
+```
+
+The startup audit has no config key at all. It always runs; bypass it with the
+`ZORA_SKIP_SECURITY_AUDIT=1` environment variable.
+
+Restart the daemon after changing either file:
 
 ```bash
 zora-agent stop && zora-agent start
@@ -100,18 +120,35 @@ When an action scores above `flag`, Zora pauses execution and routes the action 
 
 ### Telegram Approval
 
-Configure a Telegram bot token and your chat ID in `~/.zora/policy.toml`:
+Telegram lives under `[steering.telegram]` in `~/.zora/config.toml`, and the
+approval gate under `[approval]` in the same file. Neither is in `policy.toml`.
 
 ```toml
-[integrations.telegram]
-bot_token = "env:ZORA_TELEGRAM_TOKEN"   # never plaintext — use env: prefix
-allowed_users = [123456789]             # your Telegram numeric user ID
-
-[safety.approval]
+[steering.telegram]
 enabled = true
-channel = "telegram"
-timeout_seconds = 300   # auto-deny after 5 minutes
+allowed_users = ["123456789"]   # your Telegram numeric user ID
+mode = "polling"
+# bot_token is deliberately omitted — see below
+
+[approval]
+enabled = true
+timeout_s = 300   # auto-deny after 5 minutes
 ```
+
+**Leave `bot_token` out of the file.** The daemon reads
+`steering.telegram.bot_token` first and falls back to the `TELEGRAM_BOT_TOKEN`
+environment variable (`src/cli/daemon.ts:244`). There is **no `env:` prefix
+resolution anywhere in the codebase** — writing `bot_token = "env:SOMETHING"`
+sends the literal string `env:SOMETHING` to Telegram as your token, and the
+gateway fails with an authentication error rather than reading the variable.
+Omit the key and export the variable instead:
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
+```
+
+`[approval]` reads `enabled` and `timeout_s`. There is no `channel` key —
+delivery goes to whichever gateway is configured.
 
 When an action is flagged, you receive:
 
@@ -137,11 +174,14 @@ Reply: /approve ZORA-A8F2 allow
 | `allow-30m` | Approve all matching actions for the next 30 minutes |
 | `allow-session` | Approve this action type for the rest of the session |
 
-If you don't respond within `timeout_seconds`, the action is auto-denied.
+If you don't respond within `timeout_s` seconds (default 300), the action is auto-denied.
 
-### Dashboard Approval
+`allow-30m` and `allow-session` carry a score ceiling — actions scoring above it
+still require individual approval even inside the granted window.
 
-Set `channel = "dashboard"` to handle approvals in the web UI at `http://localhost:8070`. Actions appear in the **Pending Approvals** panel with the same approval scope options.
+There is no `channel` key and no dashboard approval panel: the queue is
+connected to the Telegram gateway when one is configured
+(`telegramGateway.connectApprovalQueue()`, `src/cli/daemon.ts:264`).
 
 ---
 
@@ -163,25 +203,37 @@ Each action is scored for contribution to known harmful patterns: privilege esca
 
 Tracks the moving average of irreversibility scores across the last 10 actions. If the average is trending up — starting with file reads, then writes, then git pushes, then message sends — the forecaster treats the next action as higher risk than its individual score suggests.
 
+### How the composite is built
+
+The three signals are each computed as a 0–100 number and combined with fixed
+weights (`src/core/memory-risk-forecaster.ts`):
+
+```
+composite = round(0.3 * drift + 0.4 * salami + 0.3 * commitmentCreep)
+```
+
+- **Drift** compares the *action categories* of the last 5 events against a
+  baseline frozen from the first 3 events of the session. It is category
+  comparison, not keyword comparison.
+- **Salami** looks at the last 5 categories.
+- **Commitment creep** looks at the irreversibility scores of the last 10 events.
+
+The weights are constants in the source and are not configurable.
+
 ### Thresholds
 
 ```toml
-[safety.forecaster]
+[risk_forecaster]
 enabled = true
-
-[safety.forecaster.thresholds]
-drift_warn         = 0.4   # 40% keyword divergence from original task
-drift_flag         = 0.7   # 70% divergence — next action needs approval
-salami_warn        = 30    # composite harm potential warning
-salami_flag        = 60    # composite harm potential — flag actions
-creep_warn         = 55    # moving avg irreversibility warning
-creep_flag         = 72    # moving avg irreversibility — flag actions
-
-[safety.forecaster]
-composite_flag     = 1.5   # sum of normalized signals; flag when exceeded
+intercept_threshold = 72   # composite >= this -> deny the next action
+auto_deny_threshold = 88   # composite >= this -> deny, reason session_risk_critical
+max_events = 50            # rolling window of events kept per session
 ```
 
-When the composite score passes `composite_flag`, the effective `flag` threshold for new actions drops by 15 points — so actions that would normally pass silently get routed to approval.
+These four keys are the whole surface. There are no per-signal thresholds
+(`drift_flag`, `salami_warn`, `creep_flag`, `composite_flag` and similar do not
+exist), and passing a threshold does not lower the per-action `flag` threshold —
+it denies the next action outright.
 
 ---
 
@@ -193,23 +245,26 @@ When a spawned subagent repeatedly has actions blocked — either by policy or b
 
 | Level | Trigger | Behavior |
 |-------|---------|---------|
-| **Normal** | 0–2 blocked actions | No restrictions |
-| **Throttled** | 3 blocked actions in a session | 2s delay before each action; warning logged |
-| **Restricted** | 5 blocked actions | Every action needs explicit approval, regardless of score |
-| **Suspended** | 8 blocked actions | Agent shut down; parent notified |
-| **Reset** | 24 hours of clean behavior | Returns to Normal |
+| **0 — Normal** | 0–2 denials | No restrictions |
+| **1 — Throttled** | 3 denials | 2s delay inserted before each tool call |
+| **2 — Restricted** | 6 denials | A warning is logged; **the call still proceeds**. High-score actions remain the IrreversibilityScorerHook's job. |
+| **Shutdown** | 10 denials | The call is denied outright with a message naming the denial count |
+| **Reset** | 24h since the last denial | Denial count returns to 0 |
 
-This prevents a misbehaving subagent from bypassing restrictions by simply retrying at volume.
+Level 2 does *not* force approval on every action — the code logs and allows
+(`src/core/agent-cooldown.ts`). The throttle delay is the only mechanical brake
+before shutdown.
 
 ### Configuration
 
 ```toml
-[safety.reputation]
-enabled = true
-throttle_after  = 3    # blocked actions before throttle
-restrict_after  = 5    # blocked actions before restrict
-suspend_after   = 8    # blocked actions before shutdown
-reset_hours     = 24   # hours of clean behavior to reset
+[cooldown]
+enabled = true             # off by default
+level1_threshold = 3       # denials before the throttle delay applies
+level2_threshold = 6       # denials before the "restricted" warning
+shutdown_threshold = 10    # denials before calls are denied
+reset_after_hours = 24
+level1_delay_ms = 2000
 ```
 
 ---
@@ -293,58 +348,69 @@ max_irreversibility_score = 25
 
 ## Startup Security Audit
 
-Every time the daemon starts, Zora runs a self-audit of its configuration files and environment.
+Every time the daemon starts, Zora runs a self-audit of its configuration files
+and environment. The gate lives in `src/cli/daemon.ts` (it calls
+`runSecurityAuditSilent()` before the orchestrator boots) and the checks
+themselves in `src/cli/security-commands.ts`.
 
 ### Running the Audit Manually
 
 ```bash
-zora security              # full audit
-zora security --fix        # auto-fix WARN issues (does not touch FAIL issues)
-zora security --json       # machine-readable output
+zora-agent security                  # full audit, human-readable
+zora-agent security --fix            # auto-fix the permission issues it can (chmod corrections)
+zora-agent security --format json    # machine-readable output
 ```
+
+Those are the only two options the command registers
+(`src/cli/security-commands.ts`). `--format` accepts `text` (the default) or
+`json`; any other value falls back to `text`.
 
 ### Output Format
 
 ```
-$ zora security
-✓ PASS  ~/.zora/ permissions (700)
+$ zora-agent security
+✓ PASS  ~/.zora permissions (700)
 ✓ PASS  config.toml permissions (600)
 ✓ PASS  policy.toml permissions (600)
-✗ FAIL  Bot token found in plaintext in config.toml:44
-         → Move to env: ZORA_TELEGRAM_TOKEN and use env:ZORA_TELEGRAM_TOKEN
-⚠ WARN  Node.js 18.x — upgrade to 20 LTS for security patches
-⚠ WARN  ~/.zora/skills/ contains 1 unaudited skill: custom-reporter.skill
-         → Run: zora-agent skill audit
+✗ FAIL  Plaintext secret in config.toml (config.toml:44)
+⚠ WARN  Node.js >= 20 LTS
+✓ PASS  Daemon binds to localhost only
 
-Summary: 3 PASS, 1 FAIL, 2 WARN
-
-FAILs block startup. Fix with: zora security --explain
+Summary: 4 PASS, 1 FAIL, 1 WARN
 ```
+
+FAILs block startup. Each FAIL carries its own message naming the remediation
+(for a plaintext secret, the environment variable to move it to); there is no
+separate `--explain` flag.
 
 ### Checks Performed
 
-| Check | Severity | Auto-Fix? |
-|-------|----------|-----------|
-| `~/.zora/` directory permissions (expect 700) | FAIL | Yes |
-| `config.toml` permissions (expect 600) | FAIL | Yes |
-| `policy.toml` permissions (expect 600) | FAIL | Yes |
-| Plaintext secrets in any config file | FAIL | No — requires manual remediation |
-| Symlinks in `~/.zora/` pointing outside | FAIL | No |
-| Node.js version below 20 LTS | WARN | No |
-| Unaudited skills in `~/.zora/skills/` | WARN | No |
-| PolicyEngine `[safety]` section absent | WARN | No (informational) |
-| `auto_deny` threshold at default 95 | INFO | No |
+There are three severities — `PASS`, `FAIL`, `WARN`. There is no `INFO` level.
 
-FAILs block daemon startup entirely. WARNs are logged but do not block startup. INFO items are surfaced only when running `zora security` manually.
+| # | Check | Severity when failing | Auto-fix with `--fix`? |
+|---|-------|----------------------|------------------------|
+| 1 | `~/.zora/` directory permissions (expect 700) | FAIL (WARN if the directory does not exist yet) | Yes — `chmod 700` |
+| 2 | `config.toml` permissions (expect 600) | FAIL | Yes — `chmod 600` |
+| 3 | `policy.toml` permissions (expect 600), for both the project and the global copy | FAIL | Yes — `chmod 600` |
+| 4 | Plaintext secrets in any `*.toml` under the config dir, reported one finding per line with `file:line` | FAIL | No — requires manual remediation |
+| 5 | Daemon bind address is localhost, not `0.0.0.0` | FAIL | No |
+| 6 | AgentBus URL uses HTTPS for non-local hosts | WARN | No |
+| 7 | Node.js >= 20 LTS | WARN | No |
+| 8 | Signal channel configured but `channel-policy.toml` missing | WARN | No |
+
+FAILs block daemon startup entirely. WARNs are logged at boot but do not block
+startup.
 
 ### Disabling Startup Audit
 
-If you need to skip the audit for scripted deployments (not recommended):
+If you need to skip the audit for scripted deployments (not recommended), set an
+environment variable — there is no config key for this:
 
-```toml
-[safety.audit]
-startup_check = false
+```bash
+ZORA_SKIP_SECURITY_AUDIT=1 zora-agent daemon start
 ```
+
+The daemon logs a warning when it takes that path.
 
 ---
 
@@ -352,9 +418,13 @@ startup_check = false
 
 ### Actions Are Being Blocked Unexpectedly
 
-1. Run `zora-agent audit --last 20` and look for `[BLOCKED]` entries.
-2. Each entry includes the action name, the score it received, and which threshold triggered.
-3. To understand which rule is matching, run `zora-agent audit --last 1 --explain`.
+1. Run `zora-agent audit --last 1h` and look for `policy_violation` entries.
+   `--last` takes a duration (`30m`, `24h`, `7d`) — a bare number is ignored and
+   falls back to the 24h default.
+2. Narrow to just the denials with `zora-agent audit --type policy_violation`,
+   or to one task with `zora-agent audit --job <jobId>`.
+3. Each entry prints its entry ID, event type, job ID, timestamp, and the tool
+   name. The deny reason itself is in the daemon log, not the audit CLI output.
 
 If the score seems wrong, override it for the specific tool in `policy.toml`:
 
@@ -365,38 +435,44 @@ git_push = 50   # adjust downward if you're comfortable with your repo
 
 ### Approval Messages Not Arriving
 
-- Verify `ZORA_TELEGRAM_TOKEN` is set in your environment.
-- Run `zora security` — a misconfigured token shows as FAIL.
+- Verify `TELEGRAM_BOT_TOKEN` is set in your environment.
+- Run `zora-agent security` — a misconfigured token shows as FAIL.
 - Check `~/.zora/logs/safety.log` for delivery errors.
 - Test the bot directly: send `/start` to your bot in Telegram.
 
 ### Session Flagged Despite Low Individual Action Scores
 
-The session risk forecaster is elevating the effective threshold. Check `~/.zora/logs/forecaster.log` for the current composite score breakdown.
+The session risk forecaster is elevating the effective threshold. Per-session
+state — the drift, salami, and commitment-creep components of the composite
+score — is persisted as JSON under `~/.zora/session-risk/<sessionId>.json`
+(`MemoryRiskForecaster`, `src/core/memory-risk-forecaster.ts`).
 
-To temporarily disable the forecaster for a session without changing your config:
+The forecaster is off unless you turn it on, and there is no CLI flag for it.
+Disable it by editing `config.toml`:
 
-```bash
-zora-agent start --no-forecaster
+```toml
+[risk_forecaster]
+enabled = false
 ```
 
 ### Agent Stuck in Restricted or Suspended State
 
-Check the reputation log:
+Per-subagent reputation is persisted as JSON under
+`~/.zora/agent-reputation/<agentId>.json` (`AgentCooldown`,
+`src/core/agent-cooldown.ts`). Read the file to see the denial count and current
+state.
+
+The CLI registers no `reputation` command. To reset a subagent that was
+incorrectly suspended, delete its reputation file:
 
 ```bash
-zora-agent audit --filter reputation
-```
-
-If a subagent was incorrectly suspended, reset its reputation manually:
-
-```bash
-zora-agent reputation reset <agent-id>
+rm ~/.zora/agent-reputation/<agent-id>.json
 ```
 
 ### Startup Blocked by Security Audit FAIL
 
-Run `zora security --explain` for remediation steps specific to each failing check.
+Re-run `zora-agent security`. Each failing check prints its own remediation hint
+on the `→` line beneath it.
 
 Common fixes:
 
@@ -406,12 +482,11 @@ chmod 700 ~/.zora
 chmod 600 ~/.zora/config.toml ~/.zora/policy.toml
 
 # Move plaintext token to environment variable
-# In ~/.zora/config.toml, replace:
+# In ~/.zora/config.toml, delete the line:
 #   bot_token = "123456:ABCdef..."
-# With:
-#   bot_token = "env:ZORA_TELEGRAM_TOKEN"
-# Then add to your shell profile:
-export ZORA_TELEGRAM_TOKEN="123456:ABCdef..."
+# There is no `env:` indirection — remove the key entirely and add this to
+# your shell profile instead:
+export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
 ```
 
 ---

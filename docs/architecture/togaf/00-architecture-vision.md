@@ -118,7 +118,7 @@ Zora implements a layered orchestration architecture (see also docs/architecture
 | Metric | Target | Measurement |
 |---|---|---|
 | Policy enforcement coverage | 100% of tool calls gated | AuditLogger policy.allow + policy.deny event counts |
-| Audit chain integrity | 0 broken links | zora-agent audit verify exit code 0 |
+| Audit chain integrity | 0 broken links | zora-agent audit --verify exit code 0 |
 | Provider failover latency | < 2s for handoff | Session event timestamps: task.start to first token on failover |
 | Memory retrieval relevance | Top-3 items match task context | Salience score > 0.6 for retrieved items |
 | Cold boot time | < 5s from zora-agent start to ready | Orchestrator.boot() duration log entry |

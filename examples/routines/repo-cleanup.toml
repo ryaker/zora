@@ -1,3 +1,7 @@
+# Copy this file to ~/.zora/routines/ and restart the daemon.
+# Requires a provider named "ollama" with cost_tier = "free" in config.toml —
+# `zora-agent init` does not generate one. Add it, or change these two lines.
+
 [routine]
 name = "repo-cleanup"
 schedule = "0 9 * * 1-5"

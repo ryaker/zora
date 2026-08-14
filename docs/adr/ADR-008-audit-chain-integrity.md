@@ -52,7 +52,7 @@ On first call to log(), AuditLogger reads the existing file to find the last ent
 
 ### Chain Verification
 
-AuditLogger.verifyChain() (src/security/audit-logger.ts) reads the entire log, recomputes each hash, and returns a ChainVerificationResult indicating whether the chain is valid and at which entry it broke (if any). Available via CLI: zora-agent audit verify.
+AuditLogger.verifyChain() (src/security/audit-logger.ts) reads the entire log, recomputes each hash, and returns a ChainVerificationResult indicating whether the chain is valid and at which entry it broke (if any). Available via CLI: zora-agent audit --verify.
 
 ### Filtering
 

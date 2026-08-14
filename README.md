@@ -109,12 +109,16 @@ Every session has a maximum number of actions (default: 100). If an agent enters
 
 ### 5. Full Audit Log
 
-Every action Zora takes — every file read, every command run, every tool call — is written to a tamper-proof log. Not just "task completed" but the specific action, the path, the command, the timestamp, and the outcome.
+Every tool call — every file read, every command run — is appended to `~/.zora/audit/audit.jsonl` with its arguments (secrets redacted), its result, and how long it took. Security events go to a second file beside it, `audit-security.jsonl`, which is SHA-256 hash-chained so deletions and edits are detectable.
 
 ```bash
-zora-agent audit              # browse your log
-zora-agent audit --last 50    # last 50 actions
+zora-agent audit                    # last 24h (the default window)
+zora-agent audit --last 30m         # a duration: 30m, 6h, 7d
+zora-agent audit --type policy_violation
+zora-agent audit --verify           # check the hash chain
 ```
+
+`--last` takes a duration, not a count — a bare number falls back to the 24h default.
 
 **OWASP coverage:** Zora is hardened against the [OWASP LLM Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/) and [OWASP Agentic Top 10](https://owasp.org/www-project-agentic-ai-threats/) — prompt injection, tool-output injection, intent verification, action budgets, dry-run preview mode. See [SECURITY.md](SECURITY.md) for the technical breakdown.
 
@@ -127,18 +131,25 @@ While policies define *what* Zora is allowed to do, the runtime safety layer add
 ```toml
 [actions.thresholds]
 warn      = 40   # log warning, allow
-flag      = 65   # pause and ask for approval
-auto_deny = 95   # block without asking
+flag      = 65   # block, with reason "approval_required:<score>"
+auto_deny = 95   # block, with reason "auto_denied:<score>"
 ```
 
-**Human-in-the-loop Approval.** When an action scores above the `flag` threshold, Zora pauses and routes to an approval queue. Enable in `config.toml`:
+At or above `flag`, the hook denies the call. It does not itself open an
+approval request — see the note under Human-in-the-loop Approval below.
+
+**Human-in-the-loop Approval.** *Off by default.* Enable in `config.toml`:
 
 ```toml
 [approval]
 enabled = true
-channel = "telegram"    # or "signal"
 timeout_s = 300         # auto-deny after 5 minutes
 ```
+
+`enabled` and `timeout_s` are the two keys the daemon reads. Delivery goes
+through whichever messaging adapter you have configured; there is no `channel`
+key. The queue is reached through the PolicyEngine's `always_flag` list — an
+irreversibility score alone does not enqueue, it denies.
 
 When triggered, you receive:
 
@@ -153,9 +164,9 @@ Reply: allow | deny | allow-30m | allow-session
 
 You can approve once, approve for 30 minutes, approve for the session, or deny. **Note:** Channel delivery (Telegram/Signal) requires a configured messaging adapter. See [Multi-Channel Messaging](#multi-channel-messaging).
 
-**Session Risk Forecasting.** Zora tracks three risk signals across a session — *drift* (has the agent veered from its original task?), *salami* (is it building toward something harmful in small steps?), and *commitment creep* (are actions getting progressively more irreversible?). When the composite score passes a threshold, the next action routes to the approval queue regardless of its individual score.
+**Session Risk Forecasting.** *Off by default* (`[risk_forecaster] enabled = true`). Zora tracks three risk signals across a session — *drift* (has the agent veered from its original task?), *salami* (is it building toward something harmful in small steps?), and *commitment creep* (are actions getting progressively more irreversible?). When the composite score passes 72 the next action is denied, regardless of its individual score; at 88 the denial reason escalates to `session_risk_critical`.
 
-**Agent Reputation.** When a spawned subagent repeatedly gets its actions blocked, it enters cooldown: throttled (2s delay), then restricted (all actions need explicit approval), then shut down. Resets after 24 hours of clean behavior.
+**Agent Reputation.** *Off by default* (`[cooldown] enabled = true`). When a spawned subagent repeatedly gets its actions blocked, it enters cooldown: at 3 denials a 2s delay before each call, at 6 a logged warning (the call still proceeds — high-risk actions remain the scorer's job), at 10 the call is denied outright. Resets 24 hours after the last denial.
 
 **Per-Project Security Scope.** You can give each subagent a tighter policy than the global one. A PM agent doesn't need shell access. A code-review agent doesn't need to send messages. Drop a `.zora/security-policy.toml` in your project and it inherits the global policy then applies additional restrictions — it can't loosen the global ceiling.
 
@@ -171,13 +182,13 @@ max_irreversibility_score = 60  # nothing above a git commit
 **Startup Security Audit.** Every time the daemon starts, Zora scans its own configuration:
 
 ```bash
-$ zora security
+$ zora-agent security
 ✓ PASS  ~/.zora/ permissions (700)
 ✓ PASS  config.toml permissions (600)
 ✗ FAIL  Bot token found in plaintext in config.toml:44
 ⚠ WARN  Node.js 18.x — upgrade to 20 LTS
 
-zora security --fix   # auto-fixes WARN issues
+zora-agent security --fix   # auto-fixes WARN issues
 ```
 
 FAILs block daemon startup. WARNs log and continue. All opt-in via config — enable only what you need.
@@ -440,7 +451,7 @@ In daemon mode (Signal/Telegram channels), skill proposals are emitted as `skill
 
 ## Project Status
 
-Zora is in active development (v0.11.0). Core features work reliably today.
+Zora is in active development (v0.12.0). Core features work reliably today.
 
 | Feature | Status |
 |---------|--------|
@@ -449,13 +460,13 @@ Zora is in active development (v0.11.0). Core features work reliably today.
 | Local/offline execution via Ollama | ✅ Working |
 | PolicyEngine (file-based, compaction-proof) | ✅ Working |
 | Action budgets + runaway loop prevention | ✅ Working |
-| Startup security audit (`zora security`) | ✅ Working |
+| Startup security audit (`zora-agent security`) | ✅ Working |
 | Irreversibility scoring (0–100 per action) | ✅ Working |
-| Session risk forecasting (drift/salami/creep) | ✅ Working |
-| Agent reputation + cooldown system | ✅ Working |
+| Session risk forecasting (drift/salami/creep) | ✅ Working — opt-in, off by default |
+| Agent reputation + cooldown system | ✅ Working — opt-in, off by default |
 | Per-project security scope (`.zora/security-policy.toml`) | ✅ Working |
-| Human-in-the-loop approval queue | ✅ Working |
-| Tamper-proof audit log | ✅ Working |
+| Human-in-the-loop approval queue | ✅ Working — opt-in, off by default |
+| Tamper-proof audit log | ✅ Working (`audit-security.jsonl`; the tool log beside it is not chained) |
 | Skill install with AST security scan | ✅ Working |
 | Skill audit (catches manually installed skills) | ✅ Working |
 | Long-term memory across sessions | ✅ Working |
