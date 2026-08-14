@@ -155,6 +155,76 @@ describe('BridgeWatchdog', () => {
     watchdog.stop();
   }, 30_000);
 
+  /**
+   * TEST-20 regression guard for a real bug this gap uncovered.
+   *
+   * `writeHeartbeat()` is wired into the bridge's poll-completion callback, so
+   * it runs on the bridge's schedule while `_check()` writes the same file on
+   * the watchdog's own schedule. With a plain `fs.writeFile` those two can
+   * interleave and splice one document into another, e.g.
+   * `{ "lastHeartbeat": ..., "restartCount": 0 } "lastRestart": ... }`.
+   *
+   * The damage is permanent, not transient: `_readState()` answers any read or
+   * parse failure with a *fresh* heartbeat, so once the file will not parse,
+   * every health check computes an elapsed time of ~0 and the watchdog never
+   * restarts the bridge again — it stops watching and says nothing. This was
+   * first seen as a bridge-watchdog test that failed roughly twice in 25 runs
+   * because the watchdog under test had gone permanently blind.
+   */
+  it('never leaves the health file half-written under concurrent writes', async () => {
+    const watchdog = new BridgeWatchdog(mockBridge, { healthCheckIntervalMs: 10000, maxStaleMs: 50000, maxRestarts: 3, stateDir });
+    await watchdog.start();
+    const healthFile = path.join(stateDir, 'bridge-health.json');
+
+    // The competing writer is the watchdog's own restart path, which writes a
+    // *longer* document (it adds `lastRestart`) with a plain write. Its exact
+    // shape is reproduced here rather than provoked through a restart, because
+    // the corruption is in the overlap of the two writes, not in the restart:
+    // a shorter document landing inside a longer one is what leaves the file
+    // unparseable. Only differing lengths can splice, which is why hammering
+    // writeHeartbeat() alone never showed it.
+    const restartPathWrite = async (): Promise<void> => {
+      const doc = JSON.stringify(
+        { lastHeartbeat: new Date().toISOString(), restartCount: 1, lastRestart: new Date().toISOString() },
+        null,
+        2,
+      );
+      await fs.writeFile(healthFile, doc, 'utf8');
+    };
+
+    const corrupt: string[] = [];
+    let done = false;
+    const reader = (async () => {
+      while (!done) {
+        try {
+          const raw = await fs.readFile(healthFile, 'utf8');
+          JSON.parse(raw);
+        } catch (err) {
+          // A missing file is fine mid-rename; unparseable content is not.
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') corrupt.push(String(err));
+        }
+      }
+    })();
+
+    // Both writers in flight at once, many times over.
+    const inFlight: Promise<void>[] = [];
+    for (let i = 0; i < 40; i++) {
+      inFlight.push(watchdog.writeHeartbeat(), restartPathWrite());
+    }
+    await Promise.all(inFlight);
+    done = true;
+    await reader;
+    watchdog.stop();
+
+    expect(corrupt).toEqual([]);
+
+    // And what survives is a complete, usable state document.
+    const finalRaw = await fs.readFile(healthFile, 'utf8');
+    const finalState = JSON.parse(finalRaw) as { lastHeartbeat?: string };
+    expect(typeof finalState.lastHeartbeat).toBe('string');
+    expect(new Date(finalState.lastHeartbeat!).getTime()).toBeGreaterThan(0);
+  }, 30_000);
+
   it('starts and stops cleanly', async () => {
     const watchdog = new BridgeWatchdog(mockBridge, { healthCheckIntervalMs: 10000, maxStaleMs: 50000, maxRestarts: 3, stateDir });
     await watchdog.start();
