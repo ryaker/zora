@@ -1,5 +1,14 @@
 # SparrowDB — Bug & Enhancement Report
 
+> **Dated record — do not update.** This is a point-in-time snapshot from
+> August 2026, kept as an audit trail of what was found, when, and on which
+> versions. It is deliberately excluded from documentation-freshness passes
+> (DOC-11/DOC-12). Later code changes do **not** make it wrong — they make it
+> history. Where a finding here was later shown to be mistaken, the correction
+> is appended inline and dated rather than edited over the original claim, so
+> the reasoning stays reconstructable. For current behaviour, read `CLAUDE.md`
+> and `docs/`.
+
 **For:** the SparrowDB maintainers / a SparrowDB-focused coding agent
 **From:** Zora integration work (MEM-30), August 2026
 **Version tested:** `sparrowdb@0.1.21` from npm

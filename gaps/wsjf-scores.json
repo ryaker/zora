@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 82,
+    "total_gaps": 83,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -1654,7 +1654,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 4,
@@ -1664,7 +1664,8 @@
         "job_size": 1,
         "score": 15
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-d"
     },
     {
       "id": "SDK-02",
@@ -1885,7 +1886,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 7,
@@ -1895,7 +1896,8 @@
         "job_size": 5,
         "score": 4
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-c"
     },
     {
       "id": "REF-01",
@@ -1972,6 +1974,28 @@
         "score": 9
       },
       "release_gate": false
+    },
+    {
+      "id": "SEC-23",
+      "category": "security",
+      "title": "Extend PreToolUse enforcement to ExecutionLoop paths; wire allowedTools/disallowedTools from policy",
+      "severity": "S1",
+      "files_affected": 4,
+      "impact": 6,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "wsjf": {
+        "usability_value": 3,
+        "wiring_impact": 7,
+        "security_risk": 8,
+        "time_criticality": 6,
+        "job_size": 2,
+        "score": 12
+      },
+      "release_gate": true
     }
   ]
 }
