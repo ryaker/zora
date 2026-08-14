@@ -31,6 +31,7 @@ import {
 } from '../types.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { buildZoraMcpServer } from '../tools/zora-mcp-server.js';
+import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -141,6 +142,12 @@ export interface ClaudeProviderOptions {
    * themselves and own the consequences.
    */
   permissionMode?: 'default' | 'acceptEdits' | 'plan';
+
+  /**
+   * SEC-21: provider-level SDK hooks. Per-task hooks arrive on
+   * `TaskContext.sdkHooks` and take precedence for the events they define.
+   */
+  hooks?: ZoraSdkHooks;
 }
 
 // ─── Claude Provider ────────────────────────────────────────────────
@@ -157,6 +164,7 @@ export class ClaudeProvider implements LLMProvider {
   private readonly _systemPrompt: string;
   private readonly _allowedTools: string[];
   private readonly _permissionMode: string;
+  private readonly _hooks: ZoraSdkHooks;
 
   /** Active queries indexed by jobId for abort support */
   private readonly _activeQueries: Map<string, { abort: AbortController; query: SDKQuery }> = new Map();
@@ -189,6 +197,7 @@ export class ClaudeProvider implements LLMProvider {
     this._allowedTools = options.allowedTools ?? [];
     // SEC-20: 'default' is the only mode under which the SDK calls canUseTool.
     this._permissionMode = options.permissionMode ?? 'default';
+    this._hooks = options.hooks ?? {};
     this._circuitBreaker = new CircuitBreaker();
 
     // Dependency injection: use provided queryFn or lazy-load the real SDK
@@ -308,6 +317,14 @@ export class ClaudeProvider implements LLMProvider {
     // Wire policy enforcement into the SDK
     if (task.canUseTool) {
       sdkOptions['canUseTool'] = task.canUseTool;
+    }
+
+    // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
+    // ahead of canUseTool and a deny there is a real deny — the SDK never
+    // invokes the tool. Per-task hooks win over provider-level ones per event.
+    const hooks: ZoraSdkHooks = { ...this._hooks, ...(task.sdkHooks ?? {}) };
+    if (Object.keys(hooks).length > 0) {
+      sdkOptions['hooks'] = hooks;
     }
 
     // Build the prompt from task context

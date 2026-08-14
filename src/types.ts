@@ -329,6 +329,12 @@ export interface TaskContext {
     input: Record<string, unknown>,
     options: { signal: AbortSignal },
   ) => Promise<{ behavior: 'allow' | 'deny'; message?: string; updatedInput?: Record<string, unknown> }>;
+  /**
+   * SEC-21: SDK hook matchers (PreToolUse / PostToolUse) built from the
+   * ToolHookRunner. Per-task because the hooks are bound to this jobId.
+   * See `src/hooks/sdk-hook-bridge.ts`.
+   */
+  sdkHooks?: import('./hooks/sdk-hook-bridge.js').ZoraSdkHooks;
 }
 
 // ─── LLM Provider Interface ─────────────────────────────────────────

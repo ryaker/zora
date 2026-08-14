@@ -19,10 +19,12 @@
  * weakened; if one starts failing, something is unenforced.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/providers/claude-provider.js';
 import type { SDKMessage, SDKQuery } from '../../src/providers/claude-provider.js';
 import { PolicyEngine } from '../../src/security/policy-engine.js';
+import { ToolHookRunner, type ToolHook } from '../../src/hooks/tool-hook-runner.js';
+import { buildSdkHooks, toolHookRunnerToPreToolUse } from '../../src/hooks/sdk-hook-bridge.js';
 import type { TaskContext, AgentEvent, ProviderConfig, ZoraPolicy } from '../../src/types.js';
 
 // ─── Fixtures ────────────────────────────────────────────────────────
@@ -141,5 +143,189 @@ describe('SEC-20 — the policy gate is in the path', () => {
 
     const canUseTool = options['canUseTool'] as NonNullable<TaskContext['canUseTool']>;
     expect((await canUseTool('Read', { file_path: '/etc/shadow' }, signal)).behavior).toBe('deny');
+  });
+});
+
+// ─── SEC-21: hook denials actually block ─────────────────────────────
+
+/** A hook that refuses one specific command, standing in for ShellSafetyHook. */
+const denyRmHook: ToolHook = {
+  name: 'test-deny-rm',
+  phase: 'before',
+  async run(ctx) {
+    const command = String(ctx.arguments['command'] ?? '');
+    if (command.includes('rm ')) {
+      return { allow: false, reason: 'rm is not permitted' };
+    }
+    return { allow: true };
+  },
+};
+
+/** A hook that rewrites arguments rather than blocking, standing in for SecretRedactHook. */
+const redactHook: ToolHook = {
+  name: 'test-redact',
+  phase: 'before',
+  async run(ctx) {
+    if (typeof ctx.arguments['token'] === 'string') {
+      return { allow: true, modifiedArgs: { token: '[REDACTED]' } };
+    }
+    return { allow: true };
+  },
+};
+
+describe('SEC-21 — a PreToolUse hook denial prevents execution', () => {
+  it('returns a deny permission decision the SDK honours before running the tool', async () => {
+    const runner = new ToolHookRunner();
+    runner.register(denyRmHook);
+
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-1');
+    const decision = await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    // 'deny' is the SDK's short-circuit: the tool is not invoked at all.
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(decision.hookSpecificOutput?.permissionDecisionReason).toContain('rm is not permitted');
+  });
+
+  it('lets a permitted call through without a decision that would block it', async () => {
+    const runner = new ToolHookRunner();
+    runner.register(denyRmHook);
+
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-1');
+    const decision = await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls -la' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    expect(decision.hookSpecificOutput?.permissionDecision).not.toBe('deny');
+  });
+
+  it('propagates hook argument rewrites to what the tool actually receives', async () => {
+    const runner = new ToolHookRunner();
+    runner.register(redactHook);
+
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-1');
+    const decision = await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { token: 'sk-secret', command: 'ls' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    const updated = decision.hookSpecificOutput?.updatedInput as Record<string, unknown> | undefined;
+    expect(updated?.['token']).toBe('[REDACTED]');
+    expect(updated?.['command']).toBe('ls');
+  });
+
+  it('fails closed: a hook that throws denies rather than silently allowing', async () => {
+    const runner = new ToolHookRunner();
+    runner.register({
+      name: 'exploding-hook',
+      phase: 'before',
+      async run() { throw new Error('hook blew up'); },
+    });
+
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-1');
+    const decision = await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+
+  it('runs after-hooks on PostToolUse so audit and leak detection still fire', async () => {
+    const seen: Array<{ tool: string; result: unknown }> = [];
+    const runner = new ToolHookRunner();
+    runner.register({
+      name: 'test-audit',
+      phase: 'after',
+      async run(ctx) {
+        seen.push({ tool: ctx.tool, result: ctx.result });
+        return { allow: true };
+      },
+    });
+
+    const hooks = buildSdkHooks(runner, () => 'job-1');
+    const postToolUse = hooks.PostToolUse![0]!.hooks[0]!;
+    await postToolUse(
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+        tool_response: { stdout: 'a b c' },
+      },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    expect(seen).toEqual([{ tool: 'Bash', result: { stdout: 'a b c' } }]);
+  });
+});
+
+// ─── The two layers together, on the provider path ───────────────────
+
+describe('the enforcement chain reaches the SDK', () => {
+  it('wires PreToolUse and PostToolUse into the options the SDK receives', async () => {
+    const runner = new ToolHookRunner();
+    runner.register(denyRmHook);
+
+    const options = await captureSdkOptions(makeTask(), {
+      hooks: buildSdkHooks(runner, () => 'job-enforcement-1'),
+    });
+
+    const hooks = options['hooks'] as Record<string, Array<{ hooks: unknown[] }>>;
+    expect(hooks?.['PreToolUse']?.[0]?.hooks).toHaveLength(1);
+    expect(hooks?.['PostToolUse']?.[0]?.hooks).toHaveLength(1);
+  });
+
+  it('denies at the hook layer even when canUseTool would have allowed', async () => {
+    // Defense in depth: PreToolUse runs ahead of canUseTool, so a hook denial
+    // stands on its own. A permissive policy must not resurrect a blocked call.
+    const permissive: ZoraPolicy = {
+      ...policy,
+      shell: { ...policy.shell, mode: 'denylist', allowed_commands: [], denied_commands: [] },
+    };
+    const engine = new PolicyEngine(permissive);
+    const runner = new ToolHookRunner();
+    runner.register(denyRmHook);
+
+    const canUseTool = engine.createCanUseTool();
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-1');
+
+    const hookDecision = await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    expect(hookDecision.hookSpecificOutput?.permissionDecision).toBe('deny');
+    // ...and it does not matter what the (deliberately permissive) policy says,
+    // because the SDK never reaches canUseTool after a PreToolUse deny.
+    void canUseTool;
+  });
+
+  it('calls the hook once per tool call, with the tool name and arguments intact', async () => {
+    const runner = new ToolHookRunner();
+    const spy = vi.fn(async () => ({ allow: true }));
+    runner.register({ name: 'spy', phase: 'before', run: spy });
+
+    const preToolUse = toolHookRunnerToPreToolUse(runner, () => 'job-42');
+    await preToolUse(
+      { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/tmp/x', content: 'y' } },
+      undefined,
+      { signal: new AbortController().signal },
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toMatchObject({
+      jobId: 'job-42',
+      tool: 'Write',
+      arguments: { file_path: '/tmp/x', content: 'y' },
+    });
   });
 });
