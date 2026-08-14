@@ -213,6 +213,33 @@ export const DEFAULT_COOLDOWN_CONFIG: CooldownConfig = {
   reputationDir: '~/.zora/agent-reputation',
 };
 
+/**
+ * Build a CooldownConfig from the raw `[cooldown]` config table (SEC-29).
+ *
+ * Lives here rather than in an entry point because a global singleton that
+ * each entry point configures for itself is a global singleton that some
+ * entry point will forget. `zora-agent ask` did: `initGlobalCooldown` was
+ * called only from the daemon, so `getGlobalCooldown()` returned null on the
+ * ask path and the subagent cooldown never applied there.
+ */
+export function cooldownConfigFrom(raw: unknown): CooldownConfig {
+  const table = (raw as Record<string, unknown> | undefined) ?? undefined;
+  const num = (key: string, fallback: number): number => {
+    const value = table?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  };
+  if (!table) return { ...DEFAULT_COOLDOWN_CONFIG };
+  return {
+    ...DEFAULT_COOLDOWN_CONFIG,
+    enabled: (table['enabled'] as boolean) ?? false,
+    level1Threshold: num('level1_threshold', 3),
+    level2Threshold: num('level2_threshold', 6),
+    shutdownThreshold: num('shutdown_threshold', 10),
+    resetAfterHours: num('reset_after_hours', 24),
+    level1DelayMs: num('level1_delay_ms', 2000),
+  };
+}
+
 // Module-level singleton for global access across the process
 let _globalCooldown: AgentCooldown | null = null;
 

@@ -32,8 +32,6 @@ import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 import { ApprovalQueue, DEFAULT_APPROVAL_CONFIG } from '../core/approval-queue.js';
-import { initGlobalCooldown, DEFAULT_COOLDOWN_CONFIG } from '../core/agent-cooldown.js';
-import { initGlobalForecaster, DEFAULT_FORECASTER_CONFIG } from '../core/memory-risk-forecaster.js';
 import { runSecurityAuditSilent } from './security-commands.js';
 import { TelegramGateway, type TelegramConfig } from '../steering/telegram-gateway.js';
 
@@ -157,42 +155,10 @@ async function main() {
     log.info({ passCount: auditReport.passCount, warnCount: auditReport.warnCount }, 'Security audit passed');
   }
 
-  // Initialize AgentCooldown singleton before orchestrator so subagent-tool can pick it up
-  const cooldownConfig = (config as unknown as Record<string, unknown>)['cooldown'] as Record<string, unknown> | undefined;
-  initGlobalCooldown({
-    ...DEFAULT_COOLDOWN_CONFIG,
-    ...(cooldownConfig ? {
-      enabled: (cooldownConfig['enabled'] as boolean) ?? false,
-      level1Threshold: (typeof cooldownConfig['level1_threshold'] === 'number' && Number.isFinite(cooldownConfig['level1_threshold']))
-        ? cooldownConfig['level1_threshold'] : 3,
-      level2Threshold: (typeof cooldownConfig['level2_threshold'] === 'number' && Number.isFinite(cooldownConfig['level2_threshold']))
-        ? cooldownConfig['level2_threshold'] : 6,
-      shutdownThreshold: (typeof cooldownConfig['shutdown_threshold'] === 'number' && Number.isFinite(cooldownConfig['shutdown_threshold']))
-        ? cooldownConfig['shutdown_threshold'] : 10,
-      resetAfterHours: (typeof cooldownConfig['reset_after_hours'] === 'number' && Number.isFinite(cooldownConfig['reset_after_hours']))
-        ? cooldownConfig['reset_after_hours'] : 24,
-      level1DelayMs: (typeof cooldownConfig['level1_delay_ms'] === 'number' && Number.isFinite(cooldownConfig['level1_delay_ms']))
-        ? cooldownConfig['level1_delay_ms'] : 2000,
-    } : {}),
-  });
-
-  // Initialize MemoryRiskForecaster singleton before orchestrator
-  const forecasterConfig = (config as unknown as Record<string, unknown>)['risk_forecaster'] as Record<string, unknown> | undefined;
-  initGlobalForecaster({
-    ...DEFAULT_FORECASTER_CONFIG,
-    ...(forecasterConfig ? {
-      enabled: (forecasterConfig['enabled'] as boolean) ?? false,
-      interceptThreshold: (typeof forecasterConfig['intercept_threshold'] === 'number' && Number.isFinite(forecasterConfig['intercept_threshold']))
-        ? forecasterConfig['intercept_threshold']
-        : 72,
-      autoDenyThreshold: (typeof forecasterConfig['auto_deny_threshold'] === 'number' && Number.isFinite(forecasterConfig['auto_deny_threshold']))
-        ? forecasterConfig['auto_deny_threshold']
-        : 88,
-      maxEvents: (typeof forecasterConfig['max_events'] === 'number' && Number.isFinite(forecasterConfig['max_events']))
-        ? forecasterConfig['max_events']
-        : 50,
-    } : {}),
-  });
+  // SEC-29: AgentCooldown and MemoryRiskForecaster are initialized in
+  // Orchestrator.boot() now, not here. Configuring a process-global singleton
+  // from one entry point is how `zora-agent ask` ended up without either of
+  // them while the daemon had both.
 
   // Initialize ApprovalQueue BEFORE orchestrator boot so the send handler
   // is in place if any actions arrive during the startup window.

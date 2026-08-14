@@ -245,6 +245,30 @@ export const DEFAULT_FORECASTER_CONFIG: ForecasterConfig = {
   stateDir: '~/.zora/session-risk',
 };
 
+/**
+ * Build a ForecasterConfig from the raw `[risk_forecaster]` config table (SEC-29).
+ *
+ * See `cooldownConfigFrom` — same reasoning. This one mattered more: with no
+ * forecaster the `IrreversibilityScorerHook` skips its session-risk block
+ * entirely, so `shouldAutoDeny` never fires and a run that the daemon would
+ * have stopped for a critical risk pattern proceeded under `ask`.
+ */
+export function forecasterConfigFrom(raw: unknown): ForecasterConfig {
+  const table = (raw as Record<string, unknown> | undefined) ?? undefined;
+  const num = (key: string, fallback: number): number => {
+    const value = table?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  };
+  if (!table) return { ...DEFAULT_FORECASTER_CONFIG };
+  return {
+    ...DEFAULT_FORECASTER_CONFIG,
+    enabled: (table['enabled'] as boolean) ?? false,
+    interceptThreshold: num('intercept_threshold', 72),
+    autoDenyThreshold: num('auto_deny_threshold', 88),
+    maxEvents: num('max_events', 50),
+  };
+}
+
 // Module-level singleton
 let _globalForecaster: MemoryRiskForecaster | null = null;
 

@@ -2251,6 +2251,52 @@
       },
       "release_gate": true,
       "claimed_by": "agent-main"
+    },
+    {
+      "id": "SEC-29",
+      "category": "security",
+      "title": "Enforcement singletons initialized only in the daemon — `ask` ran with no session-risk forecaster or cooldown",
+      "severity": "S1",
+      "files_affected": 4,
+      "impact": 8,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "completed",
+      "detail_file": "tests/security/singleton-parity.test.ts",
+      "wsjf": {
+        "usability_value": 6,
+        "wiring_impact": 9,
+        "security_risk": 9,
+        "time_criticality": 7,
+        "job_size": 1,
+        "score": 31
+      },
+      "release_gate": true,
+      "claimed_by": "agent-main"
+    },
+    {
+      "id": "ARCH-01",
+      "category": "testing",
+      "title": "No guard against stranded modules — a file reachable from no entry point still passes its own tests",
+      "severity": "S2",
+      "files_affected": 2,
+      "impact": 7,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "completed",
+      "detail_file": "tests/unit/architecture/module-reachability.test.ts",
+      "wsjf": {
+        "usability_value": 7,
+        "wiring_impact": 10,
+        "security_risk": 5,
+        "time_criticality": 6,
+        "job_size": 1,
+        "score": 28
+      },
+      "release_gate": false,
+      "claimed_by": "agent-main"
     }
   ]
 }
