@@ -30,6 +30,7 @@ import {
   isTextEvent, isToolCallEvent, isToolResultEvent, isSteeringEvent,
 } from '../types.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+import { buildZoraMcpServer } from '../tools/zora-mcp-server.js';
 
 // ─── SDK types (re-exported for test fixture typing) ────────────────
 
@@ -275,22 +276,26 @@ export class ClaudeProvider implements LLMProvider {
       systemPrompt: task.systemPrompt || this._systemPrompt,
     };
 
+    // SDK-01: register Zora's tools as an in-process MCP server. The previous
+    // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
+    // so every Zora tool was dropped before it reached the model (and the .map()
+    // stripped `handler`, so even a passthrough could not have executed).
+    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
+    if (Object.keys(mcpServers).length > 0) {
+      sdkOptions['mcpServers'] = mcpServers;
+    }
+
+    // An allowlist is a filter, not a registry: when `_allowedTools` is empty we
+    // leave `allowedTools` unset so the SDK permits everything (built-ins and the
+    // zora-tools MCP server alike). When it is set, the Zora tools have to be
+    // named explicitly or the filter would drop them.
     if (this._allowedTools.length > 0) {
-      sdkOptions['allowedTools'] = this._allowedTools;
+      sdkOptions['allowedTools'] = [...this._allowedTools, ...zoraToolNames];
     }
 
     // Wire policy enforcement into the SDK
     if (task.canUseTool) {
       sdkOptions['canUseTool'] = task.canUseTool;
-    }
-
-    // Forward custom tools from TaskContext (memory tools, permissions, etc.)
-    if (task.customTools && task.customTools.length > 0) {
-      sdkOptions['customTools'] = task.customTools.map(t => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema,
-      }));
     }
 
     // Build the prompt from task context

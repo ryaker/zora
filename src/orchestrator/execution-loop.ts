@@ -9,7 +9,6 @@
 
 import {
   query,
-  createSdkMcpServer,
   type PermissionMode,
   type HookCallback,
   type CanUseTool,
@@ -17,6 +16,7 @@ import {
   type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
+import { buildZoraMcpServer, type CustomToolDefinition } from '../tools/zora-mcp-server.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('execution-loop');
@@ -38,15 +38,11 @@ export interface SdkHookMatcher {
  * Custom tool that Zora can inject into the SDK execution.
  * Used for Zora-specific tools like check_permissions and request_permissions.
  *
- * These are registered as an in-process MCP server via createSdkMcpServer(),
- * which is the SDK's supported mechanism for custom tools.
+ * SDK-01: the definition now lives in `src/tools/zora-mcp-server.ts` alongside
+ * the builder that turns it into a real SDK tool. Re-exported here because most
+ * of the codebase imports it from this module.
  */
-export interface CustomToolDefinition {
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  handler: (input: Record<string, unknown>) => Promise<unknown>;
-}
+export type { CustomToolDefinition };
 
 /**
  * ORCH-14: Callback to transform/prune the event history before it's used.
@@ -135,35 +131,13 @@ export class ExecutionLoop {
     let result = '';
     let sessionId: string | undefined;
 
-    // Register custom tools as an in-process MCP server (the SDK's supported mechanism).
-    // The old approach of passing { customTools } to sdkOptions was silently ignored.
-    const mcpServers: Record<string, McpServerConfig> = {
-      ...(this._opts.mcpServers as Record<string, McpServerConfig> ?? {}),
-    };
-
-    const customTools = this._opts.customTools ?? [];
-    const customToolNames: string[] = [];
-    if (customTools.length > 0) {
-      const toolDefs = customTools.map(t => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.input_schema as Record<string, unknown>,
-        handler: async (args: Record<string, unknown>) => {
-          const result = await t.handler(args);
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify(result) }],
-          };
-        },
-      }));
-
-      mcpServers['zora-tools'] = createSdkMcpServer({
-        name: 'zora-tools',
-        version: '1.0.0',
-        tools: toolDefs,
-      });
-
-      customToolNames.push(...customTools.map(t => `mcp__zora-tools__${t.name}`));
-    }
+    // SDK-01: register custom tools as an in-process MCP server (the SDK's only
+    // supported mechanism). Shared with ClaudeProvider via buildZoraMcpServer so
+    // the two execution paths cannot drift apart again.
+    const { mcpServers, toolNames: customToolNames } = buildZoraMcpServer(
+      this._opts.customTools,
+      this._opts.mcpServers as Record<string, McpServerConfig> | undefined,
+    );
 
     const sdkOptions: Record<string, unknown> = {
       // INVARIANT-2: apply channel toolAllowlist filter before SDK invocation
