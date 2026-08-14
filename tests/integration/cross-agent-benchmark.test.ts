@@ -103,7 +103,33 @@ describe('cross-agent-benchmark', () => {
     expect(coderMsgs[1]!.type).toBe('result');
   });
 
-  it('measures parallel vs serial posting timing', async () => {
+  /**
+   * TEST-20: this used to assert `parallelTime < serialTime * 5`.
+   *
+   * Both numbers are wall-clock samples over filesystem round trips that take
+   * about a millisecond each when the machine is idle, so the threshold was a
+   * handful of milliseconds wide — one scheduler preemption or writeback stall
+   * inside the parallel half crossed it. Under a full-suite run the test runner
+   * *is* the contention, which is why it only failed there. Measured under CPU
+   * and disk load: serial ~1.4ms (budget ~7ms) against a parallel half that
+   * routinely took 6-11ms — 13 failures in 30 consecutive runs. No wider
+   * tolerance is defensible either; 5x of one millisecond is 5x of noise.
+   *
+   * Nor can "the sends really overlapped" be asserted from the outside: with
+   * `Promise.all`, the second send is always *initiated* before the first
+   * resolves, even if `send` does all its work synchronously — mutating
+   * Mailbox.send to be fully synchronous, and separately to serialise behind a
+   * mutex, left an interval-overlap check passing in both cases. Anything that
+   * genuinely distinguishes concurrent I/O from sequential I/O is a wall-clock
+   * measurement, i.e. the flake.
+   *
+   * So what is asserted here is the property that concurrent posting has to
+   * hold regardless of speed: every message issued in parallel arrives, in
+   * order, in the right inbox, with nothing lost to a read-modify-write race.
+   * The timings are still measured and reported — they just do not fail the
+   * build.
+   */
+  it('delivers every message when posts are issued in parallel', async () => {
     await manager.createTeam(
       'timing-team',
       [
@@ -115,13 +141,12 @@ describe('cross-agent-benchmark', () => {
 
     const sender = new Mailbox(path.join(tmpDir, 'teams'), 'bench');
 
-    // Serial timing
+    // Serial baseline — reported, not asserted on.
     const serialStart = performance.now();
     await sender.send('timing-team', 'fast-1', { text: 'task-serial-1', type: 'task' });
     await sender.send('timing-team', 'fast-2', { text: 'task-serial-2', type: 'task' });
     const serialTime = performance.now() - serialStart;
 
-    // Parallel timing (sending additional messages)
     const parallelStart = performance.now();
     await Promise.all([
       sender.send('timing-team', 'fast-1', { text: 'task-parallel-1', type: 'task' }),
@@ -129,15 +154,21 @@ describe('cross-agent-benchmark', () => {
     ]);
     const parallelTime = performance.now() - parallelStart;
 
-    // Both should complete; parallel should not be dramatically slower
-    expect(parallelTime).toBeLessThan(serialTime * 5);
+    // eslint-disable-next-line no-console
+    console.log(
+      `cross-agent posting: serial ${serialTime.toFixed(2)}ms, parallel ${parallelTime.toFixed(2)}ms`,
+    );
 
     const fast1 = new Mailbox(path.join(tmpDir, 'teams'), 'fast-1');
     const fast2 = new Mailbox(path.join(tmpDir, 'teams'), 'fast-2');
     const all1 = await fast1.getAllMessages('timing-team');
     const all2 = await fast2.getAllMessages('timing-team');
-    expect(all1).toHaveLength(2);
-    expect(all2).toHaveLength(2);
+
+    // Nothing dropped, nothing reordered, nothing delivered to the wrong inbox.
+    expect(all1.map((m) => m.text)).toEqual(['task-serial-1', 'task-parallel-1']);
+    expect(all2.map((m) => m.text)).toEqual(['task-serial-2', 'task-parallel-2']);
+    expect(all1.every((m) => m.from === 'bench' && m.type === 'task')).toBe(true);
+    expect(all2.every((m) => m.from === 'bench' && m.type === 'task')).toBe(true);
   });
 
   it('full lifecycle: create -> assign -> execute -> synthesize -> teardown', async () => {

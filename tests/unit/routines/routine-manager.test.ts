@@ -28,8 +28,43 @@ vi.mock('../../../src/utils/logger.js', () => {
   };
 });
 
+/**
+ * TEST-20: rewrite the watched file until the routine fires.
+ *
+ * The file watcher only reports a change once it has a previous mtime to
+ * compare against, and it records that baseline on its first poll. Sleeping 80
+ * ms and writing once assumes the baseline poll won that race — when it does
+ * not, the write silently *becomes* the baseline, no change is ever reported,
+ * and the (correctly deadline-bounded) wait that follows spins out and fails.
+ * Rewriting until the routine fires removes the ordering assumption.
+ */
+async function touchUntilFired(
+  filePath: string,
+  fired: () => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let n = 0;
+  while (!fired()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${filePath} change to fire`);
+    }
+    await fs.writeFile(filePath, `change-${n++}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 describe('RoutineManager', () => {
-  const testDir = path.join(os.tmpdir(), 'zora-routines-test');
+  // TEST-20: this was the fixed path `${tmpdir}/zora-routines-test`, shared by
+  // every process on the machine. `beforeEach` rm -rf's it, so a second vitest
+  // run — a parallel CI job, a second checkout, another agent's worktree —
+  // deletes the directory out from under a test that is mid-write, which shows
+  // up as an ENOENT on a file the test just created. Observed exactly that
+  // while stress-running the suite alongside other work on the same box.
+  const testDir = path.join(
+    os.tmpdir(),
+    `zora-routines-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   let manager: RoutineManager;
   let submitTaskMock: ReturnType<typeof vi.fn>;
 
@@ -203,15 +238,7 @@ prompt = "should not run"
     expect(manager.watchedCount).toBe(1);
     expect(manager.scheduledCount).toBe(0);
 
-    // Allow polling to baseline mtimes
-    await new Promise((r) => setTimeout(r, 80));
-    await fs.writeFile(watchFile, 'changed');
-
-    // Wait up to 2s for the callback rather than sleeping a fixed duration
-    const deadline = Date.now() + 2000;
-    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await touchUntilFired(watchFile, () => submitTaskMock.mock.calls.length > 0);
 
     expect(submitTaskMock).toHaveBeenCalledWith({
       prompt: 'file changed',
@@ -248,15 +275,7 @@ prompt = "handle change"
     expect(manager.watchedCount).toBe(1);
     expect(manager.scheduledCount).toBe(0);
 
-    // Allow polling to baseline
-    await new Promise((r) => setTimeout(r, 80));
-    await fs.writeFile(watchFile, 'v1');
-
-    // Wait up to 2s for the callback rather than sleeping a fixed duration
-    const deadline = Date.now() + 2000;
-    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await touchUntilFired(watchFile, () => submitTaskMock.mock.calls.length > 0);
 
     expect(submitTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: 'handle change' }),
@@ -320,14 +339,7 @@ prompt = "will not register"
       task: { prompt: 'free event task' },
     });
 
-    await new Promise((r) => setTimeout(r, 80));
-    await fs.writeFile(watchFile, 'changed');
-
-    // Wait up to 2s for the callback rather than sleeping a fixed duration
-    const deadline = Date.now() + 2000;
-    while (submitTaskMock.mock.calls.length === 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await touchUntilFired(watchFile, () => submitTaskMock.mock.calls.length > 0);
 
     expect(submitTaskMock).toHaveBeenCalledWith({
       prompt: 'free event task',
