@@ -37,6 +37,14 @@ export interface SupervisedPoller {
   setOnPollComplete(callback: () => void | Promise<void>): void;
 }
 
+/**
+ * ERR-21: how far ahead of now a heartbeat may legitimately be.
+ *
+ * Covers an NTP step or a slightly fast clock between the write and the read.
+ * Anything beyond it is a damaged or forged file, not a clock difference.
+ */
+const MAX_CLOCK_SKEW_MS = 60_000;
+
 export interface BridgeWatchdogOptions {
   healthCheckIntervalMs: number;
   maxStaleMs: number;
@@ -263,8 +271,26 @@ export class BridgeWatchdog {
 
     const record = parsed as Record<string, unknown>;
     const lastHeartbeat = record.lastHeartbeat;
-    if (typeof lastHeartbeat !== 'string' || !Number.isFinite(new Date(lastHeartbeat).getTime())) {
-      return { ok: false, reason: 'unusable', detail: 'lastHeartbeat missing or not a valid date' };
+    if (typeof lastHeartbeat !== 'string') {
+      return { ok: false, reason: 'unusable', detail: 'lastHeartbeat missing or not a string' };
+    }
+    const beatMs = new Date(lastHeartbeat).getTime();
+    if (!Number.isFinite(beatMs)) {
+      return { ok: false, reason: 'unusable', detail: 'lastHeartbeat is not a valid date' };
+    }
+    // ERR-21 follow-up (review finding): a *future* heartbeat is the same
+    // fail-open in a different costume. It parses, so the check above waved it
+    // through; `_check()` then computes a negative elapsed time, and
+    // `elapsed > maxStaleMs` stays false until that timestamp arrives. A health
+    // file dated next year therefore disables restart detection for a year,
+    // silently — which is precisely what this gap was about. Only a small skew
+    // allowance is legitimate, for a clock that stepped between write and read.
+    if (beatMs - Date.now() > MAX_CLOCK_SKEW_MS) {
+      return {
+        ok: false,
+        reason: 'unusable',
+        detail: `lastHeartbeat is ${Math.round((beatMs - Date.now()) / 1000)}s in the future`,
+      };
     }
 
     const restartCount = typeof record.restartCount === 'number' && Number.isFinite(record.restartCount)

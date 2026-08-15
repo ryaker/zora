@@ -65,10 +65,17 @@ export class ApprovalQueue {
     score: number;
     jobId: string;
     tool: string;
+    /**
+     * SEC-27 (review finding): set when `score` is not a per-action
+     * irreversibility score and so cannot be compared against the blanket
+     * ceiling, which is configured from the per-action flag threshold.
+     * Such a request always asks a human.
+     */
+    bypassBlanketAllow?: boolean;
   }): Promise<boolean> {
     // Check blanket allow window (session-scoped uses boolean to avoid Date(Infinity) crash)
     const blanketActive = this._blanketSessionScoped || Date.now() < this._blanketAllowUntil;
-    if (blanketActive && opts.score < this._blanketMaxScore) {
+    if (blanketActive && !opts.bypassBlanketAllow && opts.score < this._blanketMaxScore) {
       log.info({ tool: opts.tool, score: opts.score }, 'Action covered by blanket allow');
       return true;
     }
@@ -244,8 +251,16 @@ export function approvalConfigFrom(raw: unknown): ApprovalConfig {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_APPROVAL_CONFIG };
   const block = raw as Record<string, unknown>;
 
+  // SEC-27 (review finding): `setTimeout` clamps a delay above 2^31-1 ms to 1,
+  // so an over-large timeout_s fires the auto-deny timer immediately and every
+  // approval request is refused at once — the same failure the `0` case is
+  // rejected for, reached from the opposite end. Both fall back to the default.
+  const MAX_TIMEOUT_MS = 2_147_483_647;
   const timeoutSeconds = block['timeout_s'];
-  const seconds = typeof timeoutSeconds === 'number' && Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+  const seconds = typeof timeoutSeconds === 'number'
+    && Number.isFinite(timeoutSeconds)
+    && timeoutSeconds > 0
+    && timeoutSeconds * 1000 <= MAX_TIMEOUT_MS
     ? timeoutSeconds
     : DEFAULT_APPROVAL_CONFIG.timeoutMs / 1000;
 

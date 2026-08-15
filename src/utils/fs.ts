@@ -61,7 +61,7 @@ export async function withFileLock<T>(
       if (observed !== null) {
         const age = await lockAge(lockPath);
         if (age !== null && age > staleMs) {
-          await stealStaleLock(lockPath, observed, staleMs);
+          await stealStaleLock(lockPath, observed, staleMs, holderId);
           // Deliberately falls through to the deadline check and the poll
           // below rather than retrying immediately. The steal is not
           // guaranteed to have removed anything — another waiter may hold the
@@ -125,11 +125,23 @@ export async function withFileLock<T>(
  * means waiters time out loudly rather than double-acquire silently — the
  * failure direction this whole gap is about.
  */
-async function stealStaleLock(lockPath: string, observedHolder: string, staleMs: number): Promise<void> {
+async function stealStaleLock(
+  lockPath: string,
+  observedHolder: string,
+  staleMs: number,
+  holderId: string,
+): Promise<void> {
   const recoveryPath = `${lockPath}.recover`;
   let handle: fs.promises.FileHandle;
   try {
     handle = await fs.promises.open(recoveryPath, 'wx');
+    // ERR-22 (review finding): stamp the marker so its owner is verifiable.
+    // Without this the cleanup below removed whatever marker happened to be
+    // there, so a waiter that had its own marker aged out could delete a live
+    // one and let a second waiter into the recovery region — reopening the
+    // double-steal this function exists to close. Same identity check the main
+    // lock already uses on release.
+    await handle.writeFile(holderId, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     // Someone else is recovering, or died while doing so. Clear an aged marker
@@ -152,7 +164,15 @@ async function stealStaleLock(lockPath: string, observedHolder: string, staleMs:
     }
   } finally {
     await handle.close();
-    await fs.promises.rm(recoveryPath, { force: true }).catch(() => { /* already gone */ });
+    // Only remove the marker if it is still ours. Coverage note: the guard in
+    // fs.test.ts proves a *live* marker owned by someone else is left alone,
+    // which is the reachable case. It does not reproduce the narrower one where
+    // our own marker is replaced while we are inside this region — the same
+    // interleaving that could not be reproduced for the steal race itself. The
+    // check costs one read and mirrors the main lock's release, so it stays.
+    if ((await readLockHolder(recoveryPath)) === holderId) {
+      await fs.promises.rm(recoveryPath, { force: true }).catch(() => { /* already gone */ });
+    }
   }
 }
 

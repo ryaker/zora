@@ -144,6 +144,39 @@ describe('INVARIANT-10 — webhook signature validation', () => {
     expect(adapter.deliveries).toEqual([]);
   });
 
+  /**
+   * INVARIANT-10 (review finding): an unbounded dispatch never completes the
+   * HTTP response, so Telegram gives up and redelivers the same update while
+   * the first call is still running. 503 is retryable and honest — we do not
+   * know whether the update was processed.
+   *
+   * The stall is held open explicitly rather than simulated with a long sleep,
+   * so the test measures the server's ceiling rather than a race with it.
+   */
+  it('answers retryable when the adapter dispatch does not return in time', async () => {
+    let release: (() => void) | null = null;
+    const stalled = spyAdapter('telegram');
+    stalled.handleWebhook = async () =>
+      new Promise<Response>((resolve) => {
+        release = () => resolve(new Response('late', { status: 200 }));
+      });
+
+    const validators = new WebhookValidatorRegistry();
+    validators.register(createTelegramValidator(SECRET));
+    await server?.stop();
+    await boot(validators, [stalled]);
+
+    // Shrink the ceiling for the test rather than waiting out the real 25s.
+    (WebhookServer as unknown as { DISPATCH_TIMEOUT_MS: number }).DISPATCH_TIMEOUT_MS = 150;
+    try {
+      const res = await post('telegram', { update_id: 9 }, { [TELEGRAM_SECRET_TOKEN_HEADER]: SECRET });
+      expect(res.status).toBe(503);
+    } finally {
+      (WebhookServer as unknown as { DISPATCH_TIMEOUT_MS: number }).DISPATCH_TIMEOUT_MS = 25_000;
+      release?.();
+    }
+  }, 30_000);
+
   it('serves health without authentication', async () => {
     // The liveness probe is the one route that must answer unauthenticated —
     // and it must not be a way to reach an adapter.

@@ -365,6 +365,58 @@ describe('BridgeWatchdog', () => {
     expect(healed.restartCount).toBe(1);
   }, 30_000);
 
+  /**
+   * ERR-21 follow-up (review finding): the same fail-open in a different
+   * costume. A future timestamp parses, so the shape check waved it through;
+   * `_check()` then computed a negative elapsed time and `elapsed > maxStaleMs`
+   * stayed false until that date arrived. A health file dated next year
+   * disabled restart detection for a year, silently.
+   */
+  it('restarts the bridge when the heartbeat is dated in the future', async () => {
+    const watchdog = new BridgeWatchdog(mockBridge, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 3_600_000,
+      maxRestarts: 5,
+      stateDir,
+    });
+    await watchdog.start();
+    try {
+      await realSleep(100);
+      expect(stopCalls()).toBe(0);
+
+      await fs.writeFile(
+        path.join(stateDir, 'bridge-health.json'),
+        JSON.stringify({ lastHeartbeat: new Date(Date.now() + 86_400_000 * 365).toISOString(), restartCount: 0 }),
+        'utf8',
+      );
+      await until(() => stopCalls() >= 1, 'the future-dated heartbeat to stop the bridge');
+    } finally {
+      watchdog.stop();
+    }
+  }, 30_000);
+
+  /** A clock that stepped slightly forward is not a damaged file. */
+  it('tolerates a heartbeat a few seconds ahead of now', async () => {
+    const watchdog = new BridgeWatchdog(mockBridge, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 3_600_000,
+      maxRestarts: 5,
+      stateDir,
+    });
+    await watchdog.start();
+    try {
+      await fs.writeFile(
+        path.join(stateDir, 'bridge-health.json'),
+        JSON.stringify({ lastHeartbeat: new Date(Date.now() + 5_000).toISOString(), restartCount: 0 }),
+        'utf8',
+      );
+      await realSleep(200);
+      expect(stopCalls(), 'a 5s clock skew must not read as a damaged file').toBe(0);
+    } finally {
+      watchdog.stop();
+    }
+  }, 30_000);
+
   it('starts and stops cleanly', async () => {
     const watchdog = new BridgeWatchdog(mockBridge, { healthCheckIntervalMs: 10000, maxStaleMs: 50000, maxRestarts: 3, stateDir });
     await watchdog.start();

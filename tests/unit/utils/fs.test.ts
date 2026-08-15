@@ -216,6 +216,27 @@ describe('withFileLock — concurrent recovery of an abandoned lock', () => {
     expect(fs.existsSync(`${target}.lock.recover`)).toBe(false);
   }, 30_000);
 
+  /**
+   * ERR-22 (review finding): the marker was created with `wx` but carried no
+   * holder id, so cleanup removed whatever marker happened to be there. A
+   * waiter whose own marker had aged out could therefore delete a live one and
+   * let a second waiter into the recovery region — reopening the double-steal
+   * this mechanism closes. It now carries the holder id and is only removed
+   * when it still matches.
+   */
+  it('does not remove a recovery marker belonging to someone else', async () => {
+    abandonLock(`${target}.lock`);
+    // A live marker owned by another waiter, written after ours would have been.
+    fs.writeFileSync(`${target}.lock.recover`, 'another-waiter-holder-id', 'utf8');
+
+    await expect(
+      withFileLock(target, async () => 'acquired', { staleMs: STALE_MS, timeoutMs: 300 }),
+    ).rejects.toThrow(/timed out/);
+
+    // Still theirs, byte for byte.
+    expect(fs.readFileSync(`${target}.lock.recover`, 'utf8')).toBe('another-waiter-holder-id');
+  }, 30_000);
+
   it('leaves no recovery marker behind once recovery is done', async () => {
     abandonLock(`${target}.lock`);
 

@@ -211,6 +211,35 @@ describe('SEC-27 — a flagged tool call escalates to the approval queue', () =>
 });
 
 /**
+ * SEC-27 (review finding): a session-risk escalation must never be swallowed by
+ * the blanket-allow window.
+ *
+ * `_requestApproval` passes the forecaster's *composite* session score, while
+ * the blanket ceiling is configured from the *per-action* flag threshold. They
+ * are different scales, so with `auto_approve_low_risk` on, an elevated-risk
+ * session intercept whose composite fell under 65 was auto-approved with no
+ * human asked and only a log line to show for it.
+ */
+describe('SEC-27 — session-risk escalation bypasses the blanket allow', () => {
+  it('asks a human even when a blanket allow covers the score', async () => {
+    const queue = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 5_000 });
+    queue.setSessionBlanketAllow(65);
+
+    // A per-action score under the ceiling is what the blanket is for.
+    await expect(
+      queue.request({ action: 'read_file', score: 5, jobId: 'j', tool: 'read' }),
+    ).resolves.toBe(true);
+
+    // The same number as a session composite must not be waved through. No send
+    // handler is registered, so an un-blanketed request auto-denies — which is
+    // the observable difference between "asked" and "silently allowed".
+    await expect(
+      queue.request({ action: 'read_file', score: 5, jobId: 'j', tool: 'read', bypassBlanketAllow: true }),
+    ).resolves.toBe(false);
+  });
+});
+
+/**
  * The `[approval]` block is user-editable TOML that decides whether the agent
  * stops to ask. How it reads a wrong value is part of the enforcement surface.
  * This parser was inline in `cli/daemon.ts`; moving it to `approval-queue.ts`
@@ -232,6 +261,17 @@ describe('SEC-27 — approvalConfigFrom falls back instead of weakening the gate
     expect(approvalConfigFrom({ enabled: 'true' }).enabled).toBe(false);
     expect(approvalConfigFrom({ enabled: 1 }).enabled).toBe(false);
     expect(approvalConfigFrom({}).enabled).toBe(false);
+  });
+
+  it('rejects a timeout large enough to make setTimeout fire immediately', () => {
+    // Review finding: Node clamps a delay above 2^31-1 ms to 1, so an
+    // over-large timeout_s fires the auto-deny timer at once and every request
+    // is refused — the same failure the `0` case is rejected for, reached from
+    // the other end.
+    expect(approvalConfigFrom({ timeout_s: 3_000_000 }).timeoutMs).toBe(DEFAULT_APPROVAL_CONFIG.timeoutMs);
+    expect(approvalConfigFrom({ timeout_s: Number.MAX_SAFE_INTEGER }).timeoutMs).toBe(DEFAULT_APPROVAL_CONFIG.timeoutMs);
+    // Just inside the limit is still honoured.
+    expect(approvalConfigFrom({ timeout_s: 2_000_000 }).timeoutMs).toBe(2_000_000_000);
   });
 
   it('rejects a timeout that would auto-deny instantly or never', () => {

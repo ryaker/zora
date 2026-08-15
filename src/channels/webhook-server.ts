@@ -39,6 +39,17 @@ export class WebhookServer {
   private readonly _validators: WebhookValidatorRegistry;
   private _server: Server | null = null;
 
+  /**
+   * INVARIANT-10 (review finding): ceiling on one adapter dispatch.
+   *
+   * `handleWebhook` runs the whole inbound pipeline inline — quarantine calls
+   * an LLM — and an unbounded await means the HTTP response never completes if
+   * that stalls. Telegram gives up and redelivers the same `update_id`, so a
+   * stalled update gets processed twice, the second time while the first is
+   * still running. Answering 503 keeps the retry but bounds the overlap.
+   */
+  private static readonly DISPATCH_TIMEOUT_MS = 25_000;
+
   constructor(manager: ChannelManager, validators: WebhookValidatorRegistry, port = 8080) {
     this._app = express();
     this._port = port;
@@ -177,9 +188,31 @@ export class WebhookServer {
           body: rawBody,
         });
 
-        const response = await adapter.handleWebhook(request);
-        const text = await response.text();
-        res.status(response.status).send(text);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), WebhookServer.DISPATCH_TIMEOUT_MS);
+        });
+        let outcome: Response | 'timeout';
+        try {
+          outcome = await Promise.race([adapter.handleWebhook(request), timeout]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+
+        if (outcome === 'timeout') {
+          // The dispatch is still running; it is not cancellable, so this only
+          // frees the connection. 503 is retryable, which is the honest answer:
+          // we do not know whether the update was processed.
+          log.error(
+            { platform, timeoutMs: WebhookServer.DISPATCH_TIMEOUT_MS },
+            'Webhook dispatch timed out — answering retryable while it continues in the background',
+          );
+          res.status(503).json({ error: 'Dispatch timed out' });
+          return;
+        }
+
+        const text = await outcome.text();
+        res.status(outcome.status).send(text);
       } catch (err) {
         // A failure inside the adapter must not surface as a 2xx: Telegram
         // retries on a non-2xx, and reporting success would drop the update.

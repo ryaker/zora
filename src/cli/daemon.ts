@@ -312,12 +312,20 @@ async function main() {
       const telegramWebhookSecret =
         telegramConfig?.webhook_secret || process.env['TELEGRAM_WEBHOOK_SECRET_TOKEN'];
       if (telegramWebhookMode && !telegramWebhookSecret) {
-        throw new Error(
+        // INVARIANT-10 (review finding): this must not be a `throw`. It sits
+        // inside the try that wraps channel initialisation, whose catch logs
+        // and lets startup continue — so a throw here silently disabled Signal,
+        // Telegram and every team channel while the operator was told the
+        // daemon "refuses to start". Fail-closed held by luck (webhookServer is
+        // constructed later and never reached); the failure mode was wrong.
+        // Exit, which is what the documentation promises.
+        log.fatal(
           'steering.telegram.mode = "webhook" requires steering.telegram.webhook_secret ' +
             '(or TELEGRAM_WEBHOOK_SECRET_TOKEN). Without it the webhook endpoint cannot tell a ' +
             'genuine Telegram delivery from anyone who finds the URL, so Zora will not open one. ' +
             'Use the same value in setWebhook. Set mode = "polling" if you do not want a webhook.',
         );
+        process.exit(1);
       }
 
       if (telegramConfig?.enabled) {

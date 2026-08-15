@@ -142,6 +142,7 @@ export class IrreversibilityScorerHook implements ToolHook {
     ctx: ToolCallContext,
     score: number,
     reason: string,
+    options: { bypassBlanketAllow?: boolean } = {},
   ): Promise<ToolHookResult> {
     const queue = this._approvalQueue;
     if (!queue?.isEnabled()) {
@@ -153,6 +154,7 @@ export class IrreversibilityScorerHook implements ToolHook {
       score,
       jobId: ctx.jobId,
       tool: ctx.tool,
+      ...(options.bypassBlanketAllow ? { bypassBlanketAllow: true } : {}),
     });
 
     if (approved) {
@@ -229,10 +231,17 @@ export class IrreversibilityScorerHook implements ToolHook {
         // SEC-27: the session-risk intercept emits the same reason class and so
         // gets the same gate. The composite score — not the per-action score —
         // is what the approver is shown, since the composite is what tripped it.
+        // SEC-27 (review finding): the composite is a *session* risk score and
+        // the blanket-allow ceiling is configured from the *per-action* flag
+        // threshold — different scales. Without this, `auto_approve_low_risk`
+        // silently auto-approved an elevated-risk session intercept whenever
+        // the composite happened to fall under 65, and the warning above was
+        // the only trace. A session intercept always asks a human.
         return await this._requestApproval(
           ctx,
           riskScores.composite,
           `approval_required:${riskScores.composite} (session risk — ${forecaster.getSummary(ctx.jobId)})`,
+          { bypassBlanketAllow: true },
         );
       }
     }

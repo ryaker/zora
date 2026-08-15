@@ -132,23 +132,43 @@ export class MailboxChannelAdapter implements IChannelAdapter {
     this._polling = true;
     try {
       const messages = await this._mailbox.receive(this._teamName);
-      for (const message of messages) {
+      for (const [index, message] of messages.entries()) {
         // Only `task` is an instruction. `result`/`status` are replies to work
         // this agent requested; treating them as instructions is how a
         // delegation cycle would start.
         if (message.type !== 'task') continue;
-        if (!this._running) break;
+
+        if (!this._running) {
+          // ERR-22 (review finding): `receive()` marks every unread message
+          // read inside its lock, so delivery here is at-most-once and these
+          // are already consumed. Abandoning them silently is the same
+          // invisible loss `Mailbox.send` documents — the sender's promise
+          // resolved and nothing ever comes back. Tell each remaining sender
+          // before stopping.
+          for (const abandoned of messages.slice(index)) {
+            if (abandoned.type !== 'task') continue;
+            await this._reportFailure(abandoned.from, 'the agent shut down before this task ran');
+          }
+          break;
+        }
+
         if (!this._handler) {
           log.warn({ team: this._teamName }, 'Task received before a handler was registered — dropped');
+          await this._reportFailure(message.from, 'the agent was not ready to accept tasks');
           continue;
         }
 
         try {
           await this._handler(this._toChannelMessage(message.from, message.text, message.timestamp));
         } catch (err) {
-          // One bad message must not stop the drain, and it must not look like
-          // success to the watchdog either.
+          // One bad message must not stop the drain. A log alone is not enough:
+          // the task is already marked read, so without a reply the requesting
+          // agent waits forever for work that will never be retried.
           log.error({ err, team: this._teamName, from: message.from }, 'Team task failed in the channel pipeline');
+          await this._reportFailure(
+            message.from,
+            `the task failed in the channel pipeline: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
       // Deliberately after the drain and inside the try: a cycle that threw
@@ -158,6 +178,33 @@ export class MailboxChannelAdapter implements IChannelAdapter {
       log.error({ err, team: this._teamName }, 'Mailbox poll error');
     } finally {
       this._polling = false;
+    }
+  }
+
+  /**
+   * ERR-22 (review finding): makes a dropped task visible from the requesting
+   * end.
+   *
+   * Scope, because the review overstated it and the correction matters:
+   * `ChannelManager` *does* reply on its own error path, but only for a sender
+   * that passed intake (channel-manager.ts, INVARIANT-3 branch). What it cannot
+   * cover is a failure outside its own try — a handler that throws past it, or
+   * this adapter stopping mid-drain. `receive()` has already marked those tasks
+   * read, so without a word here the requesting agent waits forever for work
+   * that will never be retried.
+   *
+   * A denied sender is deliberately not notified: INVARIANT-3 says an
+   * unauthorised sender gets no response, and that includes this one.
+   */
+  private async _reportFailure(toAgent: string, why: string): Promise<void> {
+    try {
+      await this._mailbox.send(this._teamName, toAgent, {
+        type: 'result',
+        text: `\u274c Task not completed \u2014 ${why}.`,
+      });
+    } catch (err) {
+      // Nothing further to try: the inbox is unwritable. Loud, at least.
+      log.error({ err, team: this._teamName, to: toAgent }, 'Could not report task failure to sender');
     }
   }
 
