@@ -38,9 +38,9 @@ src/
   memory/         # MemoryManager tiers, StructuredMemory, extraction/validation pipelines,
                   # ContextCompressor, salience scoring, observer + reflector workers, plan cache
   channels/       # ChannelManager pipeline, policy gate, capability resolver, quarantine,
-                  # signal/ and telegram/ adapters, webhook server
+                  # signal/, telegram/ and team/ adapters, signature-validating webhook server
   steering/       # mid-task steering messages, flags, Telegram gateway
-  teams/          # multi-agent teams: mailbox, agent loader, Gemini bridge, PR lifecycle
+  teams/          # multi-agent teams: mailbox, agent loader, bridge watchdog, PR lifecycle
   skills/         # skill loader/installer, SkillSynthesizer, SkillsLock, auditor + scanner
   routines/       # cron and event-triggered routines, heartbeat
   dashboard/      # Express server + auth middleware + cost tracker + React frontend/
