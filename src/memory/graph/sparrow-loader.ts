@@ -4,8 +4,12 @@
  * `sparrowdb` is an optionalDependency with N-API bindings. It can be absent or
  * unloadable for several ordinary reasons:
  *   - `npm install --no-optional`, or an install where the optional dep failed;
- *   - an unsupported platform (the package ships prebuilt binaries for
- *     linux-x64-gnu and darwin-arm64 only — no Windows, no linux-arm64);
+ *   - an unsupported platform. As of sparrowdb 0.1.25 the package publishes
+ *     prebuilt binaries for five targets: darwin-arm64, darwin-x64,
+ *     linux-x64-gnu, linux-arm64-gnu and win32-x64-msvc. This list was
+ *     previously "linux-x64-gnu and darwin-arm64 only — no Windows, no
+ *     linux-arm64", which stopped being true by 0.1.24 and left the graph tier
+ *     refusing to load on ARM Linux and Windows without ever attempting it;
  *   - a published platform sub-package that does not resolve, in which case
  *     `require('sparrowdb')` throws at module-load time.
  *
@@ -56,8 +60,26 @@ export type SparrowLoadResult =
   | { available: true; module: SparrowModule }
   | { available: false; reason: string };
 
-/** Platforms for which `sparrowdb` publishes a prebuilt binary. */
-const SUPPORTED_PLATFORMS = new Set(['linux-x64', 'darwin-arm64', 'darwin-x64']);
+/**
+ * Platforms for which `sparrowdb` publishes a prebuilt binary, keyed as
+ * `${process.platform}-${process.arch}` — so the npm sub-package's ABI suffix
+ * (`-gnu`, `-msvc`) is dropped, since `process.arch` cannot express it.
+ *
+ * Kept in step with the installed package by
+ * `tests/unit/memory/graph/sparrow-platforms.test.ts`, which derives the
+ * expected set from sparrowdb's own `optionalDependencies`. Hardcoding drifted
+ * once already: this set said linux-x64/darwin-arm64/darwin-x64 while the
+ * package had shipped linux-arm64-gnu and win32-x64-msvc since 0.1.24, so the
+ * graph tier reported "no prebuilt binary" on ARM Linux and Windows without
+ * attempting the load that would have succeeded.
+ */
+const SUPPORTED_PLATFORMS = new Set([
+  'linux-x64',
+  'linux-arm64',
+  'darwin-arm64',
+  'darwin-x64',
+  'win32-x64',
+]);
 
 let cached: SparrowLoadResult | null = null;
 let warned = false;
