@@ -374,7 +374,7 @@ Registration order is the execution order, and it is deliberate:
 |-------|------|-------|-------------|
 | 1 | `SensitiveFileGuardHook` | before | Blocks reads of `.ssh/`, `.env`, private keys, cloud credentials and similar paths — via file tools (`Read`, `Glob`, `Grep`) and via shell readers (`cat`, `head`, `strings`, `base64`, …). Registered **first**, unconditionally, because it is the hard-coded layer that `policy.toml` cannot switch off. |
 | 2 | `ShellSafetyHook` | before | Blocks eight dangerous shell patterns (`rm -rf /`, fork bombs, pipe-to-shell, `curl \| sh`, `chmod 777 /`, `mkfs`, writes to block devices) on `bash` / `shell` / `run_command` / `execute_bash`. |
-| 3 | `AuditLogHook` | **after** | Appends the call, its (secret-redacted) arguments, result, and duration to `security.audit_log`. It is an `after` hook, so it records what happened — it is not a pre-execution record. |
+| 3 | `AuditLogHook` | **after** | Records the call, its (secret-redacted) arguments, result, and duration in the hash-chained audit log, by handing the entry to the orchestrator's `AuditLogger` (SEC-28) rather than writing a file of its own. It is an `after` hook, so it records what happened — it is not a pre-execution record. |
 | 4 | `RateLimitHook` | before | Per-tool sliding-window limits, independent of the session budget. Registered with `bash` at 60 calls/minute and `http_request` at 100 calls/minute. |
 | 5 | `SecretRedactHook` | before | Rewrites tool **arguments** — not outputs — replacing values matching key/value secret patterns with `[REDACTED]`. Via the bridge's `updatedInput`, the redacted arguments are what actually execute. Secret *names* loaded by `SecretsManager` are registered here at boot. |
 | 6 | `IrreversibilityScorerHook` | before | Scores the action 0–100 and denies at or above the flag threshold. Registered last so audit and rate limiting always run first. |
@@ -508,26 +508,35 @@ than softened.
 
 ## How to See Everything Zora Did
 
-There are **two** audit files, written by two different components. Knowing which is which matters, because only one of them is hash-chained.
+There is **one** audit log with **one** writer (SEC-28), plus a legacy file that
+older installs will still have on disk.
 
-**1. The tool log** — `security.audit_log`, default `~/.zora/audit/audit.jsonl`. Written by `AuditLogHook` (`src/hooks/built-in/audit-log.ts`) after every tool call. This is the file `zora-agent audit` reads.
+**The audit log** — `security.audit_log` with `-security.jsonl` substituted, i.e.
+`~/.zora/audit/audit-security.jsonl` by default. Written by `AuditLogger`
+(`src/security/audit-logger.ts`), hash-chained, and serialised through a single
+write queue. It holds both lifecycle events (boot, shutdown, auth) and every tool
+call, the latter handed over by `AuditLogHook`. Entries have `entryId`, `jobId`,
+`eventType`, `timestamp`, `provider`, `toolName`, `parameters`, `result`,
+`previousHash`, `hash`. A tool call arrives with `eventType: tool_invocation`,
+`provider: tool-hook`, and its duration under `result.durationMs`.
 
 ```bash
 zora-agent audit --last 24h
-cat ~/.zora/audit/audit.jsonl
+zora-agent audit --verify
 ```
 
-Each line is a JSON object with exactly these fields:
-- `ts` — ISO timestamp
-- `jobId` — the task the call belonged to
-- `tool` — the tool name as the SDK invoked it
-- `arguments` — the call's arguments, with anything matching `key|token|secret|password|auth|bearer` replaced by `[REDACTED]`
-- `result` — the tool result, redacted the same way
-- `durationMs`
+**The legacy tool log** — `security.audit_log` itself, default
+`~/.zora/audit/audit.jsonl`. Before SEC-28 this is where `AuditLogHook` appended
+its own records, in its own schema (`ts`, `jobId`, `tool`, `arguments`, `result`,
+`durationMs`) and with **no hash chain**. Nothing writes it now. `zora-agent
+audit` still reads it so history recorded before the change stays visible, and it
+remains un-chain-verifiable — it never carried a chain to verify. It can be
+archived once you no longer need the old entries.
 
-These lines carry **no hash chain**.
-
-**2. The security event log** — the same path with `-security.jsonl` substituted, i.e. `~/.zora/audit/audit-security.jsonl` by default. Written by `AuditLogger` (`src/security/audit-logger.ts`) and hash-chained. Entries have `entryId`, `jobId`, `eventType`, `timestamp`, `provider`, `toolName`, `parameters`, `result`, `previousHash`, `hash`.
+Why the tool log was the unchained one, and why that was the bug: the file
+recording what the agent actually *did* had no tamper evidence, while the file
+recording that it booted did. Routing both through one writer is what SEC-28
+fixed.
 
 **Event types** — the complete set (`AuditEntryEventType`, `src/security/security-types.ts`):
 
@@ -735,8 +744,8 @@ Zora's security is built on multiple independent layers that work together:
 | **Intent Verification** | IntentCapsuleManager | HMAC-SHA256 signed mandates, goal drift detection, advisory/strict/paranoid modes |
 | **Prompt Injection Defense** | PromptDefense | 23 patterns on the general path (11 core + 2 encoded + 10 RAG); 18 on the channel path |
 | **Tool Output Sanitization** | sanitizeToolOutput() | Wraps suspicious tool results in `<untrusted_tool_output>` before the LLM sees them |
-| **Audit Trail** | AuditLogger | SHA-256 hash-chained append-only JSONL (`audit-security.jsonl`), tamper detection |
-| **Tool Call Log** | AuditLogHook | Append-only JSONL of every tool call with redacted arguments (`audit.jsonl`, not chained) |
+| **Audit Trail** | AuditLogger | SHA-256 hash-chained append-only JSONL (`audit-security.jsonl`), tamper detection, single write queue |
+| **Tool Call Log** | AuditLogHook | Every tool call with redacted arguments, written through `AuditLogger` into the same chained log (SEC-28) |
 | **Secrets Management** | SecretsManager | AES-256-GCM encryption, PBKDF2 key derivation, atomic writes |
 | **File Integrity** | IntegrityGuardian | SHA-256 baselines, file quarantine on tampering |
 | **Leak Detection** | LeakDetector | 9 pattern categories (API keys, JWTs, private keys, AWS credentials) |

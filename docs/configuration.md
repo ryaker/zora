@@ -226,7 +226,7 @@ Security and audit settings.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `policy_file` | string | `"~/.zora/policy.toml"` | Path to the policy file. |
-| `audit_log` | string | `"~/.zora/audit/audit.jsonl"` | Path to the JSONL audit log. |
+| `audit_log` | string | `"~/.zora/audit/audit.jsonl"` | Base path for the JSONL audit log. The log Zora writes is the `-security` sibling of this path (`~/.zora/audit/audit-security.jsonl` by default) — hash-chained, and since SEC-28 the single destination for tool calls as well as lifecycle events. The configured path itself is the pre-SEC-28 unchained tool log: still read by `zora-agent audit`, no longer written. |
 | `audit_hash_chain` | boolean | `true` | Enable hash-chain integrity on audit log entries. Each entry includes a hash of the previous entry. |
 | `audit_single_writer` | boolean | `true` | Enforce single-writer access to the audit log. |
 | `integrity_check` | boolean | `true` | Enable periodic integrity checks. |

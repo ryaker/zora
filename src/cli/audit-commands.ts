@@ -3,15 +3,19 @@
  *
  * Spec §5.9 "CLI Interface" — audit subcommand.
  *
- * SEC-25: Zora writes TWO audit files under one config key, `security.audit_log`:
+ * SEC-25: Zora reads TWO audit files under one config key, `security.audit_log`:
  *
- *   1. `<audit_log>`                 — the tool log, written by `AuditLogHook`
- *                                      (src/hooks/built-in/audit-log.ts). One JSON
- *                                      object per tool call: {ts, jobId, tool,
- *                                      arguments, result, durationMs}. NOT chained.
- *   2. `<audit_log>` + `-security`   — the security event log, written by
- *                                      `AuditLogger` from the orchestrator.
- *                                      Hash-chained, tamper-evident.
+ *   1. `<audit_log>`                 — the legacy tool log. One JSON object per
+ *                                      tool call: {ts, jobId, tool, arguments,
+ *                                      result, durationMs}. NOT chained.
+ *                                      SEC-28 moved `AuditLogHook` onto the
+ *                                      chained logger, so this file gains no new
+ *                                      lines; it is read so that history written
+ *                                      before that change stays visible.
+ *   2. `<audit_log>` + `-security`   — written by `AuditLogger` from the
+ *                                      orchestrator. Hash-chained, tamper-evident,
+ *                                      and since SEC-28 the only audit file with a
+ *                                      writer: security events AND tool calls.
  *
  * `--verify` used to run the chain verifier over file 1, which has no chain, and
  * on a fresh install (file absent) printed "Audit chain verified: 0 entries, all

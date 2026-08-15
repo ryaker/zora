@@ -879,20 +879,23 @@ export class Orchestrator {
     // non-bypassable layer that cannot be disabled via policy.toml.
     this._toolHookRunner.register(SensitiveFileGuardHook);
     this._toolHookRunner.register(ShellSafetyHook);
-    // Wire security.audit_log path so the hook writes to the user-configured location.
+    // Wire security.audit_log path so the log lands in the user-configured location.
     // sec.audit_log may be `false` when the user sets audit_log=false in config.toml
     // (we warn above and always enable auditing, but the value is still boolean false).
     // Normalize to a string before calling .replace() to avoid a boot-time crash.
     const auditLogPath = (typeof sec.audit_log === 'string' ? sec.audit_log : '~/.zora/audit/audit.jsonl').replace(/^~/, os.homedir());
-    this._toolHookRunner.register(new AuditLogHook(auditLogPath));
-    // AuditLogger: structured hash-chained security event log (boot/shutdown/auth events).
+    // AuditLogger: the one audit writer — hash-chained, single write queue.
     // audit_hash_chain and audit_single_writer config fields take effect here.
     // SEC-25: the `-security` derivation lives in securityAuditLogPath() so the
     // `audit --verify` reader resolves the same file this writer writes.
+    // SEC-28: constructed BEFORE AuditLogHook is registered, because the hook now
+    // writes through this logger instead of appending to a second, unchained file.
+    // Order matters — the hook holds the instance, so it cannot be registered first.
     this._auditLogger = new AuditLogger(securityAuditLogPath(auditLogPath), {
       hashChain: sec.audit_hash_chain ?? true,
       singleWriter: sec.audit_single_writer ?? true,
     });
+    this._toolHookRunner.register(new AuditLogHook(this._auditLogger));
     await this._auditLogger.log({
       jobId: 'system',
       eventType: 'tool_invocation',
@@ -2643,10 +2646,28 @@ export class Orchestrator {
     return this._skillSynthesizer;
   }
 
-  /** Security audit logger — hash-chained log of lifecycle events (boot/shutdown/auth) */
+  /**
+   * The audit logger — hash-chained, single write queue.
+   *
+   * SEC-28: this is now the only audit writer in the process. It carries tool
+   * calls (via AuditLogHook) as well as lifecycle events (boot/shutdown/auth);
+   * it used to be lifecycle events alone, with tool calls going to a separate
+   * unchained file.
+   */
   get auditLogger(): AuditLogger {
     this._assertBooted();
     return this._auditLogger;
+  }
+
+  /**
+   * The tool hook chain this orchestrator booted.
+   *
+   * Read counterpart to `registerToolHook`. SEC-28's guard uses it to run the
+   * after-chain a booted Orchestrator actually holds — a test that registers
+   * its own AuditLogHook would supply the wiring it is supposed to be checking.
+   */
+  get toolHookRunner(): ToolHookRunner {
+    return this._toolHookRunner;
   }
 
   get config(): ZoraConfig {

@@ -2173,7 +2173,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 2,
@@ -2183,7 +2183,8 @@
         "job_size": 3,
         "score": 6.7
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "agent-main"
     },
     {
       "id": "ERR-21",

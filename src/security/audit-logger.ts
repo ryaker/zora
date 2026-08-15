@@ -77,12 +77,25 @@ export interface ChainVerificationResult {
  * `security.audit_log` path (SEC-25).
  *
  * Two different files live under `security.audit_log`:
- *   1. the configured path itself — written by `AuditLogHook`, NOT hash-chained;
+ *   1. the configured path itself — the legacy unchained tool log. SEC-28 moved
+ *      `AuditLogHook` onto this logger, so nothing writes this file any more.
+ *      It is still *read* by `zora-agent audit` so existing history stays
+ *      visible, and it is still not chain-verifiable — it never was.
  *   2. this derived `-security` sibling — written by `AuditLogger`, chained.
+ *      Since SEC-28 this is the only audit file with a writer, and it now
+ *      carries tool calls as well as security events.
  *
  * The derivation used to be inlined as `.replace('.jsonl', '-security.jsonl')`
  * in the orchestrator, which meant every other caller had to guess it. It lives
  * here so the writer and the `audit --verify` reader cannot drift apart.
+ *
+ * SEC-28 deliberately did NOT make file 1 the chained log, which would read
+ * more naturally from the config key. On any existing install file 1 already
+ * holds unchained lines, and `_ensureInitialized` seeds `_previousHash` from
+ * the last line's `hash` — absent there. Every entry written after the switch
+ * would chain from `undefined` behind an unhashed entry 0, and `verifyChain`
+ * would report the whole file `unverifiable` forever. Collapsing onto file 1
+ * needs a migration, not just a path change.
  */
 export function securityAuditLogPath(auditLogPath: string): string {
   const ext = path.extname(auditLogPath);
@@ -306,51 +319,16 @@ export class AuditLogger {
   }
 
   // ─── SDK Integration ──────────────────────────────────────────────
-
-  /**
-   * Creates a PostToolUse hook callback compatible with the Claude Agent SDK.
-   * Logs every tool execution to the hash-chained audit log.
-   */
-  createPostToolUseHook(): (
-    input: Record<string, unknown>,
-    toolUseID: string | undefined,
-    options: { signal: AbortSignal },
-  ) => Promise<Record<string, unknown>> {
-    return async (
-      input: Record<string, unknown>,
-      _toolUseID: string | undefined,
-      _options: { signal: AbortSignal },
-    ) => {
-      const toolName = (input['tool_name'] as string) ?? 'unknown';
-      const toolInput = (input['tool_input'] as Record<string, unknown>) ?? {};
-      const toolResponse = input['tool_response'];
-      const sessionId = (input['session_id'] as string) ?? 'unknown';
-
-      try {
-        await this.log({
-          jobId: sessionId,
-          eventType: 'tool_invocation',
-          timestamp: new Date().toISOString(),
-          provider: 'claude-agent-sdk',
-          toolName,
-          parameters: toolInput,
-          result: {
-            status: 'ok',
-            output:
-              typeof toolResponse === 'string'
-                ? toolResponse
-                : JSON.stringify(toolResponse),
-          },
-        });
-      } catch (err) {
-        // R27: Log audit write failures instead of silently swallowing them.
-        // For an audit log, silent failure means undetectable data loss.
-        log.error({ toolName, err: err instanceof Error ? err.message : String(err) }, 'Failed to write audit entry');
-      }
-
-      return {};
-    };
-  }
+  //
+  // `createPostToolUseHook()` used to live here: a second way to write
+  // `tool_invocation` entries into this same log, built as an SDK PostToolUse
+  // callback. SEC-28 removed it. It was constructed nowhere in `src/` — only in
+  // its own tests — while the live PostToolUse path runs
+  // `toolHookRunnerToPostToolUse` → `ToolHookRunner.runAfter` → `AuditLogHook`,
+  // which now writes through this logger. Keeping a dead parallel writer for the
+  // same event type, in the class whose contract is one writer, is a trap: wiring
+  // it up would have double-logged every tool call. Add tool-call fields to
+  // `AuditLogHook` instead.
 
   // ─── Private Helpers ──────────────────────────────────────────────
 
