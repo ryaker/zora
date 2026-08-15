@@ -260,6 +260,31 @@ Optional Telegram bot integration for remote steering.
 | `bot_token` | string | -- | Telegram bot token (from BotFather). Use `"env:VAR"` to read it from the environment instead of storing it here — see [Secrets in config](#secrets-in-config). |
 | `allowed_users` | string[] | `[]` | Telegram usernames allowed to steer the agent. |
 | `rate_limit_per_min` | integer | `30` | Maximum messages per minute from Telegram. |
+| `mode` | `"polling"` \| `"webhook"` | `"polling"` | How updates arrive. Telegram delivers each update once, to whichever transport is active, so the two are mutually exclusive — `polling` needs no inbound port and is the right default for a laptop or anything behind NAT. |
+| `webhook_secret` | string | -- | **Required when `mode = "webhook"`.** The secret token Telegram echoes in `X-Telegram-Bot-Api-Secret-Token` on every delivery. 1–256 characters of `A-Z`, `a-z`, `0-9`, `_` or `-`. Falls back to `TELEGRAM_WEBHOOK_SECRET_TOKEN`. |
+| `webhook_port` | integer | `8080` | Port the inbound webhook listener binds, when `mode = "webhook"`. |
+
+##### Webhook mode
+
+In `webhook` mode Zora runs an HTTP listener and Telegram posts updates to
+`POST /webhooks/telegram`. Every request is authenticated before it reaches the
+adapter (INVARIANT-10): the secret token is compared in constant time, and a
+request that fails — or a platform with no validator registered — is refused
+without being dispatched.
+
+`webhook_secret` is not optional. The daemon refuses to start in webhook mode
+without one, because the endpoint would have no way to tell a genuine Telegram
+delivery from anyone who found the URL. Pass the same value to Telegram when
+registering the webhook, or it will reject your `setWebhook` call:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+  -d "url=https://your-host.example/webhooks/telegram" \
+  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET_TOKEN"
+```
+
+Terminate TLS in front of Zora — the listener speaks plain HTTP, and the secret
+token travels in a header on every request.
 
 ### `[notifications]`
 

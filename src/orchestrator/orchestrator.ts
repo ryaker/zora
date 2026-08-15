@@ -75,7 +75,7 @@ import { PolicyEngine } from '../security/policy-engine.js';
 import { IntentCapsuleManager } from '../security/intent-capsule.js';
 import { LeakDetector } from '../security/leak-detector.js';
 import { sanitizeInput, sanitizeToolOutput } from '../security/prompt-defense.js';
-import type { ApprovalQueue } from '../core/approval-queue.js';
+import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { createCapabilityToken, enforceCapability } from '../security/capability-tokens.js';
 import type { WorkerCapabilityToken } from '../types.js';
 import { IntegrityGuardian } from '../security/integrity-guardian.js';
@@ -169,6 +169,7 @@ export class Orchestrator {
   private _integrityGuardian!: IntegrityGuardian;
   private _secretsManager?: SecretsManager;
   private _approvalQueue?: ApprovalQueue; // SEC-FIX-2: wired into policyEngine during boot()
+  private _irreversibilityScorer?: IrreversibilityScorerHook; // SEC-27: the other approval-queue consumer
   private _auditLogger!: AuditLogger;
 
   // Per-job capability tokens (keyed by jobId) for worker isolation enforcement
@@ -411,6 +412,10 @@ export class Orchestrator {
     // If already booted, propagate immediately
     if (this._booted) {
       this._policyEngine.setApprovalQueue(queue);
+      // SEC-27: the scorer hook is the other consumer, and it is constructed
+      // during boot() — a queue registered afterwards has to be handed to it
+      // here or the hook keeps escalating to the boot-time default.
+      this._irreversibilityScorer?.setApprovalQueue(queue);
     }
   }
 
@@ -445,11 +450,31 @@ export class Orchestrator {
     );
     this._policyEngine.setIntentCapsuleManager(this._intentCapsuleManager);
 
+    // SEC-27: build the queue here when the entry point did not supply one, so
+    // `zora-agent ask` has the same approval gate the daemon has. Previously
+    // `cli/daemon.ts` was the only construction site, which left the ask path
+    // with no queue at all: `IrreversibilityScorerHook` had nothing to escalate
+    // to and PolicyEngine's always_flag branch had no enforcement path. The
+    // queue reads the same `[approval]` block either way, and stays disabled by
+    // default — the parity being fixed is that both paths now behave the same,
+    // not that approval is on.
+    if (!this._approvalQueue) {
+      this._approvalQueue = new ApprovalQueue(
+        approvalConfigFrom((this._config as unknown as Record<string, unknown>)['approval']),
+      );
+    }
+
+    // SEC-27: steering.auto_approve_low_risk moved here from `cli/daemon.ts`
+    // for the same reason — a blanket-allow the daemon honoured and `ask` did
+    // not is a config field that means two different things depending on how
+    // the task was started.
+    if (this._config.steering.auto_approve_low_risk && this._approvalQueue.isEnabled()) {
+      this._approvalQueue.setSessionBlanketAllow(this._policy.actions?.thresholds?.flag ?? 65);
+    }
+
     // SEC-FIX-2: Wire ApprovalQueue into PolicyEngine so _shouldFlag has an enforcement path
     // even when no flagCallback is registered (closes the silent-pass gap).
-    if (this._approvalQueue) {
-      this._policyEngine.setApprovalQueue(this._approvalQueue);
-    }
+    this._policyEngine.setApprovalQueue(this._approvalQueue);
 
     // ── Always-on security features ───────────────────────────────────
     // These four fields are hardened: disabling them in config.toml has no effect.
@@ -889,10 +914,18 @@ export class Orchestrator {
 
     // IrreversibilityScorerHook — registered after audit/rate-limit so those always run first.
     // Uses scores/thresholds from policy.toml [actions.scores|thresholds] if present, else defaults.
-    this._toolHookRunner.register(new IrreversibilityScorerHook({
+    const irreversibilityScorer = new IrreversibilityScorerHook({
       scores: this._policy.actions.scores ?? DEFAULT_IRREVERSIBILITY_SCORES,
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
-    }));
+    });
+    // SEC-27: give the hook the queue its `approval_required:{score}` reason has
+    // always named. Without this the flag threshold was a second auto-deny
+    // threshold — the escalation existed only as a string.
+    if (this._approvalQueue) {
+      irreversibilityScorer.setApprovalQueue(this._approvalQueue);
+    }
+    this._irreversibilityScorer = irreversibilityScorer;
+    this._toolHookRunner.register(irreversibilityScorer);
 
     // PERF-03: warm the SOUL.md identity cache and start its watch here, so no
     // task ever pays a synchronous read for it.

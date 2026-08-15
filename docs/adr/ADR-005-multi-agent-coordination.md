@@ -37,9 +37,11 @@ Key decisions:
 
 6. **PR lifecycle teams**: prNumber and prTitle fields in TeamConfig allow PR-specific team instances (src/teams/pr-lifecycle.ts).
 
-7. **Gemini bridge**: GeminiBridge (src/teams/gemini-bridge.ts) wraps the gemini CLI as a subprocess, providing a standard communication channel for Gemini agents in teams.
+7. **Team inbox as a channel** (superseded the Gemini bridge, Aug 2026): MailboxChannelAdapter (src/channels/team/mailbox-channel-adapter.ts) presents an agent's inbox as an IChannelAdapter, so a delegated task traverses the ChannelManager pipeline — policy gate, capability resolver, quarantine — like any other inbound message (INVARIANT-9).
 
-8. **Bridge watchdog**: BridgeWatchdog (src/teams/bridge-watchdog.ts) monitors agent subprocess health and restarts crashed members.
+   This replaced GeminiBridge, which wrapped the gemini CLI as a subprocess. That bridge ran inbox messages directly, so delegated work skipped the authorization and quarantine an identical instruction over Signal would have gone through, and it passed the prompt as an argv entry — the world-readable construction SEC-22 had already removed from GeminiProvider. Routing to Gemini is now provider selection on an ordinary task rather than a second execution path.
+
+8. **Bridge watchdog**: BridgeWatchdog (src/teams/bridge-watchdog.ts) monitors a SupervisedPoller's heartbeat and restarts it on staleness. It supervises the team MailboxChannelAdapter; a team inbox that silently stops draining is indistinguishable from an idle team without it.
 
 ## Consequences
 

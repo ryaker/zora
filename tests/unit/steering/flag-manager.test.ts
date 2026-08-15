@@ -49,11 +49,24 @@ describe('FlagManager', () => {
     expect(flags[0]!.chosenAction).toBe('Too dangerous');
   });
 
+  /**
+   * TEST-21: this slept a fixed 150ms against a 50ms timeout — 100ms of slack,
+   * which a loaded full-suite run eats, and the wall clock keeps running while
+   * the timer and its write do not. Polled against a deadline instead: load
+   * makes it slower, not wrong.
+   */
   it('auto-resolves with default action after timeout', async () => {
     const manager = new FlagManager(testDir, { timeoutMs: 50 });
     const flagId = await manager.flag('job-1', 'Continue?', 'yes-continue');
-    await new Promise((r) => setTimeout(r, 150));
-    const decision = await manager.getFlagDecision(flagId);
+
+    let decision: string | undefined;
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      decision = await manager.getFlagDecision(flagId);
+      if (decision === 'approved') break;
+      if (Date.now() >= deadline) throw new Error(`flag never auto-resolved (last decision: ${String(decision)})`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
     expect(decision).toBe('approved');
     const flags = await manager.getFlags();
     expect(flags[0]!.status).toBe('timed_out');

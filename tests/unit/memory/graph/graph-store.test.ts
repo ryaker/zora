@@ -30,7 +30,21 @@ describe('GraphStore', () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-graph-test-'));
     const opened = await GraphStore.open({ path: path.join(tmpDir, 'graph.db') });
+    // TEST-21: `if (opened) store = opened` left `store` pointing at the
+    // PREVIOUS test's store, whose tmpDir afterEach had already deleted. A
+    // single failed open therefore surfaced as an unrelated assertion failing
+    // in a later test, with nothing naming the real cause — which is how this
+    // file produced intermittent failures in different tests on different runs
+    // under full-suite load. Null it first, so a stale handle cannot be reused,
+    // and let the native-guarded tests report the open failure themselves.
+    store = null as unknown as GraphStore;
     if (opened) store = opened;
+    else if (sparrowAvailable) {
+      throw new Error(
+        `GraphStore.open returned null at ${tmpDir} while the native module reports available — ` +
+          'the open failed rather than the module being absent.',
+      );
+    }
   });
 
   afterEach(async () => {

@@ -23,15 +23,30 @@ export class TelegramAdapter implements IChannelAdapter {
   private _chat: Chat<any> | null = null;
   private _messageHandler: ((msg: ChannelMessage) => Promise<void>) | null = null;
 
-  constructor(botToken: string) {
+  private readonly _mode: 'polling' | 'webhook';
+
+  /**
+   * INVARIANT-10: `mode` selects how updates arrive, and the two are mutually
+   * exclusive on purpose. Telegram delivers each update once, to whichever
+   * transport is active; running long-polling *and* a webhook against one bot
+   * makes `getUpdates` and the webhook race for the same update, so a message
+   * is processed twice or not at all. `polling` stays the default so existing
+   * callers are unaffected.
+   */
+  constructor(botToken: string, options: { mode?: 'polling' | 'webhook' } = {}) {
+    this._mode = options.mode ?? 'polling';
     this._chatAdapter = new ChatTelegramAdapter({
       botToken,
-      mode: 'polling',
+      mode: this._mode,
+      // Note: no `secretToken` here. The chat adapter's own check is optional
+      // (it is skipped entirely when unset) and compares with `!==`. Zora
+      // authenticates webhooks in WebhookServer instead, where validation is
+      // mandatory and the comparison is constant-time.
     });
   }
 
   async start(): Promise<void> {
-    log.info('[telegram] Starting Telegram adapter...');
+    log.info({ mode: this._mode }, '[telegram] Starting Telegram adapter...');
 
     this._chat = new Chat({
       userName: 'zora',
@@ -45,18 +60,54 @@ export class TelegramAdapter implements IChannelAdapter {
     this._chat.onSubscribedMessage(this._handleChatMessage.bind(this));
 
     await this._chat.initialize();
-    await this._chatAdapter.startPolling();
 
-    log.info('[telegram] Telegram adapter ready (long-polling)');
+    if (this._mode === 'polling') {
+      await this._chatAdapter.startPolling();
+      log.info('[telegram] Telegram adapter ready (long-polling)');
+      return;
+    }
+
+    log.info('[telegram] Telegram adapter ready (webhook delivery via WebhookServer)');
   }
 
   async stop(): Promise<void> {
-    await this._chatAdapter.stopPolling();
+    if (this._mode === 'polling') {
+      await this._chatAdapter.stopPolling();
+    }
     if (this._chat) {
       await this._chat.shutdown();
       this._chat = null;
     }
     log.info('[telegram] Telegram adapter stopped');
+  }
+
+  /**
+   * INVARIANT-10: accepts a webhook delivery that WebhookServer has already
+   * authenticated.
+   *
+   * Handing the request to the chat SDK's own handler is what keeps webhook and
+   * polling on one path: both end in `_handleChatMessage`, so an update that
+   * arrives by webhook goes through the same ChannelManager pipeline — identity
+   * resolution, policy gate, quarantine — as one that arrives by polling.
+   * INVARIANT-9 would be broken by a shortcut here.
+   */
+  async handleWebhook(request: Request): Promise<Response> {
+    if (!this._chat) {
+      // Not started, so no handlers are registered and the update would be
+      // swallowed. A 503 makes Telegram retry rather than drop it.
+      log.warn('[telegram] Webhook arrived before adapter start — asking Telegram to retry');
+      return new Response('Adapter not started', { status: 503 });
+    }
+    // `Chat<any>` makes the webhooks map an index signature, so the handler is
+    // typed as possibly absent. Checked rather than asserted: if the adapter
+    // key ever stops matching, this reports it instead of throwing a
+    // "not a function" from inside the SDK.
+    const handler = this._chat.webhooks['telegram'];
+    if (typeof handler !== 'function') {
+      log.error('[telegram] Chat SDK exposes no telegram webhook handler');
+      return new Response('No webhook handler', { status: 500 });
+    }
+    return await handler(request);
   }
 
   onMessage(handler: (msg: ChannelMessage) => Promise<void>): void {

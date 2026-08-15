@@ -572,6 +572,19 @@ export interface SteeringConfig {
     allowed_users: string[];
     rate_limit_per_min?: number;
     mode?: 'polling' | 'webhook';
+    /**
+     * INVARIANT-10: the secret token passed to Telegram's `setWebhook` and
+     * echoed back in `X-Telegram-Bot-Api-Secret-Token` on every delivery.
+     * 1-256 characters of A-Z, a-z, 0-9, `_` or `-`.
+     *
+     * Required when `mode = "webhook"`. Without it there is no way to tell a
+     * genuine delivery from anyone who found the URL, so the webhook server
+     * refuses to start rather than expose an unauthenticated route.
+     * Falls back to the `TELEGRAM_WEBHOOK_SECRET_TOKEN` env var.
+     */
+    webhook_secret?: string;
+    /** Port for the inbound webhook listener. Defaults to 8080. */
+    webhook_port?: number;
   };
 }
 

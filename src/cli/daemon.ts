@@ -27,11 +27,17 @@ import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { QuarantineProcessor } from '../channels/quarantine-processor.js';
 import { ChannelAuditLog } from '../channels/channel-audit-log.js';
 import { ChannelManager } from '../channels/channel-manager.js';
+import { WebhookServer } from '../channels/webhook-server.js';
+import { MailboxChannelAdapter } from '../channels/team/mailbox-channel-adapter.js';
+import { TeamManager } from '../teams/team-manager.js';
+import { BridgeWatchdog } from '../teams/bridge-watchdog.js';
+import { Mailbox } from '../teams/mailbox.js';
+import { WebhookValidatorRegistry, createTelegramValidator } from '../channels/webhook-signatures.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
-import { ApprovalQueue, DEFAULT_APPROVAL_CONFIG } from '../core/approval-queue.js';
+import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { runSecurityAuditSilent } from './security-commands.js';
 import { TelegramGateway, type TelegramConfig } from '../steering/telegram-gateway.js';
 
@@ -162,25 +168,16 @@ async function main() {
 
   // Initialize ApprovalQueue BEFORE orchestrator boot so the send handler
   // is in place if any actions arrive during the startup window.
-  const approvalConfig = (config as unknown as Record<string, unknown>)['approval'] as Record<string, unknown> | undefined;
-  const approvalQueue = new ApprovalQueue({
-    ...DEFAULT_APPROVAL_CONFIG,
-    ...(approvalConfig ? {
-      enabled: (approvalConfig['enabled'] as boolean) ?? false,
-      timeoutMs: (() => {
-        const raw = approvalConfig['timeout_s'] as number | undefined;
-        const s = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 300;
-        return s * 1000;
-      })(),
-    } : {}),
-  });
-
-  // Wire steering.auto_approve_low_risk: pre-activate session blanket allow for low-risk actions.
-  // All tool calls scoring below the flag threshold (default 65) are auto-approved this session.
-  if (config.steering.auto_approve_low_risk && approvalQueue.isEnabled()) {
-    const flagThreshold = (policy.actions?.thresholds?.flag as number | undefined) ?? 65;
-    approvalQueue.setSessionBlanketAllow(flagThreshold);
-  }
+  // SEC-27: the parsing of this block, and the steering.auto_approve_low_risk
+  // blanket-allow that used to follow it here, both moved to
+  // `Orchestrator.boot()` so the `zora-agent ask` path gets the same gate. The
+  // daemon still constructs its own queue because it has something the ask path
+  // does not — a Telegram send handler to deliver approval requests through —
+  // and it must exist before boot() so that handler is wired for any action
+  // arriving in the startup window.
+  const approvalQueue = new ApprovalQueue(
+    approvalConfigFrom((config as unknown as Record<string, unknown>)['approval']),
+  );
 
   const providers = createProviders(config, policy);
   const orchestrator = new Orchestrator({ config, policy, providers, baseDir: configDir });
@@ -271,6 +268,11 @@ async function main() {
 
   // Multi-channel secure architecture (IChannelAdapter + ChannelManager + Quarantine)
   let channelManager: ChannelManager | undefined;
+  // INVARIANT-10: only constructed when a platform delivers by webhook AND has
+  // a signature validator to authenticate it.
+  let webhookServer: WebhookServer | undefined;
+  // ERR-21: one per team mailbox channel, stopped on shutdown.
+  const teamWatchdogs: BridgeWatchdog[] = [];
 
   const channelPolicyPath = path.join(configDir, 'config', 'channel-policy.toml');
   if (fs.existsSync(channelPolicyPath)) {
@@ -302,10 +304,36 @@ async function main() {
       // 2. Telegram
       let telegramRegistered = false;
       const telegramConfig = config.steering.telegram;
+      // INVARIANT-10: webhook mode needs a secret token to authenticate
+      // deliveries. Resolved before the adapter is built so a misconfigured
+      // webhook setup fails at boot instead of starting a bot whose updates
+      // can never arrive.
+      const telegramWebhookMode = telegramConfig?.mode === 'webhook';
+      const telegramWebhookSecret =
+        telegramConfig?.webhook_secret || process.env['TELEGRAM_WEBHOOK_SECRET_TOKEN'];
+      if (telegramWebhookMode && !telegramWebhookSecret) {
+        // INVARIANT-10 (review finding): this must not be a `throw`. It sits
+        // inside the try that wraps channel initialisation, whose catch logs
+        // and lets startup continue — so a throw here silently disabled Signal,
+        // Telegram and every team channel while the operator was told the
+        // daemon "refuses to start". Fail-closed held by luck (webhookServer is
+        // constructed later and never reached); the failure mode was wrong.
+        // Exit, which is what the documentation promises.
+        log.fatal(
+          'steering.telegram.mode = "webhook" requires steering.telegram.webhook_secret ' +
+            '(or TELEGRAM_WEBHOOK_SECRET_TOKEN). Without it the webhook endpoint cannot tell a ' +
+            'genuine Telegram delivery from anyone who finds the URL, so Zora will not open one. ' +
+            'Use the same value in setWebhook. Set mode = "polling" if you do not want a webhook.',
+        );
+        process.exit(1);
+      }
+
       if (telegramConfig?.enabled) {
         const token = telegramConfig.bot_token || process.env.TELEGRAM_BOT_TOKEN;
         if (token) {
-          const telegramAdapter = new TelegramAdapter(token);
+          const telegramAdapter = new TelegramAdapter(token, {
+            mode: telegramWebhookMode ? 'webhook' : 'polling',
+          });
           await channelManager.registerAdapter(telegramAdapter);
           telegramRegistered = true;
         } else {
@@ -313,10 +341,68 @@ async function main() {
         }
       }
 
+      // 3. Team mailboxes — INVARIANT-9.
+      // A task in an agent's inbox is untrusted input from a third party that
+      // makes Zora act, so it goes through the same pipeline as Signal and
+      // Telegram rather than being run directly the way GeminiBridge did.
+      //
+      // Which inbox is "ours" is decided by membership, not by new config:
+      // Zora drains the inbox of the agent bearing its own name, in every team
+      // that lists it as an active member. Draining another member's inbox
+      // would mean acting as that agent.
+      const teamAdapterNames: string[] = [];
+      try {
+        const teamManager = new TeamManager(configDir);
+        for (const team of await teamManager.listTeams()) {
+          if (!team.members.some((m) => m.name === config.agent.name && m.isActive)) continue;
+          const teamAdapter = new MailboxChannelAdapter({
+            teamName: team.name,
+            agentName: config.agent.name,
+            mailbox: new Mailbox(teamManager.teamsDir, config.agent.name),
+          });
+          await channelManager.registerAdapter(teamAdapter);
+          teamAdapterNames.push(teamAdapter.name);
+
+          // ERR-21: supervise the poller. A team inbox that silently stops
+          // draining looks exactly like an idle team, so nothing would report
+          // it. The health file is per team, since one process may drain
+          // several and a shared file would let one team's heartbeat vouch for
+          // another's.
+          const watchdog = new BridgeWatchdog(teamAdapter, {
+            healthCheckIntervalMs: 30_000,
+            maxStaleMs: 120_000,
+            maxRestarts: 5,
+            stateDir: path.join(configDir, 'state', 'teams', team.name),
+          });
+          await watchdog.start();
+          teamWatchdogs.push(watchdog);
+        }
+      } catch (err) {
+        // A broken teams directory must not stop Signal and Telegram starting.
+        log.error({ err }, 'Failed to register team mailbox channels');
+      }
+
       await channelManager.start();
+
+      // 4. Webhook listener — INVARIANT-10.
+      // Started only for platforms that both deliver by webhook and have a
+      // signature validator. Registering a validator is what authorises a
+      // platform's route, so the server is never running with a route it
+      // cannot authenticate.
+      if (telegramRegistered && telegramWebhookMode) {
+        const validators = new WebhookValidatorRegistry();
+        validators.register(createTelegramValidator(telegramWebhookSecret!));
+        webhookServer = new WebhookServer(
+          channelManager,
+          validators,
+          telegramConfig?.webhook_port ?? 8080,
+        );
+        await webhookServer.start();
+      }
       const activeAdapters = [];
       if (signalPhone) activeAdapters.push('signal');
       if (telegramRegistered) activeAdapters.push('telegram');
+      activeAdapters.push(...teamAdapterNames);
       log.info({ adapters: activeAdapters.join(', ') }, 'Multi-channel architecture online');
 
       // ApprovalQueue is wired into PolicyEngine via orchestrator.setApprovalQueue() above.
@@ -361,6 +447,12 @@ async function main() {
         telegramGateway = undefined;
       }
       try {
+        for (const watchdog of teamWatchdogs) {
+          watchdog.stop();
+        }
+        if (webhookServer) {
+          await webhookServer.stop();
+        }
         if (channelManager) {
           await channelManager.stop();
         }

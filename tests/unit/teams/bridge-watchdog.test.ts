@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BridgeWatchdog } from '../../../src/teams/bridge-watchdog.js';
-import type { GeminiBridge } from '../../../src/teams/gemini-bridge.js';
+import type { SupervisedPoller } from '../../../src/teams/bridge-watchdog.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -34,13 +34,13 @@ function realSleep(ms: number): Promise<void> {
  * still failing with a message that names what never happened.
  */
 async function until(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   label: string,
   timeoutMs = 25_000,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   for (;;) {
-    if (predicate()) return;
+    if (await predicate()) return;
     if (performance.now() >= deadline) {
       throw new Error(`timed out after ${timeoutMs}ms waiting for: ${label}`);
     }
@@ -48,10 +48,16 @@ async function until(
   }
 }
 
+interface HealthFileShape {
+  lastHeartbeat: string;
+  restartCount: number;
+  lastRestart?: string;
+}
+
 describe('BridgeWatchdog', () => {
   const testDir = path.join(os.tmpdir(), `zora-watchdog-test-${process.pid}-${Date.now()}`);
   const stateDir = path.join(testDir, 'state');
-  let mockBridge: GeminiBridge;
+  let mockBridge: SupervisedPoller;
 
   const stopCalls = () => vi.mocked(mockBridge.stop).mock.calls.length;
   const startCalls = () => vi.mocked(mockBridge.start).mock.calls.length;
@@ -63,7 +69,7 @@ describe('BridgeWatchdog', () => {
       stop: vi.fn(),
       isRunning: vi.fn().mockReturnValue(true),
       setOnPollComplete: vi.fn(),
-    } as unknown as GeminiBridge;
+    } as unknown as SupervisedPoller;
   });
 
   afterEach(async () => {
@@ -223,6 +229,192 @@ describe('BridgeWatchdog', () => {
     const finalState = JSON.parse(finalRaw) as { lastHeartbeat?: string };
     expect(typeof finalState.lastHeartbeat).toBe('string');
     expect(new Date(finalState.lastHeartbeat!).getTime()).toBeGreaterThan(0);
+  }, 30_000);
+
+  /**
+   * ERR-21 regression guards.
+   *
+   * The watchdog's only job is to notice that a heartbeat has stopped. Before
+   * this fix, every way of *failing to read* the heartbeat was answered with a
+   * freshly minted one, so the staleness branch became unreachable and the
+   * watchdog went permanently blind without throwing or logging.
+   *
+   * Each case below damages the health file in a different way and asserts the
+   * bridge is still restarted. They are driven through the real timer path
+   * rather than by calling `_check()` directly: a test that reaches past the
+   * public surface would keep passing if the wiring between the interval and
+   * the check were removed. `maxStaleMs` is deliberately large — larger than
+   * the whole test — so that a restart can only be explained by the unreadable
+   * file, never by elapsed time. Under the old code every one of these hangs
+   * until the deadline.
+   */
+  describe('fails closed when the health file cannot be read (ERR-21)', () => {
+    const healthFile = () => path.join(stateDir, 'bridge-health.json');
+
+    /**
+     * Starts a watchdog whose heartbeat could never go stale on its own, lets
+     * it take one clean check, then applies `damage` and waits for a restart.
+     */
+    async function expectRestartAfterDamage(damage: () => Promise<void>): Promise<void> {
+      const watchdog = new BridgeWatchdog(mockBridge, {
+        healthCheckIntervalMs: 20,
+        maxStaleMs: 3_600_000,
+        maxRestarts: 5,
+        stateDir,
+      });
+      await watchdog.start();
+      try {
+        // A healthy file must NOT trigger anything: this pins the restart below
+        // to the damage rather than to the watchdog restarting indiscriminately.
+        await realSleep(100);
+        expect(stopCalls()).toBe(0);
+
+        await damage();
+        await until(() => stopCalls() >= 1, 'the unreadable health file to stop the bridge');
+      } finally {
+        watchdog.stop();
+      }
+    }
+
+    it('restarts the bridge when the health file is unparseable', async () => {
+      await expectRestartAfterDamage(async () => {
+        // The exact splice shape observed in the wild: one document landing
+        // inside another.
+        await fs.writeFile(healthFile(), '{"lastHeartbeat":"x","restartCount":0} "lastRestart": }', 'utf8');
+      });
+    });
+
+    /**
+     * The NaN path, which is a distinct hole from an unparseable file: this
+     * document is valid JSON, so JSON.parse succeeds and the old code returned
+     * it happily. `new Date(undefined).getTime()` is NaN, and `NaN > maxStaleMs`
+     * is false, so the watchdog went blind without any read ever failing.
+     */
+    it('restarts the bridge when lastHeartbeat is absent from valid JSON', async () => {
+      await expectRestartAfterDamage(async () => {
+        await fs.writeFile(healthFile(), JSON.stringify({ restartCount: 0 }), 'utf8');
+      });
+    });
+
+    it('restarts the bridge when lastHeartbeat is not a parseable date', async () => {
+      await expectRestartAfterDamage(async () => {
+        await fs.writeFile(healthFile(), JSON.stringify({ lastHeartbeat: 'banana', restartCount: 0 }), 'utf8');
+      });
+    });
+
+    it('restarts the bridge when the health file is a directory', async () => {
+      // A non-ENOENT errno rather than a content problem — EISDIR on read.
+      await expectRestartAfterDamage(async () => {
+        await fs.rm(healthFile(), { force: true });
+        await fs.mkdir(healthFile(), { recursive: true });
+      });
+    });
+
+    it('restarts the bridge when the health file disappears', async () => {
+      // `start()` wrote this file, so its absence at check time means state was
+      // lost — not that the bridge just checked in.
+      await expectRestartAfterDamage(async () => {
+        await fs.rm(healthFile(), { force: true });
+      });
+    });
+  });
+
+  /**
+   * ERR-21: the counterpart to the guards above. `writeHeartbeat()` runs from
+   * the bridge's poll-completion callback, so reaching it proves the bridge is
+   * alive; it is the one caller allowed to overwrite a damaged file. Healing
+   * must not, however, hand the bridge a fresh restart budget by resetting the
+   * persisted counter to zero.
+   */
+  it('heals an unusable health file on the next live heartbeat', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    // maxRestarts is 1 so the counter is pinned at exactly 1 rather than merely
+    // reaching it: once the budget is spent every later check takes the
+    // give-up branch, which cannot increment. That makes the exact assertion
+    // below safe against a check landing between the restart and the damage.
+    const watchdog = new BridgeWatchdog(mockBridge, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 20,
+      maxRestarts: 1,
+      stateDir,
+    });
+    await watchdog.start();
+    const healthFile = path.join(stateDir, 'bridge-health.json');
+
+    // Burn that one restart first, so the persisted counter is non-zero and the
+    // assertion below can tell "preserved the count" apart from "wrote a
+    // hardcoded 0" — with a fresh watchdog the two are indistinguishable.
+    await until(() => stopCalls() >= 1, 'a first restart to put the counter above zero');
+    await vi.advanceTimersByTimeAsync(1001);
+    await until(() => startCalls() >= 1, 'the bridge to come back from that restart');
+    await until(
+      async () => (JSON.parse(await fs.readFile(healthFile, 'utf8')) as HealthFileShape).restartCount === 1,
+      'the restart to be persisted',
+    );
+    watchdog.stop();
+
+    // Now damage the file and let a live poll heartbeat heal it.
+    await fs.writeFile(healthFile, 'not json at all', 'utf8');
+    await watchdog.writeHeartbeat();
+
+    const healed = JSON.parse(await fs.readFile(healthFile, 'utf8')) as HealthFileShape;
+    expect(typeof healed.lastHeartbeat).toBe('string');
+    expect(Date.now() - new Date(healed.lastHeartbeat).getTime()).toBeLessThan(60_000);
+    // Healing must not hand the bridge a fresh budget of restarts.
+    expect(healed.restartCount).toBe(1);
+  }, 30_000);
+
+  /**
+   * ERR-21 follow-up (review finding): the same fail-open in a different
+   * costume. A future timestamp parses, so the shape check waved it through;
+   * `_check()` then computed a negative elapsed time and `elapsed > maxStaleMs`
+   * stayed false until that date arrived. A health file dated next year
+   * disabled restart detection for a year, silently.
+   */
+  it('restarts the bridge when the heartbeat is dated in the future', async () => {
+    const watchdog = new BridgeWatchdog(mockBridge, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 3_600_000,
+      maxRestarts: 5,
+      stateDir,
+    });
+    await watchdog.start();
+    try {
+      await realSleep(100);
+      expect(stopCalls()).toBe(0);
+
+      await fs.writeFile(
+        path.join(stateDir, 'bridge-health.json'),
+        JSON.stringify({ lastHeartbeat: new Date(Date.now() + 86_400_000 * 365).toISOString(), restartCount: 0 }),
+        'utf8',
+      );
+      await until(() => stopCalls() >= 1, 'the future-dated heartbeat to stop the bridge');
+    } finally {
+      watchdog.stop();
+    }
+  }, 30_000);
+
+  /** A clock that stepped slightly forward is not a damaged file. */
+  it('tolerates a heartbeat a few seconds ahead of now', async () => {
+    const watchdog = new BridgeWatchdog(mockBridge, {
+      healthCheckIntervalMs: 20,
+      maxStaleMs: 3_600_000,
+      maxRestarts: 5,
+      stateDir,
+    });
+    await watchdog.start();
+    try {
+      await fs.writeFile(
+        path.join(stateDir, 'bridge-health.json'),
+        JSON.stringify({ lastHeartbeat: new Date(Date.now() + 5_000).toISOString(), restartCount: 0 }),
+        'utf8',
+      );
+      await realSleep(200);
+      expect(stopCalls(), 'a 5s clock skew must not read as a damaged file').toBe(0);
+    } finally {
+      watchdog.stop();
+    }
   }, 30_000);
 
   it('starts and stops cleanly', async () => {

@@ -33,12 +33,12 @@
     "post_release": {
       "description": "Gaps that improve quality but don't prevent someone from using Zora. Ship, then keep landing the plane.",
       "categories": {
-        "type_safety": "TYPE-01 through TYPE-08 — users never see type safety",
-        "logging": "LOG-01 through LOG-04 — console.log works, just ugly for ops",
-        "documentation": "DOC-01 through DOC-05 — README + QUICKSTART already exist",
-        "testing": "TEST-01 through TEST-07 — users don't run tests",
-        "enhancements": "ORCH-05, ORCH-08, ORCH-11 — better routing/steering, not blockers",
-        "dashboard_polish": "OPS-02, OPS-03, OPS-05 — nice-to-have, CLI is primary interface"
+        "type_safety": "TYPE-01 through TYPE-08 \u2014 users never see type safety",
+        "logging": "LOG-01 through LOG-04 \u2014 console.log works, just ugly for ops",
+        "documentation": "DOC-01 through DOC-05 \u2014 README + QUICKSTART already exist",
+        "testing": "TEST-01 through TEST-07 \u2014 users don't run tests",
+        "enhancements": "ORCH-05, ORCH-08, ORCH-11 \u2014 better routing/steering, not blockers",
+        "dashboard_polish": "OPS-02, OPS-03, OPS-05 \u2014 nice-to-have, CLI is primary interface"
       }
     }
   },
@@ -2076,7 +2076,7 @@
     {
       "id": "SEC-26",
       "category": "security",
-      "title": "bot_token env: prefix is never resolved — literal string sent as credential",
+      "title": "bot_token env: prefix is never resolved \u2014 literal string sent as credential",
       "severity": "S1",
       "files_affected": 2,
       "impact": 6,
@@ -2106,7 +2106,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 4,
@@ -2195,7 +2195,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
@@ -2205,7 +2205,8 @@
         "job_size": 1,
         "score": 20
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "claude"
     },
     {
       "id": "ERR-22",
@@ -2217,7 +2218,7 @@
       "blocking": false,
       "blocks": [],
       "blocked_by": [],
-      "status": "open",
+      "status": "completed",
       "detail_file": "docs/reviews/2026-08-remediation-plan.md",
       "wsjf": {
         "usability_value": 3,
@@ -2227,12 +2228,13 @@
         "job_size": 2,
         "score": 10
       },
-      "release_gate": false
+      "release_gate": false,
+      "claimed_by": "claude"
     },
     {
       "id": "MEM-34",
       "category": "memory",
-      "title": "graph_recall defined but never registered — the graph tier was unreachable by the agent",
+      "title": "graph_recall defined but never registered \u2014 the graph tier was unreachable by the agent",
       "severity": "S1",
       "files_affected": 4,
       "impact": 8,
@@ -2255,7 +2257,7 @@
     {
       "id": "SEC-29",
       "category": "security",
-      "title": "Enforcement singletons initialized only in the daemon — `ask` ran with no session-risk forecaster or cooldown",
+      "title": "Enforcement singletons initialized only in the daemon \u2014 `ask` ran with no session-risk forecaster or cooldown",
       "severity": "S1",
       "files_affected": 4,
       "impact": 8,
@@ -2278,7 +2280,7 @@
     {
       "id": "ARCH-01",
       "category": "testing",
-      "title": "No guard against stranded modules — a file reachable from no entry point still passes its own tests",
+      "title": "No guard against stranded modules \u2014 a file reachable from no entry point still passes its own tests",
       "severity": "S2",
       "files_affected": 2,
       "impact": 7,

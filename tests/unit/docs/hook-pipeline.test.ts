@@ -33,12 +33,55 @@ const NUMBER_WORDS: Record<string, number> = {
   seven: 7, eight: 8, nine: 9, ten: 10,
 };
 
-/** Hook classes registered on the runner, in registration order. */
+/**
+ * Resolves a `register(...)` argument to the hook class it refers to.
+ *
+ * SEC-27: a hook that needs post-construction wiring is registered through a
+ * local — `const irreversibilityScorer = new IrreversibilityScorerHook(...)`,
+ * then `setApprovalQueue(...)`, then `register(irreversibilityScorer)`. The
+ * pattern here only recognised `register(Name)` and `register(new Name(`, both
+ * capitalised, so that form read as *no registration at all*: the scanner
+ * silently dropped a hook that was still in the pipeline and demanded the
+ * SECURITY.md row documenting it be deleted. A drift guard that answers a
+ * refactor by asking for the docs to be made wrong is worse than none, so the
+ * scanner follows the local to its constructor.
+ *
+ * An unresolvable identifier is returned as-is rather than skipped: it will not
+ * match any documented row, so the guard fails loudly instead of quietly
+ * shrinking the list it checks.
+ */
+function resolveHookClass(src: string, identifier: string): string {
+  if (/^[A-Z]/.test(identifier)) return identifier;
+  const decl = new RegExp(
+    `\\b(?:const|let|var)\\s+${identifier}\\s*(?::[^=]+)?=\\s*new\\s+([A-Z]\\w*)`,
+  ).exec(src);
+  return decl?.[1] ?? identifier;
+}
+
+/**
+ * Is this identifier a `ToolHook` parameter being forwarded, rather than a
+ * built-in being registered?
+ *
+ * `registerToolHook(hook: ToolHook)` is the public API for hooks a *caller*
+ * supplies at runtime. It forwards to the same `register()`, but what it
+ * registers is not known statically and is not part of the built-in pipeline
+ * SECURITY.md documents. Recognising it by its `ToolHook` parameter type keeps
+ * the exclusion narrow: only a forwarded parameter is skipped, never a class.
+ */
+function isForwardedParameter(src: string, identifier: string): boolean {
+  return new RegExp(`\\(\\s*${identifier}\\s*:\\s*ToolHook\\s*\\)`).test(src);
+}
+
+/** Built-in hook classes registered on the runner, in registration order. */
 function registeredHooks(): string[] {
   const src = stripTsComments(readRepoFile(ORCHESTRATOR));
-  // `this._toolHookRunner.register(SecretRedactHook)` / `.register(new AuditLogHook(...))`
-  const re = /_toolHookRunner\s*\.register\(\s*(?:new\s+)?([A-Z]\w*)/g;
-  return [...src.matchAll(re)].map((m) => m[1]!);
+  // `this._toolHookRunner.register(SecretRedactHook)`, `.register(new AuditLogHook(...))`,
+  // or `.register(someLocal)` where the local was constructed above.
+  const re = /_toolHookRunner\s*\.register\(\s*(?:new\s+)?([A-Za-z_]\w*)/g;
+  return [...src.matchAll(re)]
+    .map((m) => m[1]!)
+    .filter((identifier) => !isForwardedParameter(src, identifier))
+    .map((identifier) => resolveHookClass(src, identifier));
 }
 
 /** Rows of the numbered hook table in SECURITY.md, in document order. */
