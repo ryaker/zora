@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 97,
+    "total_gaps": 99,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -2279,6 +2279,30 @@
       "claimed_by": "agent-main"
     },
     {
+      "id": "SEC-30",
+      "category": "security",
+      "title": "Blocked and in-flight tool calls never reach the audit log \u2014 policy_violation has no writer",
+      "severity": "S2",
+      "files_affected": 4,
+      "impact": 7,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [
+        "SEC-28"
+      ],
+      "status": "open",
+      "detail_file": "gaps/SEC-30-AUDIT-ATTEMPT-RECORD.md",
+      "wsjf": {
+        "usability_value": 2,
+        "wiring_impact": 6,
+        "security_risk": 8,
+        "time_criticality": 5,
+        "job_size": 3,
+        "score": 7.0
+      },
+      "release_gate": false
+    },
+    {
       "id": "ARCH-01",
       "category": "testing",
       "title": "No guard against stranded modules \u2014 a file reachable from no entry point still passes its own tests",
@@ -2325,6 +2349,28 @@
       },
       "release_gate": false,
       "claimed_by": "agent-main"
+    },
+    {
+      "id": "TEST-22",
+      "category": "testing",
+      "title": "No guard that a hook denial cannot be overturned by a later hook in the chain",
+      "severity": "S3",
+      "files_affected": 1,
+      "impact": 4,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "open",
+      "detail_file": "gaps/SEC-30-AUDIT-ATTEMPT-RECORD.md",
+      "wsjf": {
+        "usability_value": 1,
+        "wiring_impact": 2,
+        "security_risk": 5,
+        "time_criticality": 3,
+        "job_size": 1,
+        "score": 11.0
+      },
+      "release_gate": false
     }
   ]
 }
