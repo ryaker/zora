@@ -1754,7 +1754,7 @@
         "SDK-02"
       ],
       "status": "open",
-      "detail_file": "docs/reviews/2026-08-remediation-plan.md",
+      "detail_file": "gaps/MEM-31-SDK-SESSION-STORE.md",
       "wsjf": {
         "usability_value": 4,
         "wiring_impact": 7,
