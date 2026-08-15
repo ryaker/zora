@@ -37,6 +37,17 @@ describe('GraphStore', () => {
     // file produced intermittent failures in different tests on different runs
     // under full-suite load. Null it first, so a stale handle cannot be reused,
     // and let the native-guarded tests report the open failure themselves.
+    //
+    // Sighting, 2026-08-15, on sparrowdb 0.1.25 under full-suite load: the file
+    // failed once in 9 full `test:unit` runs, reported against
+    // 'two-hop traversal > excludes the anchor task itself' at 6748ms. That test
+    // body is one recordTask and one assertion and runs in ~1ms; the whole file
+    // normally completes in ~454ms. vitest bills hook time to the test it runs
+    // for, so ~6.7s means the time went HERE — in GraphStore.open — and the test
+    // name is incidental, exactly as the TEST-21 note above predicts. Next
+    // occurrence: capture the full failure text rather than a grep of it. The
+    // message this hook throws is the one that names the cause, and it was lost
+    // to a filtered pipe that run.
     store = null as unknown as GraphStore;
     if (opened) store = opened;
     else if (sparrowAvailable) {
