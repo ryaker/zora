@@ -116,23 +116,23 @@
  * holds a graph worker for its lifetime while any other `zora-agent` command
  * boots its own Orchestrator against the same path.
  *
- * **On 0.1.27 the engine enforces this itself.** `SparrowDB.open()` takes an
- * exclusive `flock` on `<root>/db.lock` and refuses a second handle with
- * `database locked: …`, released by the kernel so a crashed holder leaves
- * nothing to reclaim. That is the primary guard, it covers writers Zora knows
- * nothing about — the `sparrowdb` CLI, the SparrowDB MCP server — and the
- * package range is pinned at `^0.1.27` so every supported install has it.
- * `isDatabaseLockedError` recognises that refusal and routes it below.
+ * **The engine enforces this itself as of 0.1.27**, which is why that is the
+ * package range's floor. `SparrowDB.open()` takes an exclusive `flock` on
+ * `<root>/db.lock` and refuses a second handle with `database locked: …`,
+ * released by the kernel so a crashed holder leaves nothing to reclaim. It binds
+ * every writer, including ones Zora knows nothing about — the `sparrowdb` CLI,
+ * the SparrowDB MCP server.
  *
- * `open()` *also* takes Zora's own advisory lock first. It is deliberately
- * secondary now: it survives filesystems where `flock` is a no-op rather than a
- * lock (an NFS-mounted home directory being the realistic one), and it names the
- * holding pid, which upstream's message cannot. See `process-lock.ts` for what
- * it does and does not cover.
+ * This adapter adds no lock of its own. A hand-rolled lock behind a kernel lock
+ * would add no exclusion and several ways to refuse a database nobody holds; see
+ * `graph-owner.ts`, which explains what was tried and why it was withdrawn. What
+ * it keeps is a note recording the holding pid, read only to name the holder in
+ * the warning below — upstream's message can only name the path, and the case
+ * this fires on is `zora-agent ask` while the daemon is running.
  *
- * Either way the outcome is the established one — `null`, one warning, an inert
- * tier — because a graph that will not open has never been allowed to be an
- * error that reaches the user.
+ * `isDatabaseLockedError` recognises that refusal, and the outcome is the
+ * established one — `null`, one warning, an inert tier — because a graph that
+ * will not open has never been allowed to be an error that reaches the user.
  *
  * ## On-disk compatibility
  *
@@ -154,7 +154,12 @@ import {
 } from './identifiers.js';
 import type { CypherParams, SparrowDatabase, SparrowModule } from './sparrow-loader.js';
 import { loadSparrow } from './sparrow-loader.js';
-import { acquireGraphLock, isDatabaseLockedError, type GraphLock } from './process-lock.js';
+import {
+  describeGraphOwner,
+  isDatabaseLockedError,
+  recordGraphOwner,
+  type GraphOwnerNote,
+} from './graph-owner.js';
 import {
   isEntityKind,
   NODE_LABELS,
@@ -208,23 +213,22 @@ interface NodeIdentity {
 export class GraphStore {
   private readonly _db: SparrowDatabase;
   private readonly _maxRows: number;
-  private readonly _lock: GraphLock | null;
+  private readonly _owner: GraphOwnerNote | null;
   private _closed = false;
 
-  private constructor(db: SparrowDatabase, maxRows: number, lock: GraphLock | null) {
+  private constructor(db: SparrowDatabase, maxRows: number, owner: GraphOwnerNote | null) {
     this._db = db;
     this._maxRows = clampLimit(maxRows);
-    this._lock = lock;
+    this._owner = owner;
   }
 
   /**
    * Open (or create) a graph database.
    *
-   * Takes the single-writer lock described in the class header before handing
-   * the path to SparrowDB, so a second Zora process is turned away rather than
-   * given a handle it could corrupt the catalog with. The lock is skipped when
-   * a `module` is injected: that seam exists for tests, which have no real
-   * database on disk to protect and may pass a path that is not writable.
+   * Mutual exclusion is SparrowDB's, not this adapter's: `SparrowDB.open()`
+   * refuses a root another process holds, and that refusal is turned into the
+   * inert path below with a message naming the holder where it can be
+   * identified. See the class header and `graph-owner.ts`.
    *
    * @returns A store, or `null` when `sparrowdb` is unavailable, another
    *   process holds the database, or it cannot be opened. Callers must treat
@@ -237,20 +241,6 @@ export class GraphStore {
       const loaded = await loadSparrow();
       if (!loaded.available) return null;
       mod = loaded.module;
-    }
-
-    let lock: GraphLock | null = null;
-    if (!injected) {
-      const claim = acquireGraphLock(options.path);
-      if (!claim.acquired) {
-        log.warn(
-          { path: options.path, reason: claim.reason },
-          'Graph database is already open elsewhere — graph memory tier is inert. ' +
-            'Zora continues without relational recall.',
-        );
-        return null;
-      }
-      lock = claim.lock;
     }
 
     try {
@@ -266,22 +256,32 @@ export class GraphStore {
           'Installed sparrowdb has no executeWithParams (needs >= 0.1.27) — ' +
             'graph memory tier is inert',
         );
-        lock?.release();
         return null;
       }
-      const store = new GraphStore(db, options.maxRowsScanned ?? 500, lock);
+      // The open succeeded, so this process is the holder. Record that for the
+      // benefit of whichever process gets refused next. Skipped for an injected
+      // module: that seam is for tests, which have no database on disk to
+      // describe and may pass a path that is not writable.
+      const store = new GraphStore(
+        db,
+        options.maxRowsScanned ?? 500,
+        injected ? null : recordGraphOwner(options.path),
+      );
       store._warnIfPreSurrogate(options.path);
       return store;
     } catch (err) {
-      // Upstream's cross-process `flock` (SparrowDB #524, shipped in 0.1.27).
-      // This is the branch that catches a holder our advisory lock cannot see —
-      // the sparrowdb CLI, the SparrowDB MCP server, anything that is not Zora
-      // — and gives it the same inert outcome rather than a stack trace.
+      // Upstream's cross-process `flock` (SparrowDB #524, shipped in 0.1.27) is
+      // the only thing standing between two writers and a permanently corrupt
+      // catalog, and this is where its refusal lands. It binds every writer, so
+      // the holder may well not be Zora at all — the sparrowdb CLI, the
+      // SparrowDB MCP server — which is why the holder is *described* from the
+      // owner note rather than assumed.
       if (isDatabaseLockedError(err)) {
+        const holder = describeGraphOwner(options.path) ?? 'another process';
         log.warn(
           { path: options.path },
-          'SparrowDB refused a second handle on this database (another process holds it) — ' +
-            'graph memory tier is inert. Zora continues without relational recall.',
+          `SparrowDB refused a second handle on this database — ${holder} has it open. ` +
+            'Graph memory tier is inert; Zora continues without relational recall.',
         );
       } else {
         log.warn(
@@ -289,23 +289,23 @@ export class GraphStore {
           'Failed to open graph database — graph memory tier is inert',
         );
       }
-      lock?.release();
       return null;
     }
   }
 
   /**
-   * Release the single-writer lock. Idempotent.
+   * Withdraw this process's claim on the database. Idempotent.
    *
-   * SparrowDB exposes no `close()`, so this does not close the handle — it
-   * hands the database root back so the next process can take it. The caller is
-   * responsible for checkpointing first; the graph worker does, on its `close`
-   * message.
+   * SparrowDB exposes no `close()`, so the native handle stays open until the
+   * process exits — which is also when the kernel drops its `flock`. All this
+   * does is remove the owner note, so a later refusal does not name a process
+   * that has finished with the database. The caller is responsible for
+   * checkpointing first; the graph worker does, on its `close` message.
    */
   close(): void {
     if (this._closed) return;
     this._closed = true;
-    this._lock?.release();
+    this._owner?.clear();
   }
 
   // ── Writes ────────────────────────────────────────────────────────

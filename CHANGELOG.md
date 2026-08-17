@@ -87,12 +87,15 @@ all of the above.
   writers that are not Zora, such as the `sparrowdb` CLI or the SparrowDB MCP
   server.
 
-  The graph tier now recognises that refusal and treats it like every other
-  graph failure: one warning, no `graph_recall`, lexical memory intact. Zora
-  also keeps a lock file of its own (`.zora-graph.lock`, recording the holding
-  pid) as a backstop where OS-level locking is unreliable — an NFS-mounted home
-  directory — and so the warning can name the holding process rather than only
-  the path.
+  The graph tier recognises that refusal and treats it like every other graph
+  failure: one warning, no `graph_recall`, lexical memory intact. Zora adds no
+  lock of its own — a hand-rolled lock behind a kernel lock adds no exclusion,
+  only new ways to refuse a database nobody holds. It does write a note beside
+  the database (`.zora-graph-owner.json`) recording which process opened it,
+  read in exactly one place: naming the holder in that warning, since upstream's
+  message can only give the path and the case it fires on is `zora-agent ask`
+  while the daemon is running. The note gates nothing, so a stale or deleted one
+  costs only a less specific message.
 
   Two adapter comments had gone stale by 0.1.26, so
   `tests/unit/memory/graph/dialect-contract.test.ts` now asserts all twelve

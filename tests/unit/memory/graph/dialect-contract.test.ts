@@ -29,13 +29,16 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { loadSparrow, type SparrowDatabase } from '../../../../src/memory/graph/sparrow-loader.js';
-import { isDatabaseLockedError } from '../../../../src/memory/graph/process-lock.js';
+import { isDatabaseLockedError } from '../../../../src/memory/graph/graph-owner.js';
 
 const loaded = await loadSparrow();
 const describeIfNative = (): typeof describe | typeof describe.skip =>
   loaded.available ? describe : describe.skip;
 
-describeIfNative()('sparrowdb dialect contract', () => {
+// Synchronous native calls under full-suite parallel load can outrun vitest's
+// 5000 ms default; see the note in graph-store.test.ts (MEM-35). The spawned
+// child process in the lock case needs headroom of its own.
+describeIfNative()('sparrowdb dialect contract', { timeout: 30_000 }, () => {
   let tmpDir: string;
   let dbRoot: string;
   let db: SparrowDatabase;

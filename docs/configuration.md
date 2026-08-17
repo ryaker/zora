@@ -235,19 +235,20 @@ easy to reach by accident: `zora-agent daemon` holds the graph for its whole
 lifetime, and every other `zora-agent` command boots its own agent against the
 same path.
 
-`sparrowdb@0.1.27` closed it. `open()` now takes an exclusive lock on
-`db.lock` inside the database directory and refuses a second process outright,
-so the corruption is no longer reachable — by Zora or by anything else, the
-`sparrowdb` CLI and the SparrowDB MCP server included. Zora requires `^0.1.27`,
-so this is always in force. The kernel releases the lock when the holding
-process exits, including on a crash, so there is nothing to clean up by hand.
+`sparrowdb@0.1.27` closed it. `open()` now takes an exclusive lock on `db.lock`
+inside the database directory and refuses a second process outright, so the
+corruption is no longer reachable — by Zora or by anything else, the `sparrowdb`
+CLI and the SparrowDB MCP server included. Zora requires `^0.1.27`, so this is
+always in force. The kernel releases the lock when the holding process exits,
+including on a crash, so there is nothing to clean up by hand.
 
-Zora adds a second lock file of its own (`.zora-graph.lock`) recording the
-holding pid. It is a backstop for filesystems where OS-level locking is
-unreliable — an NFS-mounted home directory, most plausibly — and it lets the
-warning name the process holding the database rather than just the path.
+Zora keeps no lock of its own. It does write a small note beside the database
+(`.zora-graph-owner.json`) recording which process opened it, used for one thing
+only: so the warning can say *who* holds the graph rather than just where it is.
+Deleting that file is harmless — it affects the wording of a log line, nothing
+else.
 
-Either way, a second Zora process finds the tier inert with a warning, and
+So a second Zora process finds the graph tier inert with a warning, and
 everything else keeps working. If you want two Zora processes with graph memory
 at once, give each its own `ZORA_GRAPH_MEMORY_PATH`; they are separate graphs,
 not a shared one.

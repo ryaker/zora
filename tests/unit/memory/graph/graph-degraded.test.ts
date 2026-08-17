@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -17,7 +18,7 @@ import {
   resetSparrowLoaderCache,
 } from '../../../../src/memory/graph/sparrow-loader.js';
 import { GraphStore } from '../../../../src/memory/graph/graph-store.js';
-import { resetGraphLockRegistry } from '../../../../src/memory/graph/process-lock.js';
+import { describeGraphOwner } from '../../../../src/memory/graph/graph-owner.js';
 import { GraphMemoryClient } from '../../../../src/memory/graph/graph-memory-worker.js';
 import { createGraphTools } from '../../../../src/tools/graph-tools.js';
 import {
@@ -123,34 +124,20 @@ describe('GraphStore when another process holds the database (MEM-35)', () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    resetGraphLockRegistry();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-graph-held-'));
     dbPath = path.join(tmpDir, 'graph.db');
   });
 
   afterEach(async () => {
-    resetGraphLockRegistry();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('goes inert rather than opening a database a live process already holds', async () => {
-    // Two writers on one SparrowDB root can leave it permanently unopenable
-    // (SparrowDB #524), so this degrade is the point of the lock, not a
-    // consequence of it. `process.ppid` stands in for the daemon: a real, live
-    // process that is not this one.
-    await fs.mkdir(dbPath, { recursive: true });
-    await fs.writeFile(
-      path.join(dbPath, '.zora-graph.lock'),
-      JSON.stringify({ pid: process.ppid, host: os.hostname(), startedAt: '' }),
-    );
-
-    expect(await GraphStore.open({ path: dbPath })).toBeNull();
-  });
-
-  it("relays upstream's own lock refusal through the same inert path", async () => {
-    // On a runtime carrying SparrowDB's cross-process flock, a holder Zora's
-    // advisory lock cannot see — the sparrowdb CLI, the SparrowDB MCP server —
-    // is refused by the engine instead. Same outcome, no stack trace.
+  it("relays SparrowDB's lock refusal through the inert path, not a throw", async () => {
+    // The engine owns exclusion (SparrowDB #524, fixed in 0.1.27). All the
+    // adapter has to do is recognise the refusal and degrade like every other
+    // graph failure. `dialect-contract.test.ts` proves the real engine emits
+    // this message; here it is injected so the branch is covered on platforms
+    // with no native binary.
     const store = await GraphStore.open({
       path: dbPath,
       module: {
@@ -168,17 +155,61 @@ describe('GraphStore when another process holds the database (MEM-35)', () => {
     expect(store).toBeNull();
   });
 
-  it('releases the database on close, so the next process can open it', async () => {
-    const first = await GraphStore.open({ path: dbPath });
-    if (!first) return; // no native module on this platform
-    first.close();
+  it('records the holding pid on a successful open, and withdraws it on close', async () => {
+    // The note exists so a *refused* process can say who holds the database
+    // rather than only where it is. It must never gate anything, which is why
+    // the assertions here are about the file's contents, not about whether a
+    // second open is permitted.
+    const store = await GraphStore.open({ path: dbPath });
+    if (!store) return; // no native module on this platform
 
-    // A fresh process would have an empty registry; clearing it makes the
-    // on-disk lock the only thing standing between the two opens.
-    resetGraphLockRegistry();
-    const second = await GraphStore.open({ path: dbPath });
-    expect(second).not.toBeNull();
-    second?.close();
+    const noteFile = path.join(dbPath, '.zora-graph-owner.json');
+    const note = JSON.parse(await fs.readFile(noteFile, 'utf8')) as Record<string, unknown>;
+    expect(note.pid).toBe(process.pid);
+    expect(note.host).toBe(os.hostname());
+
+    store.close();
+    expect(existsSync(noteFile)).toBe(false);
+  });
+
+  it('names a live holder, and declines to name a dead one', async () => {
+    await fs.mkdir(dbPath, { recursive: true });
+    const noteFile = path.join(dbPath, '.zora-graph-owner.json');
+
+    // `process.ppid` is a real, live process that is not this one.
+    await fs.writeFile(
+      noteFile,
+      JSON.stringify({ pid: process.ppid, host: os.hostname(), startedAt: '' }),
+    );
+    expect(describeGraphOwner(dbPath)).toContain(String(process.ppid));
+
+    // A pid above the system maximum cannot be running. Naming it would send
+    // the user after a process that does not exist, so the caller falls back to
+    // a generic message instead.
+    await fs.writeFile(
+      noteFile,
+      JSON.stringify({ pid: 0x7ffffffe, host: os.hostname(), startedAt: '' }),
+    );
+    expect(describeGraphOwner(dbPath)).toBeNull();
+  });
+
+  it('reports a note from another host without pretending to probe it', async () => {
+    // Liveness is unknowable across a network mount, so the wording has to
+    // carry the uncertainty rather than the code guessing.
+    await fs.mkdir(dbPath, { recursive: true });
+    await fs.writeFile(
+      path.join(dbPath, '.zora-graph-owner.json'),
+      JSON.stringify({ pid: 4821, host: 'some-other-box', startedAt: '' }),
+    );
+    expect(describeGraphOwner(dbPath)).toContain('some-other-box');
+  });
+
+  it('falls back to no holder when the note is missing or unreadable', async () => {
+    expect(describeGraphOwner(dbPath)).toBeNull();
+
+    await fs.mkdir(dbPath, { recursive: true });
+    await fs.writeFile(path.join(dbPath, '.zora-graph-owner.json'), 'not json');
+    expect(describeGraphOwner(dbPath)).toBeNull();
   });
 });
 

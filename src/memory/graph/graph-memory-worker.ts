@@ -167,9 +167,9 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
         case 'close':
           drain();
           store.checkpoint();
-          // Checkpoint first, then hand the database root back (MEM-35): the
-          // lock is what stops the next `zora-agent` process from opening a
-          // database this one is still writing to.
+          // Checkpoint first, then withdraw this process's owner note
+          // (MEM-35). SparrowDB's own lock is released when the process exits;
+          // this just stops a later refusal from naming a store that is done.
           store.close();
           port.postMessage({ id: request.id, kind: 'ok' } satisfies WorkerResponse);
           port.close();
