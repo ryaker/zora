@@ -166,7 +166,9 @@ describe('acquireGraphLock', () => {
 describe('isDatabaseLockedError', () => {
   it("recognises upstream's cross-process lock refusal", () => {
     // The exact Display text of SparrowDB's `Error::DatabaseLocked`, which
-    // lands after 0.1.26 and reaches JS as a plain Error with no code to test.
+    // shipped in 0.1.27 and reaches JS as a plain Error with no code to test.
+    // `dialect-contract.test.ts` checks this same match against a refusal
+    // provoked from a real second process; this case pins the string itself.
     const err = new Error(
       "database locked: another process already has '/home/u/.zora/memory/graph.db' open for " +
         'writing. SparrowDB allows only one open handle per database root at a time — close the ' +
