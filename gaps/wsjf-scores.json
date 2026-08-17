@@ -2257,7 +2257,7 @@
     {
       "id": "MEM-35",
       "category": "memory",
-      "title": "Graph tier: upgrade to sparrowdb 0.1.26 and guard against concurrent opens of one database root",
+      "title": "Graph tier: upgrade to sparrowdb 0.1.27, closing the concurrent-open corruption on one database root",
       "severity": "S1",
       "files_affected": 9,
       "impact": 7,

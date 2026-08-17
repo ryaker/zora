@@ -23,9 +23,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { loadSparrow, type SparrowDatabase } from '../../../../src/memory/graph/sparrow-loader.js';
+import { isDatabaseLockedError } from '../../../../src/memory/graph/process-lock.js';
 
 const loaded = await loadSparrow();
 const describeIfNative = (): typeof describe | typeof describe.skip =>
@@ -33,6 +37,7 @@ const describeIfNative = (): typeof describe | typeof describe.skip =>
 
 describeIfNative()('sparrowdb dialect contract', () => {
   let tmpDir: string;
+  let dbRoot: string;
   let db: SparrowDatabase;
 
   /** Run a statement and report whether it threw, without failing the test. */
@@ -48,8 +53,9 @@ describeIfNative()('sparrowdb dialect contract', () => {
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-dialect-'));
+    dbRoot = path.join(tmpDir, 'dialect.db');
     if (!loaded.available) return;
-    db = loaded.module.SparrowDB.open(path.join(tmpDir, 'dialect.db'));
+    db = loaded.module.SparrowDB.open(dbRoot);
   });
 
   afterAll(async () => {
@@ -224,5 +230,42 @@ describeIfNative()('sparrowdb dialect contract', () => {
   it('a $-prefixed parameter key fails loudly rather than binding', () => {
     const result = attempt(() => db.executeWithParams('CREATE (:D {v: $v})', { $v: 'x' }));
     expect(result.threw).toBe(true);
+  });
+
+  it('refuses a second process, and the refusal is the one Zora matches on', () => {
+    // The reason for the 0.1.27 upgrade (SparrowDB #524). `beforeAll` still
+    // holds an open handle on this root, so the child is a genuine concurrent
+    // opener — the case that used to corrupt `catalog.tlv` silently.
+    //
+    // The child is spawned rather than faked because the value under test is
+    // upstream's error *text*: `isDatabaseLockedError` matches on a substring,
+    // and a test that fed it a string copied from this repo would pass forever
+    // regardless of what the engine actually says.
+    const entry = createRequire(import.meta.url).resolve('sparrowdb');
+    const child = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const {SparrowDB} = require(${JSON.stringify(entry)});
+         try { SparrowDB.open(${JSON.stringify(dbRoot)}); console.log('OPENED'); }
+         catch (e) { console.log('ERR:' + e.message); }`,
+      ],
+      { encoding: 'utf8' },
+    );
+
+    const output = child.stdout.trim();
+    expect(output, `child stderr: ${child.stderr}`).toMatch(/^ERR:/);
+    expect(isDatabaseLockedError(new Error(output.slice(4)))).toBe(true);
+
+    // The engine's own lock file, alongside Zora's advisory one.
+    expect(fsSync.existsSync(path.join(dbRoot, 'db.lock'))).toBe(true);
+  });
+
+  it('still lets this process open the same root twice', () => {
+    // Upstream scopes the lock to the open file description and shares it
+    // through a process-local registry. Zora needs that: the graph worker is a
+    // thread, and several tests reopen a root they already hold.
+    const second = attempt(() => loaded.available && loaded.module.SparrowDB.open(dbRoot));
+    expect(second.threw).toBe(false);
   });
 });

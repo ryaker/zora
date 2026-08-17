@@ -4,7 +4,7 @@
  * `sparrowdb` is an optionalDependency with N-API bindings. It can be absent or
  * unloadable for several ordinary reasons:
  *   - `npm install --no-optional`, or an install where the optional dep failed;
- *   - an unsupported platform (0.1.26 bundles prebuilt binaries for
+ *   - an unsupported platform (0.1.27 bundles prebuilt binaries for
  *     `linux-x64-gnu` and `darwin-arm64` only — no Windows, no linux-arm64, no
  *     Intel macOS, no musl/Alpine);
  *   - a binary present under the expected name that still fails to `dlopen`,
@@ -62,13 +62,17 @@ export type SparrowLoadResult =
 /**
  * Platforms for which `sparrowdb` ships a prebuilt binary.
  *
- * Must mirror `PLATFORM_BINARIES` in the package's own `index.js`. Up to 0.1.24
- * the package declared `optionalDependencies` on `@sparrowdb/darwin-x64`,
- * `@sparrowdb/linux-arm64-gnu` and `@sparrowdb/win32-x64-msvc`, none of which
- * were ever published; 0.1.26 dropped those declarations and bundles the two
- * binaries that do exist directly in the tarball. `darwin-x64` was in this set
- * on the strength of a sub-package that never shipped, so an Intel Mac got past
- * this gate only to fail at `require`. Two entries is the honest list.
+ * Must mirror `PLATFORM_BINARIES` in the package's own `platforms.js` (it lived
+ * in `index.js` and was exported until 0.1.27 moved it out of the public API,
+ * upstream #518 — so it cannot simply be read from the module).
+ *
+ * Up to 0.1.24 the package declared `optionalDependencies` on
+ * `@sparrowdb/darwin-x64`, `@sparrowdb/linux-arm64-gnu` and
+ * `@sparrowdb/win32-x64-msvc`, none of which were ever published; 0.1.26
+ * dropped those declarations and bundles the two binaries that do exist
+ * directly in the tarball. `darwin-x64` was in this set on the strength of a
+ * sub-package that never shipped, so an Intel Mac got past this gate only to
+ * fail at `require`. Two entries is the honest list.
  */
 const SUPPORTED_PLATFORMS = new Set(['linux-x64', 'darwin-arm64']);
 
@@ -116,8 +120,8 @@ export async function loadSparrow(
     // ESM namespace had exactly one key, `default`, and
     // `import { SparrowDB } from 'sparrowdb'` threw "Named export 'SparrowDB'
     // not found". 0.1.26 fixed that (upstream #449) by re-assigning the names
-    // statically after the dynamic export, and the namespace now carries
-    // `SparrowDB`, `ReadTx` and `WriteTx` under real Node ESM. Vite/vitest
+    // statically after the dynamic export, and on 0.1.27 the namespace carries
+    // exactly `SparrowDB`, `ReadTx`, `WriteTx` and `default`. Vite/vitest
     // interops the old shape into named exports anyway. Reading `mod.SparrowDB`
     // first and falling back to `mod.default` covers all three cases without
     // pinning the loader to a version.

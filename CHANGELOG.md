@@ -74,28 +74,35 @@ all of the above.
 - **Claude Agent SDK upgraded from 0.2.76 to 0.3.232 (SDK-02).** The
   `package.json` caret range was pinned to the 0.2 line, so the dependency would
   never have picked up 0.3 on its own.
-- **`sparrowdb` upgraded from 0.1.24 to 0.1.26 (MEM-35).** The graph tier now
-  refuses to open a database another process already holds, because on 0.1.26
-  and earlier nothing else does: SparrowDB takes no lock, and two processes
-  writing one database root corrupt its catalog *permanently* — upstream
-  measured 4 of 5 concurrent runs left the database unopenable
-  ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). Zora sits
-  squarely in the shape upstream warns about: the daemon holds the graph for its
-  lifetime while every other `zora-agent` command opens its own. A lock file in
-  the database root (`.zora-graph.lock`) now turns the second process away with
-  a warning naming the holder, reclaimed automatically once that process is
-  gone, and SparrowDB's own `database locked` error — which lands in a version
-  after 0.1.26 and also catches non-Zora writers — routes to the same inert
-  path. The outcome is unchanged from every other graph failure: one warning, no
-  `graph_recall`, lexical memory intact.
+- **`sparrowdb` upgraded from 0.1.24 to 0.1.27, and the range floor raised to
+  `^0.1.27` (MEM-35).** The floor is deliberate rather than incidental: through
+  0.1.26 SparrowDB took no lock on a database root, and two processes writing
+  one root corrupt its catalog *permanently* — upstream measured 4 of 5
+  concurrent runs left the database unopenable
+  ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). Zora sat
+  squarely in the shape upstream warned about: the daemon holds the graph for
+  its lifetime while every other `zora-agent` command opens its own. 0.1.27
+  takes an exclusive lock at `open()` and refuses the second process, so on any
+  version this release accepts, the corruption is unreachable — including from
+  writers that are not Zora, such as the `sparrowdb` CLI or the SparrowDB MCP
+  server.
 
-  Two adapter comments were wrong by the time 0.1.26 shipped, so
+  The graph tier now recognises that refusal and treats it like every other
+  graph failure: one warning, no `graph_recall`, lexical memory intact. Zora
+  also keeps a lock file of its own (`.zora-graph.lock`, recording the holding
+  pid) as a backstop where OS-level locking is unreliable — an NFS-mounted home
+  directory — and so the warning can name the holding process rather than only
+  the path.
+
+  Two adapter comments had gone stale by 0.1.26, so
   `tests/unit/memory/graph/dialect-contract.test.ts` now asserts all twelve
-  documented engine quirks directly against the installed engine — a version
-  bump is a test run rather than a re-reading. `ORDER BY` is correct as of
-  0.1.26 (it was not before), and a replayed property-carrying edge `CREATE` now
-  overwrites in place rather than duplicating; the adapter's existing guards
-  were right either way, but for a different reason than the comments claimed.
+  documented engine quirks — plus the cross-process refusal, provoked from a
+  real second process — directly against the installed engine. A version bump
+  is a test run rather than a re-reading. `ORDER BY` is correct as of 0.1.26 (it
+  was not before), and a replayed property-carrying edge `CREATE` overwrites in
+  place rather than duplicating; the adapter's existing guards were right either
+  way, but for a different reason than the comments claimed. All twelve hold
+  unchanged on 0.1.27.
 
   `sparrow-loader` also drops `darwin-x64` from its supported-platform list.
   0.1.26 stopped declaring `optionalDependencies` on platform sub-packages that

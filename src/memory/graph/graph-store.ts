@@ -116,12 +116,23 @@
  * holds a graph worker for its lifetime while any other `zora-agent` command
  * boots its own Orchestrator against the same path.
  *
- * `open()` therefore takes Zora's own advisory lock on the root before handing
- * the path to SparrowDB, and recognises upstream's own `database locked` error
- * on runtimes new enough to raise it. Either way the outcome is the established
- * one — `null`, one warning, an inert tier — because a graph that will not open
- * has never been allowed to be an error that reaches the user. See
- * `process-lock.ts` for what the advisory lock does and does not cover.
+ * **On 0.1.27 the engine enforces this itself.** `SparrowDB.open()` takes an
+ * exclusive `flock` on `<root>/db.lock` and refuses a second handle with
+ * `database locked: …`, released by the kernel so a crashed holder leaves
+ * nothing to reclaim. That is the primary guard, it covers writers Zora knows
+ * nothing about — the `sparrowdb` CLI, the SparrowDB MCP server — and the
+ * package range is pinned at `^0.1.27` so every supported install has it.
+ * `isDatabaseLockedError` recognises that refusal and routes it below.
+ *
+ * `open()` *also* takes Zora's own advisory lock first. It is deliberately
+ * secondary now: it survives filesystems where `flock` is a no-op rather than a
+ * lock (an NFS-mounted home directory being the realistic one), and it names the
+ * holding pid, which upstream's message cannot. See `process-lock.ts` for what
+ * it does and does not cover.
+ *
+ * Either way the outcome is the established one — `null`, one warning, an inert
+ * tier — because a graph that will not open has never been allowed to be an
+ * error that reaches the user.
  *
  * ## On-disk compatibility
  *
@@ -252,7 +263,7 @@ export class GraphStore {
       if (typeof db.executeWithParams !== 'function') {
         log.warn(
           { path: options.path },
-          'Installed sparrowdb has no executeWithParams (needs >= 0.1.26) — ' +
+          'Installed sparrowdb has no executeWithParams (needs >= 0.1.27) — ' +
             'graph memory tier is inert',
         );
         lock?.release();
@@ -262,10 +273,10 @@ export class GraphStore {
       store._warnIfPreSurrogate(options.path);
       return store;
     } catch (err) {
-      // Upstream's own cross-process lock (SparrowDB #524) lands after 0.1.26.
-      // On a runtime that has it, a holder our advisory lock cannot see — the
-      // sparrowdb CLI, the SparrowDB MCP server — is caught here instead, and
-      // gets the same inert outcome rather than a stack trace.
+      // Upstream's cross-process `flock` (SparrowDB #524, shipped in 0.1.27).
+      // This is the branch that catches a holder our advisory lock cannot see —
+      // the sparrowdb CLI, the SparrowDB MCP server, anything that is not Zora
+      // — and gives it the same inert outcome rather than a stack trace.
       if (isDatabaseLockedError(err)) {
         log.warn(
           { path: options.path },

@@ -19,17 +19,29 @@
  * other `zora-agent` invocation boots its own Orchestrator, hence its own
  * `GraphStore.open()`, against the same `ZORA_GRAPH_MEMORY_PATH`.
  *
- * ## Why it is only best-effort
+ * ## This is the second line of defence, not the first
  *
- * The real fix is upstream and lands after 0.1.26: `GraphDb::open` takes an
- * exclusive `flock` on `<root>/db.lock` and returns `Error::DatabaseLocked`
- * rather than handing out a second handle. That is strictly better than
- * anything reachable from JS — `flock` is released by the kernel, so a
- * SIGKILLed holder leaves nothing to reclaim. Node exposes no `flock`, so this
- * module uses the portable substitute: an exclusively-created PID file plus a
- * liveness probe on the recorded pid.
+ * `sparrowdb@0.1.27` fixed it properly: `GraphDb::open` takes an exclusive
+ * `flock` on `<root>/db.lock` and returns `Error::DatabaseLocked` rather than
+ * handing out a second handle. That is strictly better than anything reachable
+ * from JS — the kernel releases `flock`, so a SIGKILLed holder leaves nothing to
+ * reclaim, and it binds every writer rather than only the ones that opt in.
+ * Zora's package range is `^0.1.27`, so it is always present.
  *
- * The gap that leaves, stated plainly rather than papered over:
+ * This module is kept behind it for two narrow reasons, and it is worth being
+ * honest that they are narrow:
+ *
+ *   1. **`flock` is not reliable on every filesystem.** Over NFS it degrades to
+ *      advisory-at-best or a silent no-op depending on the mount, and
+ *      `~/.zora/memory/` on a network home directory is an ordinary setup. A
+ *      pid file plus a liveness probe fails differently, so the two do not fail
+ *      together.
+ *   2. **It can name the holder.** Upstream's message reports the path; this one
+ *      reports the pid, which is what a user actually needs to act on.
+ *
+ * Node exposes no `flock`, so the mechanism here is the portable substitute: an
+ * exclusively-created PID file plus a liveness probe on the recorded pid. The
+ * gap that leaves, stated plainly rather than papered over:
  *
  *   - **Pid reuse.** A stale lock whose pid has since been reused by an
  *     unrelated process reads as live, and the graph tier stays inert until the
@@ -42,11 +54,12 @@
  *   - **Any writer that is not Zora** — the sparrowdb CLI, the SparrowDB MCP
  *     server, another tool — does not take this lock and is not stopped by it.
  *
- * All three close on their own once the runtime is on the version that carries
- * upstream's `flock`: {@link isDatabaseLockedError} recognises that error and
- * `GraphStore.open` routes it to the same inert path, so the two guards stack
- * rather than compete. The lock file is deliberately **not** named `db.lock`,
- * which is upstream's; this one is Zora's and is named accordingly.
+ * On 0.1.27 all three are already covered by upstream's `flock`, which is why
+ * this module is allowed to have them: {@link isDatabaseLockedError} recognises
+ * that refusal and `GraphStore.open` routes it to the same inert path, so the
+ * two guards stack rather than compete. The lock file is deliberately **not**
+ * named `db.lock` — that name is upstream's, and both files now live in the
+ * same directory. This one is Zora's and is named accordingly.
  */
 
 import fs from 'node:fs';
@@ -176,13 +189,17 @@ export function acquireGraphLock(root: string): GraphLockResult {
 
 /**
  * Whether an error from `SparrowDB.open()` is upstream's cross-process lock
- * refusing a second handle (SparrowDB #524).
+ * refusing a second handle (SparrowDB #524, shipped in 0.1.27).
  *
  * Matched on the message because the N-API boundary flattens
  * `Error::DatabaseLocked` to a plain `Error` — there is no code or class to
  * test. The substring is the stable half of upstream's `Display`:
  * `"database locked: another process already has '<path>' open for writing…"`,
  * which upstream's own regression test asserts on.
+ *
+ * `dialect-contract.test.ts` provokes the real refusal from a real second
+ * process and feeds it to this function, so the match is checked against the
+ * engine rather than against a copy of the string kept here.
  */
 export function isDatabaseLockedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);

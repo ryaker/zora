@@ -226,25 +226,31 @@ inert and everything else works unchanged.
 
 #### One process per graph database
 
-SparrowDB allows a single writer per database root. Two processes that open the
-same root concurrently can corrupt its catalog *permanently*, leaving a database
-that cannot be opened at all — upstream measured 4 of 5 concurrent runs doing
-exactly that ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)).
-That is easy to reach by accident: `zora-agent daemon` holds the graph for its
-whole lifetime, and every other `zora-agent` command boots its own agent against
-the same path.
+SparrowDB allows a single writer per database root. Two processes that opened
+the same root concurrently used to corrupt its catalog *permanently*, leaving a
+database that could not be opened at all — upstream measured 4 of 5 concurrent
+runs doing exactly that
+([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). That was
+easy to reach by accident: `zora-agent daemon` holds the graph for its whole
+lifetime, and every other `zora-agent` command boots its own agent against the
+same path.
 
-So Zora claims the database root before opening it, with a lock file
-(`.zora-graph.lock`) inside the directory recording the holding pid. A second
-Zora process finds the tier inert with a warning naming the holder, rather than
-opening a database it could destroy. The lock is reclaimed automatically once
-the holding process is gone — a crash leaves nothing to clean up by hand.
+`sparrowdb@0.1.27` closed it. `open()` now takes an exclusive lock on
+`db.lock` inside the database directory and refuses a second process outright,
+so the corruption is no longer reachable — by Zora or by anything else, the
+`sparrowdb` CLI and the SparrowDB MCP server included. Zora requires `^0.1.27`,
+so this is always in force. The kernel releases the lock when the holding
+process exits, including on a crash, so there is nothing to clean up by hand.
 
-Two limits are worth knowing. Writers that are not Zora — the `sparrowdb` CLI,
-the SparrowDB MCP server — do not take this lock, so point them at a different
-database while Zora is running. And if you want two Zora processes with graph
-memory at once, give each its own `ZORA_GRAPH_MEMORY_PATH`; they are separate
-graphs, not a shared one.
+Zora adds a second lock file of its own (`.zora-graph.lock`) recording the
+holding pid. It is a backstop for filesystems where OS-level locking is
+unreliable — an NFS-mounted home directory, most plausibly — and it lets the
+warning name the process holding the database rather than just the path.
+
+Either way, a second Zora process finds the tier inert with a warning, and
+everything else keeps working. If you want two Zora processes with graph memory
+at once, give each its own `ZORA_GRAPH_MEMORY_PATH`; they are separate graphs,
+not a shared one.
 
 ### `[security]`
 
