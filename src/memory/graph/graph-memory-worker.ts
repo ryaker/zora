@@ -167,6 +167,10 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
         case 'close':
           drain();
           store.checkpoint();
+          // Checkpoint first, then hand the database root back (MEM-35): the
+          // lock is what stops the next `zora-agent` process from opening a
+          // database this one is still writing to.
+          store.close();
           port.postMessage({ id: request.id, kind: 'ok' } satisfies WorkerResponse);
           port.close();
           break;

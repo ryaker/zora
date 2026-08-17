@@ -21,6 +21,14 @@ export {
 
 export { GraphStore, type GraphStoreOptions } from './graph-store.js';
 
+export {
+  acquireGraphLock,
+  isDatabaseLockedError,
+  resetGraphLockRegistry,
+  type GraphLock,
+  type GraphLockResult,
+} from './process-lock.js';
+
 export { GraphMemoryClient } from './graph-memory-worker.js';
 
 export {

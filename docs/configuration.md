@@ -214,10 +214,37 @@ way before. The two-hop case is the one lexical search cannot reach at all,
 since the summaries need share no words.
 
 The tier degrades to nothing rather than failing. A missing `sparrowdb` module,
-an unsupported platform, an unopenable database, a failed worker spawn or a
-startup timeout each produce one warning and an inert client, and `graph_recall`
-is simply not registered — the agent keeps running with lexical memory alone.
-It runs on a worker thread, so the native calls do not block the main loop.
+an unsupported platform, an unopenable database, a database another process is
+already holding, a failed worker spawn or a startup timeout each produce one
+warning and an inert client, and `graph_recall` is simply not registered — the
+agent keeps running with lexical memory alone. It runs on a worker thread, so
+the native calls do not block the main loop.
+
+Prebuilt binaries exist for **linux-x64 (glibc) and darwin-arm64 only**. On any
+other platform — Windows, linux-arm64, Intel macOS, musl/Alpine — the tier stays
+inert and everything else works unchanged.
+
+#### One process per graph database
+
+SparrowDB allows a single writer per database root. Two processes that open the
+same root concurrently can corrupt its catalog *permanently*, leaving a database
+that cannot be opened at all — upstream measured 4 of 5 concurrent runs doing
+exactly that ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)).
+That is easy to reach by accident: `zora-agent daemon` holds the graph for its
+whole lifetime, and every other `zora-agent` command boots its own agent against
+the same path.
+
+So Zora claims the database root before opening it, with a lock file
+(`.zora-graph.lock`) inside the directory recording the holding pid. A second
+Zora process finds the tier inert with a warning naming the holder, rather than
+opening a database it could destroy. The lock is reclaimed automatically once
+the holding process is gone — a crash leaves nothing to clean up by hand.
+
+Two limits are worth knowing. Writers that are not Zora — the `sparrowdb` CLI,
+the SparrowDB MCP server — do not take this lock, so point them at a different
+database while Zora is running. And if you want two Zora processes with graph
+memory at once, give each its own `ZORA_GRAPH_MEMORY_PATH`; they are separate
+graphs, not a shared one.
 
 ### `[security]`
 

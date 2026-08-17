@@ -17,6 +17,7 @@ import {
   resetSparrowLoaderCache,
 } from '../../../../src/memory/graph/sparrow-loader.js';
 import { GraphStore } from '../../../../src/memory/graph/graph-store.js';
+import { resetGraphLockRegistry } from '../../../../src/memory/graph/process-lock.js';
 import { GraphMemoryClient } from '../../../../src/memory/graph/graph-memory-worker.js';
 import { createGraphTools } from '../../../../src/tools/graph-tools.js';
 import {
@@ -114,6 +115,70 @@ describe('GraphStore when the engine is unavailable', () => {
       },
     });
     expect(store).toBeNull();
+  });
+});
+
+describe('GraphStore when another process holds the database (MEM-35)', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    resetGraphLockRegistry();
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-graph-held-'));
+    dbPath = path.join(tmpDir, 'graph.db');
+  });
+
+  afterEach(async () => {
+    resetGraphLockRegistry();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('goes inert rather than opening a database a live process already holds', async () => {
+    // Two writers on one SparrowDB root can leave it permanently unopenable
+    // (SparrowDB #524), so this degrade is the point of the lock, not a
+    // consequence of it. `process.ppid` stands in for the daemon: a real, live
+    // process that is not this one.
+    await fs.mkdir(dbPath, { recursive: true });
+    await fs.writeFile(
+      path.join(dbPath, '.zora-graph.lock'),
+      JSON.stringify({ pid: process.ppid, host: os.hostname(), startedAt: '' }),
+    );
+
+    expect(await GraphStore.open({ path: dbPath })).toBeNull();
+  });
+
+  it("relays upstream's own lock refusal through the same inert path", async () => {
+    // On a runtime carrying SparrowDB's cross-process flock, a holder Zora's
+    // advisory lock cannot see — the sparrowdb CLI, the SparrowDB MCP server —
+    // is refused by the engine instead. Same outcome, no stack trace.
+    const store = await GraphStore.open({
+      path: dbPath,
+      module: {
+        SparrowDB: {
+          open: () => {
+            throw new Error(
+              `database locked: another process already has '${dbPath}' open for writing. ` +
+                'SparrowDB allows only one open handle per database root at a time — close the ' +
+                "other process's connection (or wait for it to exit) and retry.",
+            );
+          },
+        },
+      },
+    });
+    expect(store).toBeNull();
+  });
+
+  it('releases the database on close, so the next process can open it', async () => {
+    const first = await GraphStore.open({ path: dbPath });
+    if (!first) return; // no native module on this platform
+    first.close();
+
+    // A fresh process would have an empty registry; clearing it makes the
+    // on-disk lock the only thing standing between the two opens.
+    resetGraphLockRegistry();
+    const second = await GraphStore.open({ path: dbPath });
+    expect(second).not.toBeNull();
+    second?.close();
   });
 });
 

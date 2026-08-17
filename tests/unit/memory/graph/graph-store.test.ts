@@ -48,6 +48,9 @@ describe('GraphStore', () => {
   });
 
   afterEach(async () => {
+    // Hand the database root back before deleting it (MEM-35) — otherwise the
+    // lock registry keeps an entry per test for the life of the process.
+    store?.close();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

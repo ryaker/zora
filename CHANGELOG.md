@@ -74,6 +74,34 @@ all of the above.
 - **Claude Agent SDK upgraded from 0.2.76 to 0.3.232 (SDK-02).** The
   `package.json` caret range was pinned to the 0.2 line, so the dependency would
   never have picked up 0.3 on its own.
+- **`sparrowdb` upgraded from 0.1.24 to 0.1.26 (MEM-35).** The graph tier now
+  refuses to open a database another process already holds, because on 0.1.26
+  and earlier nothing else does: SparrowDB takes no lock, and two processes
+  writing one database root corrupt its catalog *permanently* — upstream
+  measured 4 of 5 concurrent runs left the database unopenable
+  ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). Zora sits
+  squarely in the shape upstream warns about: the daemon holds the graph for its
+  lifetime while every other `zora-agent` command opens its own. A lock file in
+  the database root (`.zora-graph.lock`) now turns the second process away with
+  a warning naming the holder, reclaimed automatically once that process is
+  gone, and SparrowDB's own `database locked` error — which lands in a version
+  after 0.1.26 and also catches non-Zora writers — routes to the same inert
+  path. The outcome is unchanged from every other graph failure: one warning, no
+  `graph_recall`, lexical memory intact.
+
+  Two adapter comments were wrong by the time 0.1.26 shipped, so
+  `tests/unit/memory/graph/dialect-contract.test.ts` now asserts all twelve
+  documented engine quirks directly against the installed engine — a version
+  bump is a test run rather than a re-reading. `ORDER BY` is correct as of
+  0.1.26 (it was not before), and a replayed property-carrying edge `CREATE` now
+  overwrites in place rather than duplicating; the adapter's existing guards
+  were right either way, but for a different reason than the comments claimed.
+
+  `sparrow-loader` also drops `darwin-x64` from its supported-platform list.
+  0.1.26 stopped declaring `optionalDependencies` on platform sub-packages that
+  were never published and bundles the two real binaries instead: an Intel Mac
+  previously passed the platform gate and then failed at `require`. Supported
+  platforms are linux-x64 (glibc) and darwin-arm64.
 - **Default model is `claude-opus-5` (SDK-04).** The provider fallback and the
   config `zora-agent init` generates are now the same exported constant, so
   which model you got no longer depends on whether `model` was written into

@@ -10,7 +10,7 @@
  * value was textually interpolated and defended by a hand-rolled escaper.
  * 0.1.24 added `executeWithParams(cypher, params)` *including* parameterized
  * `CREATE`, so that escaper is deleted and every value now travels as a bound
- * parameter. Verified against the published 0.1.24 tarball: the original
+ * parameter. Re-verified against the published 0.1.26 tarball: the original
  * exploit payload `", role: "admin` stored as a literal `name` with `role`
  * null.
  *
@@ -19,7 +19,9 @@
  * `parameter $x was referenced in the query but not supplied`, so getting it
  * wrong fails loudly, but it is still wrong.
  *
- * The quirks this adapter still hides, all verified against sparrowdb@0.1.24:
+ * The quirks this adapter still hides, all re-verified against sparrowdb@0.1.26
+ * (the probe is `tests/unit/memory/graph/dialect-contract.test.ts`, which runs
+ * against the real engine wherever one is installed):
  *
  *   1. **Edge writes cannot bind their endpoints.** This is the sharp one.
  *      `MATCH (a:L {k: $v}), (b:L2 {k: $w}) CREATE (a)-[:R]->(b)` under
@@ -61,22 +63,42 @@
  *   7. **`RETURN n` is unusable.** Returning a whole node yields a map keyed by
  *      hashed column names (`col_2369371622`), not the documented
  *      `{$type:'node', id}` ref. Every read here returns explicit properties.
- *   8. **`ORDER BY` is not trusted.** All ordering is done in JavaScript after
- *      a capped scan, and `LIMIT` is applied here rather than in the engine —
- *      an engine-side LIMIT over an unsorted scan truncates the wrong rows.
+ *   8. **Ordering is done in JavaScript, after a capped scan.** `ORDER BY`
+ *      itself is correct as of 0.1.26 (ascending, descending, and combined
+ *      with `LIMIT`), so this is no longer a workaround for a broken clause —
+ *      it is the cap. The engine-side `LIMIT` this adapter emits is the scan
+ *      ceiling `maxRowsScanned`, and a *bare* `LIMIT` over an unsorted scan
+ *      still truncates arbitrarily (measured: `LIMIT 2` over 1..5 returns
+ *      5 and 1). Sorting after the cap is what makes the caller's `limit`
+ *      mean "the top N of what we looked at" rather than "N arbitrary rows".
  *   9. **No indexes.** Property lookups are full scans; cost grows linearly
  *      with graph size. This is why the store runs on a worker thread — see
  *      graph-memory-worker.ts.
- *  10. **Edge properties are write-once.** `MATCH (a)-[r:R]->(b) SET r.x = …`
- *      fails with "supports only single-node patterns", and there is no
- *      `REMOVE`. The ontology is designed so nothing here needs to mutate one:
- *      a superseded decision gets a new `SUPERSEDES` edge rather than an
- *      edited one. Node properties *can* be updated, through a single-node
- *      `MATCH … SET`, which is what every writer below uses.
- *  11. **`MERGE` on an edge drops its properties; `CREATE` on an edge is not
- *      idempotent.** Verified on 0.1.24 and unchanged from 0.1.21. So
+ *  10. **Edge properties cannot be edited in place.** `MATCH (a)-[r:R]->(b)
+ *      SET r.x = …` fails with "MATCH...SET/DELETE currently supports only
+ *      single-node patterns (no relationships)", and there is no `REMOVE`. The
+ *      ontology is designed so nothing here needs to mutate one: a superseded
+ *      decision gets a new `SUPERSEDES` edge rather than an edited one. Node
+ *      properties *can* be updated, through a single-node `MATCH … SET`, which
+ *      is what every writer below uses.
+ *  11. **`MERGE` on an edge drops its properties; a replayed `CREATE` on an
+ *      edge misbehaves in a way that depends on whether it carries any.** So
  *      property-less edges use `MERGE`, and property-carrying edges are
- *      guarded by an existence check and then `CREATE`d.
+ *      guarded by an existence check and then `CREATE`d. Both halves of that
+ *      split are still load-bearing on 0.1.26, but the second one now prevents
+ *      a different failure than it did on 0.1.24:
+ *        - `MERGE (a)-[:R {p: 'v'}]->(b)` is idempotent and **silently discards
+ *          the edge properties** — `r.p` reads back null. Unchanged.
+ *        - Replaying a property-*less* `CREATE (a)-[:R]->(b)` still appends a
+ *          duplicate edge, and a traversal then returns the neighbour twice.
+ *          Unchanged, and the reason `MERGE` is used there.
+ *        - Replaying a property-*carrying* `CREATE (a)-[:R {p: …}]->(b)` no
+ *          longer duplicates: 0.1.26 keeps one edge per (from, type, to) and
+ *          **overwrites** its properties, so replaying with `p: 'v1'` then
+ *          `p: 'v2'` leaves a single edge reading `v2`. That is a quieter bug
+ *          than the duplicate rows of 0.1.24 — a replayed write silently
+ *          rewrites history instead of visibly doubling it — and the existence
+ *          check in `_link` is what keeps these edges write-once regardless.
  *  12. **`null` and array property values are rejected at CREATE.** Optional
  *      fields are omitted rather than nulled, and only strings and numbers are
  *      written. Booleans are avoided entirely: they round-trip as 1/0 and
@@ -84,6 +106,22 @@
  *
  * Missing labels and relationship types are not errors: a pattern over a label
  * that has never been written returns zero rows.
+ *
+ * ## One writer per database root (MEM-35)
+ *
+ * SparrowDB is single-process. Two processes holding one database root can
+ * permanently corrupt `catalog.tlv` — not "lose a write", but leave the
+ * database unopenable, which upstream measured at 4 of 5 concurrent runs
+ * (SparrowDB #524). Zora hits the exact shape upstream warns about: the daemon
+ * holds a graph worker for its lifetime while any other `zora-agent` command
+ * boots its own Orchestrator against the same path.
+ *
+ * `open()` therefore takes Zora's own advisory lock on the root before handing
+ * the path to SparrowDB, and recognises upstream's own `database locked` error
+ * on runtimes new enough to raise it. Either way the outcome is the established
+ * one — `null`, one warning, an inert tier — because a graph that will not open
+ * has never been allowed to be an error that reaches the user. See
+ * `process-lock.ts` for what the advisory lock does and does not cover.
  *
  * ## On-disk compatibility
  *
@@ -105,6 +143,7 @@ import {
 } from './identifiers.js';
 import type { CypherParams, SparrowDatabase, SparrowModule } from './sparrow-loader.js';
 import { loadSparrow } from './sparrow-loader.js';
+import { acquireGraphLock, isDatabaseLockedError, type GraphLock } from './process-lock.js';
 import {
   isEntityKind,
   NODE_LABELS,
@@ -158,25 +197,49 @@ interface NodeIdentity {
 export class GraphStore {
   private readonly _db: SparrowDatabase;
   private readonly _maxRows: number;
+  private readonly _lock: GraphLock | null;
+  private _closed = false;
 
-  private constructor(db: SparrowDatabase, maxRows: number) {
+  private constructor(db: SparrowDatabase, maxRows: number, lock: GraphLock | null) {
     this._db = db;
     this._maxRows = clampLimit(maxRows);
+    this._lock = lock;
   }
 
   /**
    * Open (or create) a graph database.
    *
-   * @returns A store, or `null` when `sparrowdb` is unavailable or the database
-   *   cannot be opened. Callers must treat `null` as "graph tier is inert" and
-   *   continue without it.
+   * Takes the single-writer lock described in the class header before handing
+   * the path to SparrowDB, so a second Zora process is turned away rather than
+   * given a handle it could corrupt the catalog with. The lock is skipped when
+   * a `module` is injected: that seam exists for tests, which have no real
+   * database on disk to protect and may pass a path that is not writable.
+   *
+   * @returns A store, or `null` when `sparrowdb` is unavailable, another
+   *   process holds the database, or it cannot be opened. Callers must treat
+   *   `null` as "graph tier is inert" and continue without it.
    */
   static async open(options: GraphStoreOptions): Promise<GraphStore | null> {
     let mod = options.module;
+    const injected = mod !== undefined;
     if (!mod) {
       const loaded = await loadSparrow();
       if (!loaded.available) return null;
       mod = loaded.module;
+    }
+
+    let lock: GraphLock | null = null;
+    if (!injected) {
+      const claim = acquireGraphLock(options.path);
+      if (!claim.acquired) {
+        log.warn(
+          { path: options.path, reason: claim.reason },
+          'Graph database is already open elsewhere — graph memory tier is inert. ' +
+            'Zora continues without relational recall.',
+        );
+        return null;
+      }
+      lock = claim.lock;
     }
 
     try {
@@ -189,21 +252,49 @@ export class GraphStore {
       if (typeof db.executeWithParams !== 'function') {
         log.warn(
           { path: options.path },
-          'Installed sparrowdb has no executeWithParams (needs >= 0.1.24) — ' +
+          'Installed sparrowdb has no executeWithParams (needs >= 0.1.26) — ' +
             'graph memory tier is inert',
         );
+        lock?.release();
         return null;
       }
-      const store = new GraphStore(db, options.maxRowsScanned ?? 500);
+      const store = new GraphStore(db, options.maxRowsScanned ?? 500, lock);
       store._warnIfPreSurrogate(options.path);
       return store;
     } catch (err) {
-      log.warn(
-        { err, path: options.path },
-        'Failed to open graph database — graph memory tier is inert',
-      );
+      // Upstream's own cross-process lock (SparrowDB #524) lands after 0.1.26.
+      // On a runtime that has it, a holder our advisory lock cannot see — the
+      // sparrowdb CLI, the SparrowDB MCP server — is caught here instead, and
+      // gets the same inert outcome rather than a stack trace.
+      if (isDatabaseLockedError(err)) {
+        log.warn(
+          { path: options.path },
+          'SparrowDB refused a second handle on this database (another process holds it) — ' +
+            'graph memory tier is inert. Zora continues without relational recall.',
+        );
+      } else {
+        log.warn(
+          { err, path: options.path },
+          'Failed to open graph database — graph memory tier is inert',
+        );
+      }
+      lock?.release();
       return null;
     }
+  }
+
+  /**
+   * Release the single-writer lock. Idempotent.
+   *
+   * SparrowDB exposes no `close()`, so this does not close the handle — it
+   * hands the database root back so the next process can take it. The caller is
+   * responsible for checkpointing first; the graph worker does, on its `close`
+   * message.
+   */
+  close(): void {
+    if (this._closed) return;
+    this._closed = true;
+    this._lock?.release();
   }
 
   // ── Writes ────────────────────────────────────────────────────────
@@ -651,14 +742,17 @@ export class GraphStore {
    *
    * Choosing between MERGE and CREATE is not a style question here — the two
    * verbs have different, individually broken behaviours, verified against
-   * sparrowdb 0.1.24:
+   * sparrowdb 0.1.26:
    *
    *   - `MERGE (a)-[:R {p: 'v'}]->(b)` is idempotent but **silently discards
    *     the edge properties**: `r.p` reads back as null.
-   *   - `CREATE (a)-[:R {p: 'v'}]->(b)` stores the properties but is **not
-   *     idempotent**: replaying it appends duplicate edges, and a traversal
-   *     then returns the same neighbour N times. (`count(r)` misleadingly
-   *     reports 1, so counting cannot be used to detect this.)
+   *   - `CREATE (a)-[:R]->(b)` with no properties is **not idempotent**:
+   *     replaying it appends a duplicate edge, and a traversal then returns the
+   *     same neighbour N times.
+   *   - `CREATE (a)-[:R {p: 'v'}]->(b)` stores the properties, and on 0.1.26 a
+   *     replay **overwrites them in place** rather than duplicating the edge
+   *     (0.1.24 duplicated). Neither is what a replay should do, and the
+   *     existence check below is what makes it a no-op either way.
    *
    * So: property-less edges use MERGE, and edges that carry properties are
    * guarded by an existence check and then CREATEd. The check is a
