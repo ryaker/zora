@@ -167,6 +167,10 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
         case 'close':
           drain();
           store.checkpoint();
+          // Checkpoint first, then withdraw this process's owner note
+          // (MEM-35). SparrowDB's own lock is released when the process exits;
+          // this just stops a later refusal from naming a store that is done.
+          store.close();
           port.postMessage({ id: request.id, kind: 'ok' } satisfies WorkerResponse);
           port.close();
           break;

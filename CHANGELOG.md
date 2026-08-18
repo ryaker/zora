@@ -74,6 +74,44 @@ all of the above.
 - **Claude Agent SDK upgraded from 0.2.76 to 0.3.232 (SDK-02).** The
   `package.json` caret range was pinned to the 0.2 line, so the dependency would
   never have picked up 0.3 on its own.
+- **`sparrowdb` upgraded from 0.1.24 to 0.1.27, and the range floor raised to
+  `^0.1.27` (MEM-35).** The floor is deliberate rather than incidental: through
+  0.1.26 SparrowDB took no lock on a database root, and two processes writing
+  one root corrupt its catalog *permanently* — upstream measured 4 of 5
+  concurrent runs left the database unopenable
+  ([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). Zora sat
+  squarely in the shape upstream warned about: the daemon holds the graph for
+  its lifetime while every other `zora-agent` command opens its own. 0.1.27
+  takes an exclusive lock at `open()` and refuses the second process, so on any
+  version this release accepts, the corruption is unreachable — including from
+  writers that are not Zora, such as the `sparrowdb` CLI or the SparrowDB MCP
+  server.
+
+  The graph tier recognises that refusal and treats it like every other graph
+  failure: one warning, no `graph_recall`, lexical memory intact. Zora adds no
+  lock of its own — a hand-rolled lock behind a kernel lock adds no exclusion,
+  only new ways to refuse a database nobody holds. It does write a note beside
+  the database (`.zora-graph-owner.json`) recording which process opened it,
+  read in exactly one place: naming the holder in that warning, since upstream's
+  message can only give the path and the case it fires on is `zora-agent ask`
+  while the daemon is running. The note gates nothing, so a stale or deleted one
+  costs only a less specific message.
+
+  Two adapter comments had gone stale by 0.1.26, so
+  `tests/unit/memory/graph/dialect-contract.test.ts` now asserts all twelve
+  documented engine quirks — plus the cross-process refusal, provoked from a
+  real second process — directly against the installed engine. A version bump
+  is a test run rather than a re-reading. `ORDER BY` is correct as of 0.1.26 (it
+  was not before), and a replayed property-carrying edge `CREATE` overwrites in
+  place rather than duplicating; the adapter's existing guards were right either
+  way, but for a different reason than the comments claimed. All twelve hold
+  unchanged on 0.1.27.
+
+  `sparrow-loader` also drops `darwin-x64` from its supported-platform list.
+  0.1.26 stopped declaring `optionalDependencies` on platform sub-packages that
+  were never published and bundles the two real binaries instead: an Intel Mac
+  previously passed the platform gate and then failed at `require`. Supported
+  platforms are linux-x64 (glibc) and darwin-arm64.
 - **Default model is `claude-opus-5` (SDK-04).** The provider fallback and the
   config `zora-agent init` generates are now the same exported constant, so
   which model you got no longer depends on whether `model` was written into

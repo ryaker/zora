@@ -2,7 +2,7 @@
   "meta": {
     "version": "1.0.0",
     "generated": "2026-08-14",
-    "total_gaps": 93,
+    "total_gaps": 97,
     "wsjf_factors": {
       "usability_value": "Does this prevent users from getting stuff done? 10=system won't start, 7-9=core workflow broken, 4-6=degraded with workaround, 1-3=polish",
       "wiring_impact": "Does this connect existing modules that aren't wired? 10=foundation everything depends on, 7-9=connects critical dead-code subsystem, 4-6=improves integration, 1-3=standalone",
@@ -2252,6 +2252,29 @@
         "score": 28
       },
       "release_gate": true,
+      "claimed_by": "agent-main"
+    },
+    {
+      "id": "MEM-35",
+      "category": "memory",
+      "title": "Graph tier: upgrade to sparrowdb 0.1.27, closing the concurrent-open corruption on one database root",
+      "severity": "S1",
+      "files_affected": 9,
+      "impact": 7,
+      "blocking": false,
+      "blocks": [],
+      "blocked_by": [],
+      "status": "completed",
+      "detail_file": "CHANGELOG.md",
+      "wsjf": {
+        "usability_value": 5,
+        "wiring_impact": 3,
+        "security_risk": 5,
+        "time_criticality": 8,
+        "job_size": 1,
+        "score": 21
+      },
+      "release_gate": false,
       "claimed_by": "agent-main"
     },
     {

@@ -214,10 +214,44 @@ way before. The two-hop case is the one lexical search cannot reach at all,
 since the summaries need share no words.
 
 The tier degrades to nothing rather than failing. A missing `sparrowdb` module,
-an unsupported platform, an unopenable database, a failed worker spawn or a
-startup timeout each produce one warning and an inert client, and `graph_recall`
-is simply not registered — the agent keeps running with lexical memory alone.
-It runs on a worker thread, so the native calls do not block the main loop.
+an unsupported platform, an unopenable database, a database another process is
+already holding, a failed worker spawn or a startup timeout each produce one
+warning and an inert client, and `graph_recall` is simply not registered — the
+agent keeps running with lexical memory alone. It runs on a worker thread, so
+the native calls do not block the main loop.
+
+Prebuilt binaries exist for **linux-x64 (glibc) and darwin-arm64 only**. On any
+other platform — Windows, linux-arm64, Intel macOS, musl/Alpine — the tier stays
+inert and everything else works unchanged.
+
+#### One process per graph database
+
+SparrowDB allows a single writer per database root. Two processes that opened
+the same root concurrently used to corrupt its catalog *permanently*, leaving a
+database that could not be opened at all — upstream measured 4 of 5 concurrent
+runs doing exactly that
+([SparrowDB #524](https://github.com/ryaker/SparrowDB/issues/524)). That was
+easy to reach by accident: `zora-agent daemon` holds the graph for its whole
+lifetime, and every other `zora-agent` command boots its own agent against the
+same path.
+
+`sparrowdb@0.1.27` closed it. `open()` now takes an exclusive lock on `db.lock`
+inside the database directory and refuses a second process outright, so the
+corruption is no longer reachable — by Zora or by anything else, the `sparrowdb`
+CLI and the SparrowDB MCP server included. Zora requires `^0.1.27`, so this is
+always in force. The kernel releases the lock when the holding process exits,
+including on a crash, so there is nothing to clean up by hand.
+
+Zora keeps no lock of its own. It does write a small note beside the database
+(`.zora-graph-owner.json`) recording which process opened it, used for one thing
+only: so the warning can say *who* holds the graph rather than just where it is.
+Deleting that file is harmless — it affects the wording of a log line, nothing
+else.
+
+So a second Zora process finds the graph tier inert with a warning, and
+everything else keeps working. If you want two Zora processes with graph memory
+at once, give each its own `ZORA_GRAPH_MEMORY_PATH`; they are separate graphs,
+not a shared one.
 
 ### `[security]`
 

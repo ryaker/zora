@@ -21,6 +21,13 @@ export {
 
 export { GraphStore, type GraphStoreOptions } from './graph-store.js';
 
+export {
+  describeGraphOwner,
+  isDatabaseLockedError,
+  recordGraphOwner,
+  type GraphOwnerNote,
+} from './graph-owner.js';
+
 export { GraphMemoryClient } from './graph-memory-worker.js';
 
 export {
