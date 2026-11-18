@@ -17,6 +17,7 @@ import { DashboardServer } from '../dashboard/server.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 import { GeminiProvider } from '../providers/gemini-provider.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
+import { OpenAIProvider } from '../providers/openai-provider.js';
 import { EchoProvider } from '../providers/echo-provider.js';
 import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger, initLogger } from '../utils/logger.js';
@@ -85,6 +86,9 @@ function createProviders(config: ZoraConfig, policy: ZoraPolicy): LLMProvider[] 
         break;
       case 'ollama':
         providers.push(new OllamaProvider({ config: pConfig }));
+        break;
+      case 'openai':
+        providers.push(new OpenAIProvider({ config: pConfig }));
         break;
       case 'echo':
         providers.push(new EchoProvider({ config: pConfig }));
