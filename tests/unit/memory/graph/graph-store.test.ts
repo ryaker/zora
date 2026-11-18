@@ -23,7 +23,23 @@ const sparrowAvailable = (await loadSparrow()).available;
 const describeIfNative = (): typeof describe | typeof describe.skip =>
   sparrowAvailable ? describe : describe.skip;
 
-describe('GraphStore', () => {
+// Native-backed suites get an explicit, generous timeout (MEM-35).
+//
+// Every call below is *synchronous* native code over an unindexed store, so a
+// test body's duration is however long the engine takes — and vitest's 5000 ms
+// default is not a meaningful budget for that when the full suite runs several
+// worker processes against one disk. Measured: this file completes in ~420 ms in
+// isolation, but under `npm run test:unit` individual tests were observed at
+// 5391 ms and 8406 ms, failing as `Test timed out in 5000 ms` with every
+// assertion in them satisfied. That is a false failure — the shape TEST-21
+// already documented for this file — and it was costing real diagnostic time.
+//
+// This weakens no assertion: latency is guarded where it belongs, by the
+// main-thread block budget in graph-memory-worker.test.ts. What it removes is a
+// correctness suite failing for being slow on a busy machine.
+const NATIVE_TIMEOUT = { timeout: 30_000 };
+
+describe('GraphStore', NATIVE_TIMEOUT, () => {
   let tmpDir: string;
   let store: GraphStore;
 
@@ -48,6 +64,8 @@ describe('GraphStore', () => {
   });
 
   afterEach(async () => {
+    // Withdraw the owner note before deleting the directory (MEM-35).
+    store?.close();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
