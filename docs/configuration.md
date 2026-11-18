@@ -84,7 +84,7 @@ Text-only in this version: the provider sends no tools and emits no tool calls, 
 |-------|------|---------|-------------|
 | `model` | string | `"gpt-6.2-sol"` | Model id. |
 | `api_key_env` | string | `"OPENAI_API_KEY"` | Environment variable holding the key. |
-| `endpoint` | string | `"https://api.openai.com/v1"` | Must be `https`, or loopback `http` for a local gateway. |
+| `endpoint` | string | `"https://api.openai.com/v1"` | Must be `https`, or loopback `http` for a local gateway. Redirects are refused. A custom endpoint is trusted with the API key and all task data (system prompt, memory context); use only infrastructure you run. |
 
 **Example:**
 

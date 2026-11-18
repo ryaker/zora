@@ -186,10 +186,78 @@ describe('OpenAIProvider', () => {
       expect((events.at(-1)!.content as { text: string }).text).toBe('ok');
     });
 
-    it('never puts the API key in any event, including errors', async () => {
-      const f = vi.fn().mockResolvedValue(new Response(`invalid key ${'x'.repeat(10)}`, { status: 500 }));
+    it('never relays remote error bodies or exception text: key echoed upstream stays out of events and logs', async () => {
+      const logs: string[] = [];
+      const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => (logs.push(String(c)), true));
+      const f = vi.fn().mockResolvedValue(new Response(`Incorrect API key provided: ${KEY}`, { status: 500 }));
       const events = await collect(make(f as unknown as typeof fetch).execute(makeTask()));
+      const g = vi.fn().mockRejectedValue(new Error(`request to https://x failed, Authorization: Bearer ${KEY}`));
+      events.push(...(await collect(make(g as unknown as typeof fetch).execute(makeTask()))));
+      const h = vi.fn().mockResolvedValue(sse([`data: {broken ${KEY}`, 'data: [DONE]']));
+      events.push(...(await collect(make(h as unknown as typeof fetch).execute(makeTask()))));
+      spy.mockRestore();
       expect(JSON.stringify(events)).not.toContain(KEY);
+      expect(logs.join('')).not.toContain(KEY);
+      expect(events[0]!.content).toMatchObject({ message: 'OpenAI API error 500', httpStatus: 500 });
+    });
+
+    it('refuses redirects so the key and task data cannot leave the validated endpoint', async () => {
+      const f = vi.fn().mockResolvedValue(sse(['data: [DONE]']));
+      await collect(make(f as unknown as typeof fetch).execute(makeTask()));
+      expect(f.mock.calls[0]![1].redirect).toBe('error');
+    });
+
+    it('does not call the API again with a rejected key, and recovers when the key is rotated', async () => {
+      const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: KEY };
+      const f = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 })).mockResolvedValue(sse(['data: [DONE]']));
+      const p = make(f as unknown as typeof fetch, makeConfig(), env);
+      await collect(p.execute(makeTask()));
+      expect(await p.isAvailable()).toBe(false);
+      const again = await collect(p.execute(makeTask({ jobId: 'j2' })));
+      expect(again[0]!.type).toBe('error');
+      expect(f).toHaveBeenCalledTimes(1);
+      env.OPENAI_API_KEY = 'sk-rotated';
+      expect(await p.isAvailable()).toBe(true);
+      expect((await collect(p.execute(makeTask({ jobId: 'j3' }))))!.at(-1)!.type).toBe('done');
+    });
+
+    it('enforces the 429 cooldown in isAvailable() and execute(), and clears it on expiry', async () => {
+      vi.useFakeTimers();
+      try {
+        const f = vi.fn().mockResolvedValueOnce(new Response('', { status: 429, headers: { 'retry-after': '60' } })).mockResolvedValue(sse(['data: [DONE]']));
+        const p = make(f as unknown as typeof fetch);
+        await collect(p.execute(makeTask()));
+        expect(await p.isAvailable()).toBe(false);
+        const blocked = await collect(p.execute(makeTask({ jobId: 'j2' })));
+        expect((blocked[0]!.content as { isQuotaError?: boolean }).isQuotaError).toBe(true);
+        expect(f).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(61_000);
+        expect(await p.isAvailable()).toBe(true);
+        expect((await collect(p.execute(makeTask({ jobId: 'j3' }))))!.at(-1)!.type).toBe('done');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not count 401/403/429 or ordinary 4xx toward the breaker', async () => {
+      for (const status of [400, 401, 403, 404, 422, 429]) {
+        const p = make(vi.fn().mockResolvedValue(new Response('', { status })) as unknown as typeof fetch);
+        const spy = vi.spyOn(p.circuitBreaker, 'recordFailure');
+        await collect(p.execute(makeTask()));
+        expect(spy, `status ${status}`).not.toHaveBeenCalled();
+      }
+    });
+
+    it('counts 5xx responses and transport failures toward the breaker', async () => {
+      for (const make_ of [
+        () => vi.fn().mockResolvedValue(new Response('', { status: 503 })),
+        () => vi.fn().mockRejectedValue(new Error('net down')),
+      ]) {
+        const p = make(make_() as unknown as typeof fetch);
+        const spy = vi.spyOn(p.circuitBreaker, 'recordFailure');
+        await collect(p.execute(makeTask()));
+        expect(spy).toHaveBeenCalledTimes(1);
+      }
     });
 
     it('abort() ends an in-flight request with an aborted done event', async () => {

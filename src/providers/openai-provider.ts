@@ -11,7 +11,15 @@
  *     Model") is neither bypassed nor needed. Adding tool calling is a separate
  *     change that must route through buildZoraMcpServer() and that chain.
  *   - Transport is plain `fetch` (no new dependency). `fetchFn` is injectable
- *     for tests.
+ *     for tests. Redirects are refused (`redirect: 'error'`): a redirect could
+ *     leave https/loopback and forward the prompt and memory context.
+ *   - A custom `endpoint` is trusted with BOTH the API key and all task data
+ *     (system prompt, memory context). Point it only at infrastructure you run.
+ *   - Diagnostics are fixed local strings plus the HTTP status. Remote response
+ *     bodies, exception messages and raw stream chunks are never copied into
+ *     events or logs, so an upstream that echoes the key cannot publish it. The
+ *     one exception is the model's own streamed text, which is returned to the
+ *     caller by design (a hostile custom endpoint could put anything there).
  *
  * Default model is `gpt-6.2-sol`, overridable via `config.model` or
  * `task.modelPreference`.
@@ -79,8 +87,12 @@ export class OpenAIProvider implements LLMProvider {
   private _inputTokens = 0;
   private _outputTokens = 0;
   private _lastRequestAt: Date | null = null;
-  /** Set on a 401/403 so isAvailable() stops routing here until the key changes. */
-  private _authRejected = false;
+  /**
+   * The key value the API rejected with 401/403. Compared in memory only, never
+   * logged. Routing and execute() refuse to use this exact key again; rotating
+   * the env var to a different value clears the block without a restart.
+   */
+  private _rejectedKey: string | null = null;
   private _cooldownUntil: Date | null = null;
 
   constructor(options: OpenAIProviderOptions) {
@@ -102,21 +114,36 @@ export class OpenAIProvider implements LLMProvider {
     return key && key.trim() ? key.trim() : undefined;
   }
 
+  private _isCoolingDown(): boolean {
+    if (this._cooldownUntil === null) return false;
+    if (this._cooldownUntil.getTime() > Date.now()) return true;
+    this._cooldownUntil = null;
+    return false;
+  }
+
+  /** Only transient/server-side statuses count toward the breaker; 4xx are task-local. */
+  private _isOutageStatus(status: number): boolean {
+    return status >= 500 || status === 408;
+  }
+
   async isAvailable(): Promise<boolean> {
     if (!this._config.enabled) return false;
     if (this._circuitBreaker.isOpen()) return false;
+    // Routing checks isAvailable(), not getQuotaStatus(), so the 429 cooldown must be enforced here.
+    if (this._isCoolingDown()) return false;
     const auth = await this.checkAuth();
     return auth.valid;
   }
 
   /** Local check only: no network call, so polling never spends credits or leaks the key. */
   async checkAuth(): Promise<AuthStatus> {
-    const valid = this._apiKey() !== undefined && !this._authRejected && isAllowedEndpoint(this._endpoint);
+    const key = this._apiKey();
+    const valid = key !== undefined && key !== this._rejectedKey && isAllowedEndpoint(this._endpoint);
     return { valid, expiresAt: null, canAutoRefresh: false, requiresInteraction: !valid };
   }
 
   async getQuotaStatus(): Promise<QuotaStatus> {
-    const cooling = this._cooldownUntil !== null && this._cooldownUntil.getTime() > Date.now();
+    const cooling = this._isCoolingDown();
     return {
       isExhausted: this._circuitBreaker.getState() === 'OPEN' || cooling,
       remainingRequests: null,
@@ -137,6 +164,17 @@ export class OpenAIProvider implements LLMProvider {
     if (!apiKey) {
       yield this._error(`${this._keyEnv} is not set; configure it through the credential gateway`, {
         isAuthError: true,
+      });
+      return;
+    }
+    if (apiKey === this._rejectedKey) {
+      yield this._error('OpenAI API error 401: key was rejected; set a different key', { httpStatus: 401, isAuthError: true });
+      return;
+    }
+    if (this._isCoolingDown()) {
+      yield this._error('OpenAI API error 429: provider is cooling down after a rate limit', {
+        httpStatus: 429,
+        isQuotaError: true,
       });
       return;
     }
@@ -165,6 +203,7 @@ export class OpenAIProvider implements LLMProvider {
             stream_options: { include_usage: true },
           }),
           signal: controller.signal,
+          redirect: 'error',
         });
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
@@ -172,22 +211,25 @@ export class OpenAIProvider implements LLMProvider {
           return;
         }
         this._circuitBreaker.recordFailure();
-        yield this._error(`OpenAI connection failed: ${err instanceof Error ? err.message : String(err)}`);
+        // Fixed text: a fetch exception message can embed the request URL or headers.
+        yield this._error('OpenAI connection failed');
         return;
       }
 
       if (!response.ok) {
-        const body = (await response.text().catch(() => '')).slice(0, 500);
+        // Never read or relay the body: it is remote text and may echo the submitted key.
+        await response.body?.cancel().catch(() => undefined);
         const isAuthError = response.status === 401 || response.status === 403;
         const isQuotaError = response.status === 429;
-        if (isAuthError) this._authRejected = true;
+        if (isAuthError) this._rejectedKey = apiKey;
         if (isQuotaError) {
           const retryAfter = Number(response.headers.get('retry-after'));
           this._cooldownUntil = new Date(Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30) * 1000);
         }
-        // Auth and rate-limit rejections are not provider outages; keep them off the breaker.
-        if (!isAuthError && !isQuotaError) this._circuitBreaker.recordFailure();
-        yield this._error(`OpenAI API error ${response.status}: ${body}`, { isAuthError, isQuotaError });
+        // Only 5xx/408 are outages. 401/403/429 and other 4xx (bad model, bad request) are
+        // key- or task-local and must not open the breaker for unrelated jobs.
+        if (this._isOutageStatus(response.status)) this._circuitBreaker.recordFailure();
+        yield this._error(`OpenAI API error ${response.status}`, { httpStatus: response.status, isAuthError, isQuotaError });
         return;
       }
 
@@ -212,10 +254,8 @@ export class OpenAIProvider implements LLMProvider {
           try {
             chunk = JSON.parse(data);
           } catch (parseErr: unknown) {
-            log.error(
-              { err: parseErr instanceof Error ? parseErr : new Error(String(parseErr)), rawContent: data.slice(0, 200) },
-              'Failed to parse streaming JSON chunk',
-            );
+            // Log shape only: the raw chunk is remote text.
+            log.error({ chunkLength: data.length, errName: parseErr instanceof Error ? parseErr.name : 'unknown' }, 'Failed to parse streaming JSON chunk');
             continue;
           }
           const text = chunk.choices?.[0]?.delta?.content;
@@ -234,7 +274,7 @@ export class OpenAIProvider implements LLMProvider {
           return;
         }
         this._circuitBreaker.recordFailure();
-        yield this._error(`OpenAI streaming error: ${err instanceof Error ? err.message : String(err)}`);
+        yield this._error('OpenAI streaming error');
         return;
       }
 
