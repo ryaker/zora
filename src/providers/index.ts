@@ -1,8 +1,8 @@
 /**
  * Providers module barrel exports.
  *
- * Re-exports all provider implementations: Claude, Gemini, and Ollama.
- * Future providers (OpenAI, custom) will be added here.
+ * Re-exports all provider implementations: Claude, Gemini, Ollama, and OpenAI.
+ * Also OpenAI (text-only, API-key auth).
  */
 
 export {
@@ -37,3 +37,10 @@ export {
   EchoProvider,
   type EchoProviderOptions,
 } from './echo-provider.js';
+
+export {
+  OpenAIProvider,
+  OPENAI_DEFAULT_MODEL,
+  OPENAI_DEFAULT_ENDPOINT,
+  type OpenAIProviderOptions,
+} from './openai-provider.js';

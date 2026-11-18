@@ -45,7 +45,7 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique identifier (e.g. `"claude"`, `"gemini"`, `"ollama"`). |
-| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, `"ollama"`, or `"echo"` (a deterministic stub used by the e2e harness — not for production). |
+| `type` | string | yes | Provider type: `"claude-sdk"`, `"gemini-cli"`, `"ollama"`, `"openai"`, or `"echo"` (a deterministic stub used by the e2e harness — not for production). |
 | `rank` | integer | yes | Priority for routing. Lower rank = preferred. |
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
@@ -75,6 +75,16 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `endpoint` | string | `"http://localhost:11434"` | Ollama API endpoint URL. |
+
+#### OpenAI-specific fields (`type = "openai"`)
+
+Text-only in this version: the provider sends no tools and emits no tool calls, so the policy enforcement chain is unaffected. Auth is API-key only; the key is read from an environment variable at call time and never from config or repo files.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | string | `"gpt-6.2-sol"` | Model id. |
+| `api_key_env` | string | `"OPENAI_API_KEY"` | Environment variable holding the key. |
+| `endpoint` | string | `"https://api.openai.com/v1"` | Must be `https`, or loopback `http` for a local gateway. Redirects are refused. A custom endpoint is trusted with the API key and all task data (system prompt, memory context); use only infrastructure you run. |
 
 **Example:**
 
