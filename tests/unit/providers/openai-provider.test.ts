@@ -220,6 +220,28 @@ describe('OpenAIProvider', () => {
       expect(await p.isAvailable()).toBe(true);
       expect((await collect(p.execute(makeTask({ jobId: 'j3' }))))!.at(-1)!.type).toBe('done');
     });
+    it('a late 401 for an old key does not clear the current key\'s rejection, and no raw key is retained', async () => {
+      const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: 'sk-old' };
+      let releaseOld!: (r: Response) => void;
+      const f = vi.fn()
+        .mockImplementationOnce(() => new Promise<Response>((res) => { releaseOld = res; }))
+        .mockResolvedValueOnce(new Response('', { status: 401 }))
+        .mockResolvedValue(sse(['data: [DONE]']));
+      const p = make(f as unknown as typeof fetch, makeConfig(), env);
+      const oldRun = collect(p.execute(makeTask()));
+      await vi.waitFor(() => expect(f).toHaveBeenCalledTimes(1));
+      env.OPENAI_API_KEY = 'sk-current';
+      await collect(p.execute(makeTask({ jobId: 'j2' }))); // current key rejected
+      releaseOld(new Response('', { status: 401 }));       // delayed old-key 401
+      await oldRun;
+      expect(await p.isAvailable()).toBe(false);
+      await collect(p.execute(makeTask({ jobId: 'j3' })));
+      expect(f).toHaveBeenCalledTimes(2);
+      const latch = (p as unknown as { _rejectedKeys: Set<string> })._rejectedKeys;
+      expect([...latch].join(",")).not.toMatch(/sk-old|sk-current/);
+      expect(latch.size).toBe(2);
+    });
+
 
     it('enforces the 429 cooldown in isAvailable() and execute(), and clears it on expiry', async () => {
       vi.useFakeTimers();

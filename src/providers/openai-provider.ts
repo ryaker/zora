@@ -38,6 +38,7 @@ import type {
   ProviderConfig,
 } from '../types.js';
 import { isTextEvent, isSteeringEvent } from '../types.js';
+import { createHash } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 
@@ -45,6 +46,11 @@ const log = createLogger('openai-provider');
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-6.2-sol';
 export const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1';
+
+/** SHA-256 fingerprint so the raw bearer key is never retained after use. */
+function fingerprint(key: string): string {
+  return createHash('sha256').update(key).digest('hex');
+}
 const DEFAULT_KEY_ENV = 'OPENAI_API_KEY';
 const MAX_STREAM_CHARS = 50 * 1024 * 1024;
 
@@ -92,7 +98,9 @@ export class OpenAIProvider implements LLMProvider {
    * logged. Routing and execute() refuse to use this exact key again; rotating
    * the env var to a different value clears the block without a restart.
    */
-  private _rejectedKey: string | null = null;
+  // Fingerprints (never raw keys) of keys the API rejected; a Set so a delayed
+  // 401 for an old key cannot erase the rejection of the current one.
+  private _rejectedKeys = new Set<string>();
   private _cooldownUntil: Date | null = null;
 
   constructor(options: OpenAIProviderOptions) {
@@ -112,6 +120,10 @@ export class OpenAIProvider implements LLMProvider {
   private _apiKey(): string | undefined {
     const key = this._env[this._keyEnv];
     return key && key.trim() ? key.trim() : undefined;
+  }
+
+  private _isRejected(key: string): boolean {
+    return this._rejectedKeys.has(fingerprint(key));
   }
 
   private _isCoolingDown(): boolean {
@@ -138,7 +150,7 @@ export class OpenAIProvider implements LLMProvider {
   /** Local check only: no network call, so polling never spends credits or leaks the key. */
   async checkAuth(): Promise<AuthStatus> {
     const key = this._apiKey();
-    const valid = key !== undefined && key !== this._rejectedKey && isAllowedEndpoint(this._endpoint);
+    const valid = key !== undefined && !this._isRejected(key) && isAllowedEndpoint(this._endpoint);
     return { valid, expiresAt: null, canAutoRefresh: false, requiresInteraction: !valid };
   }
 
@@ -167,7 +179,7 @@ export class OpenAIProvider implements LLMProvider {
       });
       return;
     }
-    if (apiKey === this._rejectedKey) {
+    if (this._isRejected(apiKey)) {
       yield this._error('OpenAI API error 401: key was rejected; set a different key', { httpStatus: 401, isAuthError: true });
       return;
     }
@@ -221,7 +233,7 @@ export class OpenAIProvider implements LLMProvider {
         await response.body?.cancel().catch(() => undefined);
         const isAuthError = response.status === 401 || response.status === 403;
         const isQuotaError = response.status === 429;
-        if (isAuthError) this._rejectedKey = apiKey;
+        if (isAuthError) this._rejectedKeys.add(fingerprint(apiKey));
         if (isQuotaError) {
           const retryAfter = Number(response.headers.get('retry-after'));
           this._cooldownUntil = new Date(Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 30) * 1000);
