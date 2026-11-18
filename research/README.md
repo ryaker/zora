@@ -14,6 +14,11 @@ Releases/changelogs are checked weekly and on new tags.
 5. **Decide** — architect opens a `decision` issue (ADR format below). Richard approves by labeling it
    `agent:todo` (or closes it). Approved ADRs are copied to `docs/adr/NNNN-title.md` in the implementing PR.
 
+## Web search tool
+The architect has Nimble's hosted MCP server (`nimble_search`, `nimble_extract`, …) for research rounds.
+Budget: stay inside the 5,000-request free tier — at most ~100 requests per round; prefer the GitHub
+releases API for WATCHLIST checks and use Nimble only for pages the API can't reach. Log the count per round.
+
 ## Cadence and triggers
 - Weekly research round: Monday 09:00 PT (skipped when spend ≥ 75%).
 - Trigger: a new release tag on any WATCHLIST repo (checked on each 30-minute poll via the GitHub releases API).

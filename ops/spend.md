@@ -1,6 +1,7 @@
 # API spend ledger
 
 Updated daily (18:00 PT) by zora-reviewer from `scripts/agents/usage-check.sh`.
+Nimble usage is read from the Nimble dashboard (no usage API wired yet); the architect logs its request count per research round in research/LOG.md.
 Agents must read this before starting work and obey the thresholds in docs/agents/WORKFLOW.md.
 
 | Pool | Cycle | Budget | Line | Monthly target |
@@ -11,6 +12,7 @@ Agents must read this before starting work and obey the thresholds in docs/agent
 | OpenAI | 5th → 5th | $200 | zora-reviewer | $110 |
 | OpenAI | | | Zora runtime (after OpenAI provider lands) | $50 |
 | OpenAI | | | Buffer | $40 |
+| Nimble (web search/extract) | monthly | free tier: 5,000 requests | zora-architect research rounds | $0 (stay in free tier; then $1/1k searches, $3/1k extracts) |
 
 ## Current cycle
 <!-- usage-check.sh rewrites the block below -->
