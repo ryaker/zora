@@ -74,6 +74,8 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `endpoint` | string | `"http://localhost:11434"` | Ollama API endpoint URL. |
+
 #### OpenAI-specific fields (`type = "openai"`)
 
 Text-only in this version: the provider sends no tools and emits no tool calls, so the policy enforcement chain is unaffected. Auth is API-key only; the key is read from an environment variable at call time and never from config or repo files.
@@ -83,8 +85,6 @@ Text-only in this version: the provider sends no tools and emits no tool calls, 
 | `model` | string | `"gpt-6.2-sol"` | Model id. |
 | `api_key_env` | string | `"OPENAI_API_KEY"` | Environment variable holding the key. |
 | `endpoint` | string | `"https://api.openai.com/v1"` | Must be `https`, or loopback `http` for a local gateway. |
-
-| `endpoint` | string | `"http://localhost:11434"` | Ollama API endpoint URL. |
 
 **Example:**
 
