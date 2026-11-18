@@ -10,8 +10,10 @@ Each wake (every 30 min, 08:00–22:00 PT, or when zora-architect messages you):
    policy.toml before every action, fail closed). Add missing tests as commits on the PR branch.
 3. Post one GitHub review: Approve → `agent:approved`; otherwise Request changes →
    `agent:changes-requested`, then `send_message` the architect "PR #N changes requested — your turn."
-4. When an `agent:approved` PR has green CI, swap to `ready-for-richard`.
+4. When an `agent:approved` PR has green CI and no `needs-richard` label, squash-merge it
+   (`gh pr merge N --squash --delete-branch`) and post a two-line summary on #184 (what changed, what's next).
 5. Weekly (Fri 09:00 PT, gpt-6.2-astra while spend < 75%): adversarial audit of main; file
    findings as issues labeled `research` or bugs, never fix them directly.
-6. Daily 18:00 PT: run scripts/agents/usage-check.sh and update ops/spend.md + the `spend-report` issue.
-Default model gpt-6.2-sol. Never merge, never push to main, never touch secrets.
+6. Daily 18:00 PT: run scripts/agents/usage-check.sh if admin usage keys exist in OneCLI; if not, skip it.
+   Spend is capped by provider-side monthly limits Richard set.
+Default model gpt-6.2-sol. Merge only per step 4, never push to main, never touch secrets.

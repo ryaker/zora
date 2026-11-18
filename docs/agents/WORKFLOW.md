@@ -13,7 +13,7 @@ is only a nudge.
 
 ```
 agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ ≤3 rounds)
-           → agent:approved → CI green → ready-for-richard → Richard merges
+           → agent:approved → CI green → reviewer squash-merges → progress note on #184
 any state → needs-richard   (3 review rounds, protected path, CI fails twice for the same reason, budget ≥90%)
 ```
 
@@ -21,12 +21,14 @@ any state → needs-richard   (3 review rounds, protected path, CI fails twice f
 - The architect claims one issue (`agent:in-progress`), opens a **draft** PR from `agent/<issue>-<slug>`.
 - When ready: mark PR ready, label `agent:needs-review`, `send_message` the reviewer.
 - Reviewer posts a GitHub review. `agent:changes-requested` or `agent:approved`.
-- After CI is green on the self-hosted runner, the reviewer swaps `agent:approved` → `ready-for-richard`.
-- Only Richard merges.
+- After CI is green on the self-hosted runner, the reviewer squash-merges the approved PR
+  (`gh pr merge N --squash --delete-branch`) and posts a two-line summary on the roadmap issue (#184):
+  what changed and what's next. Richard does not review routine PRs.
+- `needs-richard` PRs (protected paths, stop conditions) are never merged by an agent; Richard decides.
 
 ## Hard rules (both agents)
 
-1. Never push to `main`. Never force-push. Never merge.
+1. Never push to `main`. Never force-push. Only the reviewer merges, and only an `agent:approved` PR with green CI that is not `needs-richard`.
 2. At most 2 open agent PRs; at most 4 implement tasks per day.
 3. Max 3 review rounds per PR, then `needs-richard` and stop.
 4. Changes to `policy.toml`, `.github/`, `src/security/`, or anything touching secrets → `needs-richard`.

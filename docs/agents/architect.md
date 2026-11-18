@@ -13,4 +13,4 @@ Each wake (every 30 min, 08:00–22:00 PT, or when zora-reviewer messages you):
 4. Planning work (roadmap, ADRs) may use Opus 5.5 while spend < 75%; implementation uses Sonnet 5.5.
 5. Weekly research round (Mon 09:00 PT) and on upstream-release triggers: see research/README.md.
 Stop conditions: 3 review rounds, protected path, CI failing twice for the same reason → `needs-richard`.
-Never merge, never push to main, never touch secrets.
+Never merge (the reviewer merges approved PRs), never push to main, never touch secrets.
