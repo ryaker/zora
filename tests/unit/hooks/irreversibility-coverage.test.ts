@@ -1,14 +1,17 @@
 /**
  * #199 audit — classification coverage of IrreversibilityScorer.toolToAction().
  *
- * Characterization only: this pins which tool names resolve to a scored
- * category today and which fall through to the unknown-tool default (50, i.e.
- * below the flag threshold of 65, so allowed with a warning). It changes no
- * score and weakens no check. If a gap below is closed, move the name from
- * GAPS to COVERED; a surprise change in either list is the signal.
+ * Characterization only. Pins which tool names resolve to a scored category in
+ * toolToAction() and which resolve to a key with no score, so the scorer falls
+ * back to its default of 50. It changes no score and weakens no check. This
+ * covers the *scorer hook only*: other layers (PolicyEngine, ShellSafety,
+ * capability tokens, canUseTool) still apply independently, so 'the scorer does
+ * not flag it' is not 'policy allows it'. If a gap is closed, move the name
+ * from GAPS to COVERED.
  */
 import { describe, it, expect } from 'vitest';
 import {
+  IrreversibilityScorerHook,
   toolToAction,
   DEFAULT_IRREVERSIBILITY_SCORES,
   DEFAULT_IRREVERSIBILITY_THRESHOLDS,
@@ -52,14 +55,25 @@ describe('IrreversibilityScorer classification coverage (#199)', () => {
     expect(DEFAULT_IRREVERSIBILITY_SCORES[action]).toBeDefined();
   });
 
-  it.each(GAPS)('%s is unclassified and scores the default 50 (below flag)', (tool) => {
-    const action = toolToAction(tool);
-    expect(DEFAULT_IRREVERSIBILITY_SCORES[action]).toBeUndefined();
-    expect(50).toBeLessThan(DEFAULT_IRREVERSIBILITY_THRESHOLDS.flag);
+  it.each(GAPS)('%s is unclassified: no score entry, and the real scorer applies its default', async (tool) => {
+    expect(DEFAULT_IRREVERSIBILITY_SCORES[toolToAction(tool)]).toBeUndefined();
+    // Exercise the actual fallback: default config, no approval queue, no
+    // forecaster/project policy registered for this job id. A flagged score
+    // would deny here (no queue to escalate to), so allow=true shows the
+    // fallback stays under the flag threshold in this hook.
+    const hook = new IrreversibilityScorerHook({
+      scores: { ...DEFAULT_IRREVERSIBILITY_SCORES },
+      thresholds: { ...DEFAULT_IRREVERSIBILITY_THRESHOLDS },
+    });
+    const res = await hook.run({ jobId: 'audit-199-no-policy', tool, arguments: {} });
+    expect(res.allow).toBe(true);
   });
 
-  it('shell_exec_destructive has a score but toolToAction never returns it', () => {
+  it('shell_exec_destructive has a score, but none of the names audited here map to it', () => {
     expect(DEFAULT_IRREVERSIBILITY_SCORES['shell_exec_destructive']).toBe(90);
-    expect(toolToAction('Bash')).toBe('shell_exec');
+    // Mapping coverage only: this does not prove no input can resolve to it.
+    for (const tool of [...COVERED.map(([t]) => t), ...GAPS]) {
+      expect(toolToAction(tool)).not.toBe('shell_exec_destructive');
+    }
   });
 });
