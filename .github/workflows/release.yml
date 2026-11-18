@@ -13,7 +13,7 @@ permissions:
 jobs:
   release:
     name: Build, Release & Publish
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ry-local, zora]
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -43,8 +42,9 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           # Extract the section for this version from CHANGELOG.md
+          # (BSD/macOS head has no negative -n, so drop the last line with sed)
           NOTES=$(awk "/^## \[?v?${VERSION}\]?/,/^## \[?v?[0-9]/" CHANGELOG.md 2>/dev/null \
-            | head -n -1 | tail -n +2 || echo "Release $VERSION")
+            | sed '$d' | tail -n +2 || echo "Release $VERSION")
           # Escape for GitHub output
           {
             echo "NOTES<<EOF"
