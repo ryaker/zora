@@ -8,6 +8,19 @@ gateway swaps the real key in on the way out, matched by host (and path).
 The M4's OneCLI (v1.42.0) is left untouched; NanoClaw v2026.11.0 needs gateway 1.45 for
 per-agent grants, and pointing the Air at the M4 would mean re-binding the M4 gateway.
 
+## Fastest path: the helper on the Air
+
+```bash
+cd ~/Dev/nanoclaw
+./zora-keys.sh          # hidden prompts; rows 1-6 below, plus the grants
+./zora-smoke.sh         # one cheap run per agent, then stops everything
+```
+
+Rows 1-2 go through NanoClaw's own sign-in steps (`--step gateway-auth claude`,
+`--step provider-auth opencode`) so NanoClaw records them as the model keys and grants
+them automatically. Rows 3-6 are created with `onecli secrets create --file <0600 tmp>`
+and attached with `onecli agents grants attach-secret`.
+
 ## Secrets to create
 
 | # | Name | Type | Host pattern | Path pattern | Header / format | Attach to |
@@ -16,7 +29,8 @@ per-agent grants, and pointing the Air at the M4 would mean re-binding the M4 ga
 | 2 | `OpenAI` | openai | `api.openai.com` | (none) | `Authorization: Bearer {value}` (set by type) | zora-reviewer |
 | 3 | `Anthropic Admin (usage)` | generic | `api.anthropic.com` | `/v1/organizations/*` | `x-api-key` / `{value}` | zora-reviewer |
 | 4 | `OpenAI Admin (usage)` | generic | `api.openai.com` | `/v1/organization/*` | `Authorization` / `Bearer {value}` | zora-reviewer |
-| 5 | `GitHub zora-agents` | generic | `api.github.com` | `/repos/ryaker/zora/*` | `Authorization` / `Bearer {value}` | both |
+| 5 | `GitHub zora-agents (API)` | generic | `api.github.com` | (none; the PAT itself is limited to ryaker/zora) | `Authorization` / `Bearer {value}` | both |
+| 6 | `GitHub zora-agents (git)` | generic | `github.com` | `/ryaker/zora*` | `Authorization` / `Basic {value}`, value = base64(`x-access-token:<PAT>`) | both |
 
 Keys to create first:
 - Anthropic: Console → Workspaces → new workspace `zora-agents` (monthly spend limit $140) and
