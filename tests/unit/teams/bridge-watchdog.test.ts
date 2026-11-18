@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BridgeWatchdog } from '../../../src/teams/bridge-watchdog.js';
 import type { SupervisedPoller } from '../../../src/teams/bridge-watchdog.js';
+import { writeAtomic } from '../../../src/utils/fs.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -182,8 +183,8 @@ describe('BridgeWatchdog', () => {
     await watchdog.start();
     const healthFile = path.join(stateDir, 'bridge-health.json');
 
-    // The competing writer is the watchdog's own restart path, which writes a
-    // *longer* document (it adds `lastRestart`) with a plain write. Its exact
+    // The competing writer mimics the watchdog's own restart path, which writes a
+    // *longer* document (it adds `lastRestart`) via writeAtomic. Its exact
     // shape is reproduced here rather than provoked through a restart, because
     // the corruption is in the overlap of the two writes, not in the restart:
     // a shorter document landing inside a longer one is what leaves the file
@@ -195,7 +196,11 @@ describe('BridgeWatchdog', () => {
         null,
         2,
       );
-      await fs.writeFile(healthFile, doc, 'utf8');
+      // Same primitive production's restart path uses (_writeState). A plain
+      // fs.writeFile truncates in place, so the reader could observe a
+      // half-written file; that made this test flaky (#186) with no
+      // production defect.
+      await writeAtomic(healthFile, doc);
     };
 
     const corrupt: string[] = [];
