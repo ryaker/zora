@@ -27,3 +27,23 @@
 - Proposal: adopt patterns 1+2 as one change (advisory low-relevance signal plus citation validation against the authorized retrieval set, flag-gated, deterministic scoring only; test cases, cost bounds and operator-only certification controls go in the ADRs), and pattern 3 as a separate change. Pattern 4 is deferred into #144. Do not adopt the product or its optional MCP integration unless Richard points Zora at a SQL dataset.
 - Critique (reviewer): pending. Requested on the PR. Decision issues will be opened after the critique (max 2 this week).
 - Decision issue: not yet opened.
+
+## 2026-11-18 — OpenBot (CopilotKit) v1.1.0 (evaluation, issue #191)
+- Source: https://github.com/CopilotKit/OpenBot (releases v1.0.0 2026-11-09 … v1.1.0 2026-11-17; docs/approvals.md, routines.md, automatic-learning.md, coworkers.md). The issue says 1.0 shipped Nov 10; the tag is Nov 9, and v1.1.0 is current. Read via the GitHub API (Nimble MCP returns 401). 0 Nimble requests. Not read: source code, Intelligence (separately licensed, closed).
+- What it is: MIT-licensed, self-hostable "AI coworker" workspace (desktop app, Kubernetes/Helm, Postgres with row-level-security roles). Built-in Bots plus remote agents over AG-UI, MCP tools, Slack/Teams/mobile frontends. Team-oriented and enterprise-shaped; Zora is single-user and local-first, so the deployment stack is out of scope.
+- Where it is ahead of Zora (policy/UX, not security posture):
+  1. Approval kinds are recognized by what an action is *called*, never by what it carries (docs/approvals.md): a document saying "delete the old draft" or an email draft is an ordinary change. This is prompt-injection resistant by construction. Kinds: pay, credential change, delete, send, share, publish. Zora has `IrreversibilityScorer`; worth checking whether its signals read tool/verb names or payload text.
+  2. Approval grants are bound: "this conversation" = same Bot + tool + place + account, cannot reach another conversation or tool; "strictest matching rule wins"; every grant is labeled in the audit row. Zora's `ApprovalQueue` has `allow-30m` / `allow-session` (src/core/approval-queue.ts) behind a risk-score ceiling, but the blanket is a time window or boolean, not keyed to tool/target.
+  3. Credential changes on a website are handed to the human ("I did it myself" / "Don't do it"); no approval can make the agent type a credential.
+  4. Learned skills are proposals with SKILL.md, rationale and source conversations; Approve/Reject; in team mode nothing auto-publishes. Relevant to the SkillSynthesizer work (#174).
+  5. Routines/goals/check-ins unified as one list with four columns: What / Starts / Does (acts vs only tells) / Until (done-when). A routine tied to a goal dies with it. Minor UX idea for Zora routines.
+- Where it is weaker than Zora (do not copy): kinds of action are *open by default* (members may "Always allow here"); no policy file consulted before every call (rules are DB rows); Automatic Learning defaults on; closed, separately licensed Intelligence service holds memory/learning. Zora's fail-closed, locked-by-default model is stricter.
+- Ranked shortlist (effort / risk):
+  1. Scope-bound session grants: key `allow-session` to tool + target, keep the score ceiling (M; low risk, narrows the blast radius of an existing feature; touches src/core, not src/security).
+  2. Name-based kind classification audit of `IrreversibilityScorer` (S; investigate, then fix if payload text drives the score).
+  3. Human-only credential-change handoff as a policy kind (M; touches policy.toml semantics, so `needs-richard`).
+  4. Proposed-skill review card with provenance, as a gate for #174 (S once #174 exists).
+  5. Routine `Does`/`Until` fields (S; watch, low priority).
+- Verdict: **watch** the product, **adopt** patterns 1 and 2 as small follow-ups; 3 needs Richard.
+- Critique (reviewer): pending. Requested on the PR.
+- Decision issue: none yet (this week's cap of 2 decision issues is reserved for #185).
