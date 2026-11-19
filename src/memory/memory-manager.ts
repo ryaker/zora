@@ -23,6 +23,7 @@ import { SalienceScorer } from './salience-scorer.js';
 import { CategoryOrganizer } from './category-organizer.js';
 import type { MemoryItem, CategorySummary, SalienceScore } from './memory-types.js';
 import { createLogger } from '../utils/logger.js';
+import { qualifyZoraToolName } from '../tools/zora-mcp-server.js';
 
 const log = createLogger('memory-manager');
 
@@ -164,9 +165,12 @@ export class MemoryManager {
       summary += `- Daily notes available (most recent: ${index.mostRecentDailyNote}, total: ${index.dailyNoteCount})\n`;
     }
 
-    summary += `- Use memory_search to find relevant context\n`;
-    summary += `- Use recall_context to read recent daily notes\n`;
-    summary += `- Use memory_save to store new facts\n`;
+    // #169: the SDK exposes these as mcp__zora-tools__<name>; bare names in this
+    // prompt were stale. Wording stays conditional — availability is decided by
+    // policy/permissions, never promised by prompt text.
+    summary += `- When available, ${qualifyZoraToolName('memory_search')} finds relevant context\n`;
+    summary += `- When available, ${qualifyZoraToolName('recall_context')} reads recent daily notes\n`;
+    summary += `- When available, ${qualifyZoraToolName('memory_save')} stores new facts (policy-controlled)\n`;
     summary += `Only retrieve what you need for this task.`;
 
     parts.push(summary);
