@@ -245,7 +245,11 @@ async function main() {
   }
 
   // Start dashboard server
+  // #174: [steering].dashboard_token was parsed but never passed, so a configured
+  // token silently left the dashboard unauthenticated. Unset still falls back to
+  // ZORA_DASHBOARD_TOKEN inside DashboardServer (explicit option wins over env).
   const dashboard = new DashboardServer({
+    dashboardToken: config.steering.dashboard_token,
     providers,
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
