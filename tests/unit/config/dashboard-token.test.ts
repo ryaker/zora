@@ -107,3 +107,37 @@ describe('steering.dashboard_token parsing and rendering (#174 review)', () => {
     expect(html).toContain('$\\u0026$`'); // dollar sequences literal (ampersand HTML-escaped)
   });
 });
+
+describe('dashboard_token env: references and env fallback (#174 round 2)', () => {
+  const VAR = 'ZORA_TEST_174_DASH_TOKEN';
+  afterEach(() => { delete process.env[VAR]; delete process.env['ZORA_DASHBOARD_TOKEN']; });
+
+  it('resolves a synthetic env: reference at config load', () => {
+    process.env[VAR] = 'synthetic-resolved';
+    const cfg = loadConfigFromString(`[steering]\ndashboard_token = "env:${VAR}"\n`);
+    expect(cfg.steering.dashboard_token).toBe('synthetic-resolved');
+  });
+
+  it('fails startup (without echoing a value) when the referenced variable is unset', () => {
+    delete process.env[VAR];
+    let msg = '';
+    try { loadConfigFromString(`[steering]\ndashboard_token = "env:${VAR}"\n`); } catch (e) { msg = String(e); }
+    expect(msg).toContain(VAR);
+  });
+
+  it('falls back to ZORA_DASHBOARD_TOKEN when config omits the token', async () => {
+    process.env['ZORA_DASHBOARD_TOKEN'] = 'env-fallback';
+    const cfg = loadConfigFromString('[steering]\ndashboard_port = 8070\n');
+    expect(cfg.steering.dashboard_token).toBeUndefined();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zora-174c-'));
+    const app = (new DashboardServer({
+      sessionManager: new SessionManager(dir),
+      steeringManager: new SteeringManager(dir),
+      authMonitor: new AuthMonitor({ providers: [], checkIntervalMs: 60_000 }),
+      dashboardToken: cfg.steering.dashboard_token,
+      port: 0,
+    }) as unknown as { _app: unknown })._app;
+    expect((await request(app as never).get('/api/system')).status).toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer env-fallback')).status).toBe(200);
+  });
+});
