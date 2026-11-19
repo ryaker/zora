@@ -163,6 +163,7 @@ import {
 import {
   isEntityKind,
   NODE_LABELS,
+  type MemoryFacts,
   type DecisionRecord,
   type DecisionResult,
   type EntityKind,
@@ -403,8 +404,55 @@ export class GraphStore {
     }
   }
 
+  /**
+   * Record a source memory and the entities/relations extracted from it (#194).
+   *
+   * The `Memory` node is keyed by the memory's own ID and every entity is
+   * linked to it with `EVIDENCED_BY`, so a lookup can always answer "which
+   * memories say this". Replay-safe: node upserts and edge writes are guarded.
+   *
+   * Limitation: `RELATES_TO` edges are write-once (see `_link`), so a relation
+   * carries `srcMemId` of the first memory that asserted it; later assertions
+   * of the same pair still add `EVIDENCED_BY` for their endpoints.
+   */
+  recordFacts(facts: MemoryFacts): void {
+    const memId = clamp(facts.memId, 200);
+    if (!memId) return;
+    const memory = identity('Memory', 'memId', memId);
+    this._upsertNode(memory, { ts: Number.isFinite(facts.ts) ? facts.ts : 0 });
+    for (const entity of facts.entities ?? []) {
+      const name = clamp(entity.name);
+      if (!name) continue;
+      this.upsertEntity(entity);
+      this._link(identity('Entity', 'name', name), 'EVIDENCED_BY', memory);
+    }
+    for (const rel of facts.relations ?? []) {
+      this.relateEntities(rel.from, rel.to, rel.kind, memId);
+      for (const e of [rel.from, rel.to]) {
+        const n = clamp(e.name);
+        if (n) this._link(identity('Entity', 'name', n), 'EVIDENCED_BY', memory);
+      }
+    }
+  }
+
+  /** Memory IDs that evidence an entity, for provenance/citation. */
+  sourcesOf(name: string, limit = 20): string[] {
+    const anchor = clamp(name);
+    if (!anchor) return [];
+    const rows = this._query(
+      `MATCH (a:Entity {name: $name})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
+      { name: anchor },
+    );
+    const ids: string[] = [];
+    for (const row of rows) {
+      const id = str(row['m.memId']);
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids.slice(0, limit);
+  }
+
   /** Relate two entities, creating either endpoint if needed. */
-  relateEntities(from: EntityRecord, to: EntityRecord, kind: string): void {
+  relateEntities(from: EntityRecord, to: EntityRecord, kind: string, srcMemId?: string): void {
     const fromName = clamp(from.name);
     const toName = clamp(to.name);
     if (!fromName || !toName || fromName === toName) return;
@@ -420,7 +468,7 @@ export class GraphStore {
       identity('Entity', 'name', fromName),
       'RELATES_TO',
       identity('Entity', 'name', toName),
-      { relKind: clamp(kind, 100) },
+      { relKind: clamp(kind, 100), ...(srcMemId ? { srcMemId: clamp(srcMemId, 200) } : {}) },
     );
   }
 
@@ -443,6 +491,9 @@ export class GraphStore {
             break;
           case 'relateEntities':
             this.relateEntities(write.from, write.to, write.kind);
+            break;
+          case 'recordFacts':
+            this.recordFacts(write.facts);
             break;
         }
       } catch (err) {

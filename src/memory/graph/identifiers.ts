@@ -74,6 +74,8 @@ export const PROPERTY_KEYS = [
   'hint',
   'ts',
   'relKind',
+  'memId',
+  'srcMemId',
 ] as const;
 export type PropertyKey = (typeof PROPERTY_KEYS)[number];
 
