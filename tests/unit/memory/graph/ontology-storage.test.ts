@@ -31,15 +31,15 @@ describe('ontology config flag', () => {
     expect(graphConfigFromEnv({ ZORA_GRAPH_ONTOLOGY: 'maybe' }).ontology).toBe(false);
   });
 
-  it('registers the provenance label and edge in the ontology allowlists', () => {
-    expect(NODE_LABELS).toContain('Memory');
+  it('registers the provenance labels and edge in the ontology allowlists', () => {
+    expect(NODE_LABELS).toEqual(expect.arrayContaining(['Memory', 'OntEntity', 'Assertion']));
     expect(EDGE_TYPES).toContain('EVIDENCED_BY');
   });
 
   it('inert client drops facts and answers sourcesOf empty (fail closed)', async () => {
     const client = await GraphMemoryClient.create({ enabled: false, ontology: true });
     client.recordFacts({ memId: 'm1', ts: 1, entities: [{ name: 'Zora', kind: 'project' }] });
-    expect(await client.sourcesOf('Zora')).toEqual([]);
+    expect(await client.sourcesOf('Zora', 'project')).toEqual([]);
     await client.close();
   });
 });
@@ -61,50 +61,59 @@ describeIfNative('GraphStore provenance', { timeout: 30_000 }, () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('links entities to the memory that evidences them', () => {
+  const zora = { name: 'Zora', kind: 'project' as const };
+  const sparrow = { name: 'SparrowDB', kind: 'tool' as const };
+
+  it('links entities to the memories that evidence them, per kind', () => {
+    store.recordFacts({ memId: 'mem-1', ts: 1, entities: [zora, sparrow] });
+    store.recordFacts({ memId: 'mem-2', ts: 2, entities: [zora] });
+    store.recordFacts({ memId: 'mem-3', ts: 3, entities: [{ name: 'Zora', kind: 'person' }] });
+    store.recordFacts({ memId: 'mem-1', ts: 1, entities: [zora, sparrow] }); // replay
+    expect(store.sourcesOf('Zora', 'project').sort()).toEqual(['mem-1', 'mem-2']);
+    // A same-named entity of another kind is not sourced by the project mentions.
+    expect(store.sourcesOf('Zora', 'person')).toEqual(['mem-3']);
+    expect(store.sourcesOf('Nope', 'project')).toEqual([]);
+  });
+
+  it('attributes each relation assertion to exactly its own sources', () => {
+    const rel = (kind: string) => ({ from: zora, to: sparrow, kind });
+    store.recordFacts({ memId: 'a', ts: 1, entities: [], relations: [rel('uses')] });
+    store.recordFacts({ memId: 'b', ts: 2, entities: [], relations: [rel('uses')] });
+    store.recordFacts({ memId: 'c', ts: 3, entities: [], relations: [rel('replaces')] });
+    store.recordFacts({ memId: 'a', ts: 1, entities: [], relations: [rel('uses')] }); // replay
+    expect(store.relationSources(zora, sparrow, 'uses').sort()).toEqual(['a', 'b']);
+    expect(store.relationSources(zora, sparrow, 'replaces')).toEqual(['c']);
+    expect(store.relationSources(sparrow, zora, 'uses')).toEqual([]);
+  });
+
+  it('is invisible to legacy recall and does not collide with legacy edges', () => {
+    store.relateEntities(zora, sparrow, 'uses'); // pre-existing legacy edge
+    const legacyBefore = store.neighbours('Zora');
+    const statsBefore = store.stats();
     store.recordFacts({
-      memId: 'mem-1',
-      ts: 100,
-      entities: [{ name: 'Zora', kind: 'project' }, { name: 'SparrowDB', kind: 'tool' }],
+      memId: 'm',
+      ts: 1,
+      entities: [{ name: 'Onto', kind: 'concept' }],
+      relations: [{ from: zora, to: sparrow, kind: 'uses' }, { from: zora, to: { name: 'Onto', kind: 'concept' }, kind: 'covers' }],
     });
-    expect(store.sourcesOf('Zora')).toEqual(['mem-1']);
-    expect(store.sourcesOf('SparrowDB')).toEqual(['mem-1']);
-    expect(store.sourcesOf('Unknown')).toEqual([]);
+    expect(store.neighbours('Zora')).toEqual(legacyBefore);
+    expect(store.neighbours('Onto')).toEqual([]);
+    expect(store.stats()).toEqual(statsBefore);
+    expect(store.tasksMentioning('Onto')).toEqual([]);
+    // The legacy edge did not stop the ontology source being recorded.
+    expect(store.relationSources(zora, sparrow, 'uses')).toEqual(['m']);
   });
 
-  it('accumulates sources across memories and is replay-safe', () => {
-    const facts = { memId: 'mem-1', ts: 1, entities: [{ name: 'Zora', kind: 'project' as const }] };
-    store.recordFacts(facts);
-    store.recordFacts(facts);
-    store.recordFacts({ ...facts, memId: 'mem-2', ts: 2 });
-    expect(store.sourcesOf('Zora').sort()).toEqual(['mem-1', 'mem-2']);
-  });
-
-  it('stores relations with the asserting memory and keeps them traversable', () => {
-    store.recordFacts({
-      memId: 'mem-9',
-      ts: 5,
-      entities: [],
-      relations: [
-        { from: { name: 'Zora', kind: 'project' }, to: { name: 'SparrowDB', kind: 'tool' }, kind: 'uses' },
-      ],
-    });
-    expect(store.neighbours('Zora')).toEqual([
-      { name: 'SparrowDB', kind: 'tool', relation: 'uses', direction: 'out' },
-    ]);
-    expect(store.sourcesOf('Zora')).toEqual(['mem-9']);
-  });
-
-  it('ignores an empty memory id and does not throw on junk', () => {
-    store.recordFacts({ memId: '  ', ts: 1, entities: [{ name: 'X', kind: 'concept' }] });
-    expect(store.sourcesOf('X')).toEqual([]);
+  it('ignores an empty memory id and self-relations', () => {
+    store.recordFacts({ memId: '  ', ts: 1, entities: [zora] });
+    store.recordFacts({ memId: 'm', ts: 1, entities: [], relations: [{ from: zora, to: zora, kind: 'is' }] });
+    expect(store.sourcesOf('Zora', 'project')).toEqual(['m']);
+    expect(store.relationSources(zora, zora, 'is')).toEqual([]);
   });
 
   it('applyWrites routes recordFacts', () => {
-    store.applyWrites([
-      { op: 'recordFacts', facts: { memId: 'm', ts: 1, entities: [{ name: 'A', kind: 'person' }] } },
-    ]);
-    expect(store.sourcesOf('A')).toEqual(['m']);
+    store.applyWrites([{ op: 'recordFacts', facts: { memId: 'm', ts: 1, entities: [zora] } }]);
+    expect(store.sourcesOf('Zora', 'project')).toEqual(['m']);
   });
 });
 
@@ -114,7 +123,7 @@ describeIfNative('GraphMemoryClient ontology gate', { timeout: 30_000 }, () => {
     const client = await GraphMemoryClient.create({ enabled: true, ontology: false, path: path.join(dir, 'g.db') });
     client.recordFacts({ memId: 'm1', ts: 1, entities: [{ name: 'Zora', kind: 'project' }] });
     await client.flush();
-    expect(await client.sourcesOf('Zora')).toEqual([]);
+    expect(await client.sourcesOf('Zora', 'project')).toEqual([]);
     expect((await client.stats()).entities).toBe(0);
     await client.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -125,7 +134,7 @@ describeIfNative('GraphMemoryClient ontology gate', { timeout: 30_000 }, () => {
     const client = await GraphMemoryClient.create({ enabled: true, ontology: true, path: path.join(dir, 'g.db') });
     client.recordFacts({ memId: 'm1', ts: 1, entities: [{ name: 'Zora', kind: 'project' }] });
     await client.flush();
-    expect(await client.sourcesOf('Zora')).toEqual(['m1']);
+    expect(await client.sourcesOf('Zora', 'project')).toEqual(['m1']);
     await client.close();
     await fs.rm(dir, { recursive: true, force: true });
   });

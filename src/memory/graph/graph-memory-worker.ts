@@ -31,6 +31,7 @@ import { buildTypeScriptBootstrap } from './worker-bootstrap.js';
 import { GraphStore } from './graph-store.js';
 import {
   DEFAULT_GRAPH_CONFIG,
+  type EntityKind,
   type MemoryFacts,
   type DecisionRecord,
   type DecisionResult,
@@ -138,7 +139,12 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
       case 'failuresForTool':
         return { op: 'failuresForTool', failures: store.failuresForTool(query.tool, query.limit) };
       case 'sourcesOf':
-        return { op: 'sourcesOf', memIds: store.sourcesOf(query.name, query.limit) };
+        return { op: 'sourcesOf', memIds: store.sourcesOf(query.name, query.kind, query.limit) };
+      case 'relationSources':
+        return {
+          op: 'relationSources',
+          memIds: store.relationSources(query.from, query.to, query.predicate, query.limit),
+        };
       case 'stats':
         return { op: 'stats', stats: store.stats() };
     }
@@ -317,10 +323,22 @@ export class GraphMemoryClient {
   // ── Reads ─────────────────────────────────────────────────────────
 
   /** Memory IDs evidencing an entity. Empty unless the ontology flag is on. */
-  async sourcesOf(name: string, limit = 20): Promise<string[]> {
+  async sourcesOf(name: string, kind: EntityKind, limit = 20): Promise<string[]> {
     if (!this._config.ontology) return [];
-    const r = await this._query({ op: 'sourcesOf', name, limit });
+    const r = await this._query({ op: 'sourcesOf', name, kind, limit });
     return r?.op === 'sourcesOf' ? r.memIds : [];
+  }
+
+  /** Memory IDs asserting exactly this relation. Empty unless the flag is on. */
+  async relationSources(
+    from: EntityRecord,
+    to: EntityRecord,
+    predicate: string,
+    limit = 20,
+  ): Promise<string[]> {
+    if (!this._config.ontology) return [];
+    const r = await this._query({ op: 'relationSources', from, to, predicate, limit });
+    return r?.op === 'relationSources' ? r.memIds : [];
   }
 
   async neighbours(name: string, limit = 20): Promise<NeighbourResult[]> {

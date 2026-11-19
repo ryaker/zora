@@ -154,6 +154,7 @@ import {
 } from './identifiers.js';
 import type { CypherParams, SparrowDatabase, SparrowModule } from './sparrow-loader.js';
 import { loadSparrow } from './sparrow-loader.js';
+import { createHash } from 'node:crypto';
 import {
   describeGraphOwner,
   isDatabaseLockedError,
@@ -407,52 +408,77 @@ export class GraphStore {
   /**
    * Record a source memory and the entities/relations extracted from it (#194).
    *
-   * The `Memory` node is keyed by the memory's own ID and every entity is
-   * linked to it with `EVIDENCED_BY`, so a lookup can always answer "which
-   * memories say this". Replay-safe: node upserts and edge writes are guarded.
-   *
-   * Limitation: `RELATES_TO` edges are write-once (see `_link`), so a relation
-   * carries `srcMemId` of the first memory that asserted it; later assertions
-   * of the same pair still add `EVIDENCED_BY` for their endpoints.
+   * Isolation: facts go to `OntEntity` / `Assertion` nodes, never to the legacy
+   * `Entity` / `RELATES_TO` records, so legacy recall (`neighbours` etc.)
+   * cannot surface derived facts and a legacy edge cannot shadow an ontology
+   * one. Sources per fact: an `OntEntity` is keyed by (kind, name) and linked
+   * to each memory that mentions it; each relation assertion is its own node
+   * carrying the asserting `memId`, so two memories — or two predicates — on
+   * the same pair stay independently attributable. All writes are replay-safe.
    */
   recordFacts(facts: MemoryFacts): void {
     const memId = clamp(facts.memId, 200);
     if (!memId) return;
     const memory = identity('Memory', 'memId', memId);
-    this._upsertNode(memory, { ts: Number.isFinite(facts.ts) ? facts.ts : 0 });
-    for (const entity of facts.entities ?? []) {
-      const name = clamp(entity.name);
-      if (!name) continue;
-      this.upsertEntity(entity);
-      this._link(identity('Entity', 'name', name), 'EVIDENCED_BY', memory);
-    }
+    const ts = safeTs(facts.ts);
+    this._upsertNode(memory, { ts });
+
+    const touch = (e: EntityRecord): string | null => {
+      const name = clamp(e.name);
+      if (!name) return null;
+      const kind: EntityKind = isEntityKind(e.kind) ? e.kind : 'concept';
+      const okey = ontKey(kind, name);
+      const node = identity('OntEntity', 'okey', okey);
+      this._upsertNode(node, { name, kind });
+      this._link(node, 'EVIDENCED_BY', memory);
+      return okey;
+    };
+
+    for (const entity of facts.entities ?? []) touch(entity);
     for (const rel of facts.relations ?? []) {
-      this.relateEntities(rel.from, rel.to, rel.kind, memId);
-      for (const e of [rel.from, rel.to]) {
-        const n = clamp(e.name);
-        if (n) this._link(identity('Entity', 'name', n), 'EVIDENCED_BY', memory);
-      }
+      const fromKey = touch(rel.from);
+      const toKey = touch(rel.to);
+      const predicate = clamp(rel.kind, 100);
+      if (!fromKey || !toKey || !predicate || fromKey === toKey) continue;
+      const akey = createHash('sha256')
+        .update([memId, fromKey, predicate, toKey].join('\u0000'))
+        .digest('hex');
+      this._upsertNode(identity('Assertion', 'akey', akey), {
+        fromKey,
+        toKey,
+        predicate,
+        memId,
+        ts,
+      });
     }
   }
 
-  /** Memory IDs that evidence an entity, for provenance/citation. */
-  sourcesOf(name: string, limit = 20): string[] {
+  /** Memory IDs that mention an entity of this exact kind and name. */
+  sourcesOf(name: string, kind: EntityKind, limit = 20): string[] {
     const anchor = clamp(name);
-    if (!anchor) return [];
+    if (!anchor || !isEntityKind(kind)) return [];
     const rows = this._query(
-      `MATCH (a:Entity {name: $name})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
-      { name: anchor },
+      `MATCH (a:OntEntity {okey: $okey})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
+      { okey: ontKey(kind, anchor) },
     );
-    const ids: string[] = [];
-    for (const row of rows) {
-      const id = str(row['m.memId']);
-      if (id && !ids.includes(id)) ids.push(id);
-    }
-    return ids.slice(0, limit);
+    return uniqueIds(rows, 'm.memId', limit);
+  }
+
+  /** Memory IDs that assert exactly this (from, predicate, to) relation. */
+  relationSources(from: EntityRecord, to: EntityRecord, predicate: string, limit = 20): string[] {
+    const f = clamp(from.name);
+    const t = clamp(to.name);
+    const p = clamp(predicate, 100);
+    if (!f || !t || !p || !isEntityKind(from.kind) || !isEntityKind(to.kind)) return [];
+    const rows = this._query(
+      `MATCH (a:Assertion {fromKey: $f, toKey: $t, predicate: $p}) RETURN a.memId LIMIT ${this._maxRows}`,
+      { f: ontKey(from.kind, f), t: ontKey(to.kind, t), p },
+    );
+    return uniqueIds(rows, 'a.memId', limit);
   }
 
   /** Relate two entities, creating either endpoint if needed. */
-  relateEntities(from: EntityRecord, to: EntityRecord, kind: string, srcMemId?: string): void {
+  relateEntities(from: EntityRecord, to: EntityRecord, kind: string): void {
     const fromName = clamp(from.name);
     const toName = clamp(to.name);
     if (!fromName || !toName || fromName === toName) return;
@@ -468,7 +494,7 @@ export class GraphStore {
       identity('Entity', 'name', fromName),
       'RELATES_TO',
       identity('Entity', 'name', toName),
-      { relKind: clamp(kind, 100), ...(srcMemId ? { srcMemId: clamp(srcMemId, 200) } : {}) },
+      { relKind: clamp(kind, 100) },
     );
   }
 
@@ -956,6 +982,20 @@ function clamp(value: unknown, max = MAX_PROP_LENGTH): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+/** Identity of an ontology entity: one node per (kind, name). */
+function ontKey(kind: string, name: string): string {
+  return `${kind}:${name}`;
+}
+
+function uniqueIds(rows: Array<Record<string, unknown>>, col: string, limit: number): string[] {
+  const ids: string[] = [];
+  for (const row of rows) {
+    const id = str(row[col]);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids.slice(0, limit);
 }
 
 /** Coerce a timestamp to a safe integer, defaulting to now. */

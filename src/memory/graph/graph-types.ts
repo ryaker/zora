@@ -11,15 +11,21 @@
  *     (:Task     {jobId, summary, outcome, ts})
  *     (:Decision {summary, rationale, ts})
  *     (:Failure  {tool, signature, hint, ts})
- *     (:Memory   {memId, ts})        auto-ontology provenance anchor (#194)
+ *
+ *   Auto-ontology (#194) lives in labels of its own so legacy recall can never
+ *   see it: nothing that reads Entity/RELATES_TO touches these.
+ *     (:Memory    {memId, ts})                          source memory anchor
+ *     (:OntEntity {okey, name, kind})                   okey = kind + name; one node per
+ *                                                       (kind, name), never reclassified
+ *     (:Assertion {akey, fromKey, toKey, predicate, memId, ts})
+ *                                                       one node per (memory, from, predicate, to)
  *
  *   Edges
  *     (:Task)-[:MENTIONS]->(:Entity)
  *     (:Task)-[:PRODUCED]->(:Decision)
  *     (:Task)-[:HIT]->(:Failure)
  *     (:Decision)-[:SUPERSEDES]->(:Decision)
- *     (:Entity)-[:RELATES_TO {relKind, srcMemId?}]->(:Entity)
- *     (:Entity)-[:EVIDENCED_BY]->(:Memory)
+ *     (:OntEntity)-[:EVIDENCED_BY]->(:Memory)
  *
  * Property names are unique across the whole ontology, not merely per label.
  * SparrowDB resolves a projected property by name rather than by the pattern
@@ -28,7 +34,7 @@
  */
 
 /** Node labels in the ontology. */
-export const NODE_LABELS = ['Entity', 'Task', 'Decision', 'Failure', 'Memory'] as const;
+export const NODE_LABELS = ['Entity', 'Task', 'Decision', 'Failure', 'Memory', 'OntEntity', 'Assertion'] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
 /** Relationship types in the ontology. */
@@ -218,7 +224,8 @@ export type GraphQuery =
   | { op: 'relatedTasks'; jobId: string; limit: number }
   | { op: 'decisionChain'; summary: string; limit: number }
   | { op: 'failuresForTool'; tool: string; limit: number }
-  | { op: 'sourcesOf'; name: string; limit: number }
+  | { op: 'sourcesOf'; name: string; kind: EntityKind; limit: number }
+  | { op: 'relationSources'; from: EntityRecord; to: EntityRecord; predicate: string; limit: number }
   | { op: 'stats' };
 
 export type GraphQueryResult =
@@ -228,6 +235,7 @@ export type GraphQueryResult =
   | { op: 'decisionChain'; decisions: DecisionResult[] }
   | { op: 'failuresForTool'; failures: FailureResult[] }
   | { op: 'sourcesOf'; memIds: string[] }
+  | { op: 'relationSources'; memIds: string[] }
   | { op: 'stats'; stats: GraphStats };
 
 /** Main thread → worker. */
