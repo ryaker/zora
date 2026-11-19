@@ -417,14 +417,17 @@ export class GraphStore {
    * the same pair stay independently attributable. All writes are replay-safe.
    */
   recordFacts(facts: MemoryFacts): void {
-    const memId = clamp(facts.memId, 200);
+    // Identity fields are never trimmed or truncated: that would let two distinct
+    // facts share a key (and a citation). Out-of-domain values are rejected, and
+    // reads apply the same rule so write and lookup always agree.
+    const memId = exactId(facts.memId, MAX_MEM_ID);
     if (!memId) return;
     const memory = identity('Memory', 'memId', memId);
     const ts = safeTs(facts.ts);
     this._upsertNode(memory, { ts });
 
     const touch = (e: EntityRecord): string | null => {
-      const name = clamp(e.name);
+      const name = exactId(e.name, MAX_PROP_LENGTH);
       if (!name) return null;
       const kind: EntityKind = isEntityKind(e.kind) ? e.kind : 'concept';
       const okey = ontKey(kind, name);
@@ -438,10 +441,11 @@ export class GraphStore {
     for (const rel of facts.relations ?? []) {
       const fromKey = touch(rel.from);
       const toKey = touch(rel.to);
-      const predicate = clamp(rel.kind, 100);
+      const predicate = exactId(rel.kind, MAX_PREDICATE);
       if (!fromKey || !toKey || !predicate || fromKey === toKey) continue;
+      // JSON array encoding is unambiguous for variable-length fields.
       const akey = createHash('sha256')
-        .update([memId, fromKey, predicate, toKey].join('\u0000'))
+        .update(JSON.stringify([memId, fromKey, predicate, toKey]))
         .digest('hex');
       this._upsertNode(identity('Assertion', 'akey', akey), {
         fromKey,
@@ -455,7 +459,7 @@ export class GraphStore {
 
   /** Memory IDs that mention an entity of this exact kind and name. */
   sourcesOf(name: string, kind: EntityKind, limit = 20): string[] {
-    const anchor = clamp(name);
+    const anchor = exactId(name, MAX_PROP_LENGTH);
     if (!anchor || !isEntityKind(kind)) return [];
     const rows = this._query(
       `MATCH (a:OntEntity {okey: $okey})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
@@ -466,9 +470,9 @@ export class GraphStore {
 
   /** Memory IDs that assert exactly this (from, predicate, to) relation. */
   relationSources(from: EntityRecord, to: EntityRecord, predicate: string, limit = 20): string[] {
-    const f = clamp(from.name);
-    const t = clamp(to.name);
-    const p = clamp(predicate, 100);
+    const f = exactId(from.name, MAX_PROP_LENGTH);
+    const t = exactId(to.name, MAX_PROP_LENGTH);
+    const p = exactId(predicate, MAX_PREDICATE);
     if (!f || !t || !p || !isEntityKind(from.kind) || !isEntityKind(to.kind)) return [];
     const rows = this._query(
       `MATCH (a:Assertion {fromKey: $f, toKey: $t, predicate: $p}) RETURN a.memId LIMIT ${this._maxRows}`,
@@ -987,6 +991,19 @@ function clamp(value: unknown, max = MAX_PROP_LENGTH): string {
 /** Identity of an ontology entity: one node per (kind, name). */
 function ontKey(kind: string, name: string): string {
   return `${kind}:${name}`;
+}
+
+const MAX_MEM_ID = 200;
+const MAX_PREDICATE = 100;
+
+/**
+ * An identity value taken exactly as given, or '' when out of domain (not a
+ * string, blank, or longer than `max`). Deliberately not `clamp`: truncation
+ * or trimming would map distinct inputs onto one identity.
+ */
+function exactId(value: unknown, max: number): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > max) return '';
+  return value;
 }
 
 function uniqueIds(rows: Array<Record<string, unknown>>, col: string, limit: number): string[] {

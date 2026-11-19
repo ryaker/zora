@@ -111,6 +111,35 @@ describeIfNative('GraphStore provenance', { timeout: 30_000 }, () => {
     expect(store.relationSources(zora, zora, 'is')).toEqual([]);
   });
 
+  it('never merges distinct identities that share a boundary prefix', () => {
+    const p100 = 'p'.repeat(100);
+    store.recordFacts({
+      memId: 'x',
+      ts: 1,
+      entities: [],
+      relations: [{ from: zora, to: sparrow, kind: p100 }],
+    });
+    // 101 chars is out of domain: rejected on write and on read, never truncated onto p100.
+    store.recordFacts({
+      memId: 'y',
+      ts: 1,
+      entities: [],
+      relations: [{ from: zora, to: sparrow, kind: p100 + 'q' }],
+    });
+    expect(store.relationSources(zora, sparrow, p100)).toEqual(['x']);
+    expect(store.relationSources(zora, sparrow, p100 + 'q')).toEqual([]);
+
+    const id200 = 'i'.repeat(200);
+    store.recordFacts({ memId: id200, ts: 1, entities: [zora] });
+    store.recordFacts({ memId: id200 + 'j', ts: 1, entities: [sparrow] }); // 201: rejected
+    expect(store.sourcesOf('Zora', 'project')).toEqual([id200]);
+    expect(store.sourcesOf('SparrowDB', 'tool')).toEqual([]);
+
+    // Opaque ids are exact: surrounding whitespace is not trimmed away.
+    store.recordFacts({ memId: ' padded ', ts: 1, entities: [{ name: 'Pad', kind: 'concept' }] });
+    expect(store.sourcesOf('Pad', 'concept')).toEqual([' padded ']);
+  });
+
   it('applyWrites routes recordFacts', () => {
     store.applyWrites([{ op: 'recordFacts', facts: { memId: 'm', ts: 1, entities: [zora] } }]);
     expect(store.sourcesOf('Zora', 'project')).toEqual(['m']);
@@ -118,24 +147,54 @@ describeIfNative('GraphStore provenance', { timeout: 30_000 }, () => {
 });
 
 describeIfNative('GraphMemoryClient ontology gate', { timeout: 30_000 }, () => {
-  it('drops provenance writes when ontology is off even if the tier is on', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-onto-client-'));
-    const client = await GraphMemoryClient.create({ enabled: true, ontology: false, path: path.join(dir, 'g.db') });
-    client.recordFacts({ memId: 'm1', ts: 1, entities: [{ name: 'Zora', kind: 'project' }] });
-    await client.flush();
-    expect(await client.sourcesOf('Zora', 'project')).toEqual([]);
-    expect((await client.stats()).entities).toBe(0);
-    await client.close();
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-onto-client-'));
+  });
+  afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  it('off-mode writes are never persisted (verified by reopening with ontology on)', async () => {
+    const dbPath = path.join(dir, 'g.db');
+    const off = await GraphMemoryClient.create({ enabled: true, ontology: false, path: dbPath });
+    off.recordFacts({
+      memId: 'dropped',
+      ts: 1,
+      entities: [{ name: 'Ghost', kind: 'concept' }],
+      relations: [{ from: { name: 'Ghost', kind: 'concept' }, to: { name: 'Zora', kind: 'project' }, kind: 'haunts' }],
+    });
+    // A legacy positive sentinel proves the DB was written and flushed.
+    off.upsertEntity({ name: 'Sentinel', kind: 'concept' });
+    await off.flush();
+    expect(await off.sourcesOf('Ghost', 'concept')).toEqual([]);
+    await off.close();
+
+    const on = await GraphMemoryClient.create({ enabled: true, ontology: true, path: dbPath });
+    expect((await on.stats()).entities).toBe(1); // sentinel persisted
+    expect(await on.sourcesOf('Ghost', 'concept')).toEqual([]);
+    expect(
+      await on.relationSources({ name: 'Ghost', kind: 'concept' }, { name: 'Zora', kind: 'project' }, 'haunts'),
+    ).toEqual([]);
+    // Now write with the flag on and reopen with it off: ontology-only facts
+    // stay out of legacy traversal.
+    on.recordFacts({ memId: 'kept', ts: 2, entities: [{ name: 'Onto', kind: 'concept' }] });
+    await on.flush();
+    expect(await on.sourcesOf('Onto', 'concept')).toEqual(['kept']);
+    await on.close();
+
+    const off2 = await GraphMemoryClient.create({ enabled: true, ontology: false, path: dbPath });
+    expect(await off2.sourcesOf('Onto', 'concept')).toEqual([]);
+    expect(await off2.neighbours('Onto')).toEqual([]);
+    expect((await off2.stats()).entities).toBe(1);
+    await off2.close();
+  });
+
   it('stores and returns provenance when both flags are on', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'zora-onto-client-'));
     const client = await GraphMemoryClient.create({ enabled: true, ontology: true, path: path.join(dir, 'g.db') });
     client.recordFacts({ memId: 'm1', ts: 1, entities: [{ name: 'Zora', kind: 'project' }] });
     await client.flush();
     expect(await client.sourcesOf('Zora', 'project')).toEqual(['m1']);
     await client.close();
-    await fs.rm(dir, { recursive: true, force: true });
   });
 });
