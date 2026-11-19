@@ -579,12 +579,18 @@ export class DashboardServer {
   /** Inject __ZORA_TOKEN__ into raw index.html when auth is enabled. */
   private _renderIndex(raw: string): string {
     if (!this._authToken) return raw;
-    const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
+    // #174: the token can now come from config, so serialize it HTML-safely
+    // (no </script> breakout, no U+2028/9) and insert with function replacers so
+    // dollar-sign sequences in the token are literal, not replacement patterns.
+    const safe = JSON.stringify(this._authToken)
+      .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026')
+      .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    const script = `<script>window.__ZORA_TOKEN__=${safe};</script>`;
     // Case-insensitive replace so minified/transformed HTML still works
-    const patched = raw.replace(/<\/head>/i, `${script}</head>`);
+    const patched = raw.replace(/<\/head>/i, () => `${script}</head>`);
     if (patched !== raw) return patched;
     // </head> not found — prepend script to body as fallback
-    return raw.replace(/<body/i, `${script}<body`) || raw;
+    return raw.replace(/<body/i, () => `${script}<body`) || raw;
   }
 
   /** Serve index.html with __ZORA_TOKEN__ injected when auth is enabled. */

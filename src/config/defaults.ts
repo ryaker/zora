@@ -225,8 +225,14 @@ export function validateConfig(config: ZoraConfig): string[] {
 
   // Steering validation
   // #174: a blank token is falsy and would silently disable dashboard auth; fail closed.
-  if (config.steering.dashboard_token !== undefined && config.steering.dashboard_token.trim() === '') {
-    errors.push('steering.dashboard_token must not be blank (omit it to use ZORA_DASHBOARD_TOKEN)');
+  // parseConfig casts untyped TOML, so check the runtime type first (never log the value).
+  const dashToken: unknown = config.steering.dashboard_token;
+  if (dashToken !== undefined) {
+    if (typeof dashToken !== 'string') {
+      errors.push('steering.dashboard_token must be a string');
+    } else if (dashToken.trim() === '') {
+      errors.push('steering.dashboard_token must not be blank (omit it to use ZORA_DASHBOARD_TOKEN)');
+    }
   }
   if (config.steering.dashboard_port < 1 || config.steering.dashboard_port > 65535) {
     errors.push('steering.dashboard_port must be 1-65535');

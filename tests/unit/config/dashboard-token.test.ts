@@ -13,6 +13,7 @@ import { SessionManager } from '../../../src/orchestrator/session-manager.js';
 import { SteeringManager } from '../../../src/steering/steering-manager.js';
 import { AuthMonitor } from '../../../src/orchestrator/auth-monitor.js';
 import os from 'node:os';
+import { loadConfigFromString, ConfigError } from '../../../src/config/loader.js';
 import type { ZoraConfig } from '../../../src/types.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -51,16 +52,16 @@ describe('steering.dashboard_token (#174)', () => {
   it('denies protected requests without valid auth and accepts the configured token', async () => {
     delete process.env['ZORA_DASHBOARD_TOKEN'];
     const app = makeServer('cfg-token');
-    expect((await request(app as never).get('/api/policy')).status).toBe(401);
-    expect((await request(app as never).get('/api/policy').set('Authorization', 'Bearer wrong')).status).toBe(401);
-    expect((await request(app as never).get('/api/policy').set('Authorization', 'Bearer cfg-token')).status).not.toBe(401);
+    expect((await request(app as never).get('/api/system')).status).toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer wrong')).status).toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(200);
   });
 
   it('explicit (config) token takes precedence over ZORA_DASHBOARD_TOKEN', async () => {
     process.env['ZORA_DASHBOARD_TOKEN'] = 'env-token';
     const app = makeServer('cfg-token');
-    expect((await request(app as never).get('/api/policy').set('Authorization', 'Bearer env-token')).status).toBe(401);
-    expect((await request(app as never).get('/api/policy').set('Authorization', 'Bearer cfg-token')).status).not.toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer env-token')).status).toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(200);
   });
 
   it('daemon passes the configured token to DashboardServer', () => {
@@ -68,5 +69,41 @@ describe('steering.dashboard_token (#174)', () => {
     // bug was precisely this argument being absent.
     const src = fs.readFileSync(path.join(ROOT, 'src/cli/daemon.ts'), 'utf8');
     expect(src).toMatch(/dashboardToken:\s*config\.steering\.dashboard_token/);
+  });
+});
+
+describe('steering.dashboard_token parsing and rendering (#174 review)', () => {
+  const toml = (v: string) => `[steering]\ndashboard_token = ${v}\n`;
+
+  it.each([['true'], ['42'], ['["a"]']])('rejects non-string value %s with a field-specific ConfigError', (v) => {
+    try {
+      loadConfigFromString(toml(v));
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as ConfigError).errors.join('\n')).toContain('steering.dashboard_token must be a string');
+    }
+  });
+
+  it('rejects a blank string, accepts omitted, keeps a synthetic env: reference unresolved-safe', () => {
+    expect(() => loadConfigFromString(toml('""'))).toThrow(ConfigError);
+    expect(loadConfigFromString('[steering]\ndashboard_port = 8070\n').steering.dashboard_token).toBeUndefined();
+  });
+
+  it('renders the token HTML-safely and literally (no </script> breakout, no $& expansion)', async () => {
+    const evil = '</script><script>alert(1)</script>$&$`\u2028';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zora-174b-'));
+    const s = new DashboardServer({
+      sessionManager: new SessionManager(dir),
+      steeringManager: new SteeringManager(dir),
+      authMonitor: new AuthMonitor({ providers: [], checkIntervalMs: 60_000 }),
+      dashboardToken: evil,
+      port: 0,
+    });
+    const html = (s as unknown as { _renderIndex(raw: string): string })._renderIndex('<html><head></head><body></body></html>');
+    expect(html).not.toContain('</script><script>');
+    expect(html).not.toContain('\u2028');
+    expect(html).toContain('\\u003c/script\\u003e');
+    expect(html).toContain('$\\u0026$`'); // dollar sequences literal (ampersand HTML-escaped)
   });
 });
