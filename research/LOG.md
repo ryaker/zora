@@ -47,3 +47,10 @@
 - Verdict: **watch** the product, **adopt** shortlist items 1 and 2 as follow-ups after critique; 1 and 3 need Richard.
 - Critique (reviewer): pending. Requested on the PR.
 - Decision issue: none yet (this week's cap of 2 decision issues is reserved for #185).
+
+## 2026-11-18 — Lean pass #1 (issue #204)
+- Baseline (main @ 91927c6): 185 tracked src files, ~40.5k src lines, 163 test files, 16 runtime + 12 dev dependencies. Not measured in this sandbox (no representative host): bundle size, startup time, idle memory, suite wall time. Those need a run on the M2 Air; left for the next pass.
+- Dependency check: every runtime dependency is imported from src/bin/scripts, except `pino-pretty`, which is loaded by `require.resolve` in src/utils/logger.ts (dev-time pretty logging, optional fallback to JSON); nothing is unused.
+- `dashboard_token` from #174: **still open, not fixed here.** `DashboardServer` accepts a `dashboardToken` option and falls back to `ZORA_DASHBOARD_TOKEN`, but nothing in src/cli/daemon.ts passes a configured value to it (docs still describe a `dashboardToken` config setting), so a config-file token is ignored. Either wire it or remove the documented setting; tracked under #174.
+- Cut: SkillSynthesizer wasted one LLM call on every long (>=8 tool calls or turns) session when no TTY and no enabled ApprovalQueue exist (daemon default), because `_confirmWithUser()` then always fails closed. It now returns before the call. Before: 1 discarded call per long daemon session. After: 0. Outcomes unchanged (no skill saved). Covered by two new tests. Known remaining waste, left open under #174: with an *enabled* ApprovalQueue that has no registered sender, `request()` cannot reach a human, so the call is still discarded; fixing that needs a queue readiness check and touches approval behavior, so it is not done here.
+- Next candidates: measure bundle/startup/idle memory on the host; look for unused exports across src (a tool such as knip would need a package approval).
