@@ -562,6 +562,8 @@ export interface SteeringConfig {
   enabled: boolean;
   poll_interval: string;
   dashboard_port: number;
+  /** Bearer token for the dashboard API (supports `env:VAR`). Wired in the daemon (#174); unset falls back to ZORA_DASHBOARD_TOKEN. */
+  dashboard_token?: string;
   notify_on_flag: boolean;
   flag_timeout: string;
   auto_approve_low_risk: boolean;
