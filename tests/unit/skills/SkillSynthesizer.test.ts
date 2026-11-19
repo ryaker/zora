@@ -249,3 +249,34 @@ describe('SkillSynthesizer.maybeGenerateSkill', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+// ─── LEAN-204: no wasted LLM call when nobody can confirm ────────────
+
+describe('SkillSynthesizer.maybeGenerateSkill without a confirmation route (LEAN-204)', () => {
+  const longSession = { taskDescription: 'deploy the thing', toolCalls: 20, turns: 20 };
+
+  function fakeProvider() {
+    const execute = vi.fn(async function* () { /* no events */ });
+    return { execute, provider: { name: 'fake', execute } as unknown as import('../../../src/types.js').LLMProvider };
+  }
+
+  it('makes no provider call with no TTY and no approval queue', async () => {
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      const { execute, provider } = fakeProvider();
+      const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider });
+      await synth.maybeGenerateSkill(longSession);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+  });
+
+  it('still calls the provider when skipConfirmation is set', async () => {
+    const { execute, provider } = fakeProvider();
+    const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider, skipConfirmation: true });
+    await synth.maybeGenerateSkill(longSession);
+    expect(execute).toHaveBeenCalled();
+  });
+});

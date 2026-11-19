@@ -47,3 +47,10 @@
 - Verdict: **watch** the product, **adopt** shortlist items 1 and 2 as follow-ups after critique; 1 and 3 need Richard.
 - Critique (reviewer): pending. Requested on the PR.
 - Decision issue: none yet (this week's cap of 2 decision issues is reserved for #185).
+
+## 2026-11-18 — Lean pass #1 (issue #204)
+- Baseline (main @ 91927c6): 185 tracked src files, ~40.5k src lines, 163 test files, 16 runtime + 12 dev dependencies. Not measured in this sandbox (no representative host): bundle size, startup time, idle memory, suite wall time. Those need a run on the M2 Air; left for the next pass.
+- Dependency check: every runtime dependency is imported from src/bin/scripts, except `pino-pretty`, which is loaded by `require.resolve` in src/utils/logger.ts (dev-time pretty logging, optional fallback to JSON); nothing is unused.
+- `dashboard_token` from #174: no `dashboard_token` config key remains in src (the dashboard reads `dashboardToken` / `ZORA_DASHBOARD_TOKEN`), so no dead option to remove.
+- Cut: SkillSynthesizer wasted one LLM call on every long (>=8 tool calls or turns) session when no TTY and no enabled ApprovalQueue exist (daemon default), because `_confirmWithUser()` then always fails closed. It now returns before the call. Before: 1 discarded call per long daemon session. After: 0. Outcomes unchanged (no skill saved). Covered by two new tests.
+- Next candidates: measure bundle/startup/idle memory on the host; look for unused exports across src (a tool such as knip would need a package approval).

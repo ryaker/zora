@@ -245,6 +245,15 @@ export class SkillSynthesizer {
       return;
     }
 
+    // LEAN-204 (#174): with no TTY and no enabled ApprovalQueue, _confirmWithUser()
+    // always fails closed, so the LLM call below would be paid for and then
+    // discarded on every long daemon session. Skip it up front. Outcomes are
+    // identical to before (no skill is saved); only the wasted call is removed.
+    if (!this._canConfirm()) {
+      log.debug('No way to confirm a skill (no TTY, no enabled ApprovalQueue) — skipping synthesis');
+      return;
+    }
+
     const existing = await this.findExistingSkill(session.taskDescription);
     if (existing) {
       log.debug({ existing }, 'Duplicate skill found — skipping synthesis');
@@ -294,6 +303,11 @@ export class SkillSynthesizer {
    * out-of-band approval (Telegram, channel, etc.) — preserves HITL in daemon mode.
    * When stdin is not a TTY and no queue: fail closed.
    */
+  /** True when _confirmWithUser() has some route to a yes/no answer. */
+  private _canConfirm(): boolean {
+    return this._skipConfirmation || Boolean(process.stdin.isTTY) || Boolean(this._approvalQueue?.isEnabled());
+  }
+
   private async _confirmWithUser(name: string, content: string): Promise<boolean> {
     if (this._skipConfirmation) {
       return true;
