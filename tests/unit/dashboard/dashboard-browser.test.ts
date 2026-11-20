@@ -150,9 +150,12 @@ test.describe('Zora Tactical Dashboard', () => {
   });
 
   // Drop every SSE connection so each tab's EventSource auto-reconnects.
-  const dropSseClients = () => {
-    for (const client of [...(server as any)._sseClients.keys()]) client.end();
-  };
+  const dropSseClients = () => Promise.all(
+    [...(server as any)._sseClients.keys()].map(client => new Promise<void>(resolve => {
+      client.req.once('close', resolve);
+      client.end();
+    })),
+  );
 
   test('reconnect recovers only this tab\'s missed terminal while another job still runs', async ({ browser }) => {
     queuedJobs = ['job_rc_a', 'job_rc_b'];
@@ -177,7 +180,7 @@ test.describe('Zora Tactical Dashboard', () => {
     await send(tabB, 'beta');
 
     // Tab A misses its completion: drop SSE, settle job A while nobody listens.
-    dropSseClients();
+    await dropSseClients();
     server.broadcastEvent({ type: 'job_completed', jobId: 'job_rc_a', data: { jobId: 'job_rc_a', text: 'A recovered' } });
 
     // On reconnect A recovers job A only; B's job is still running and must not matter.
@@ -213,7 +216,7 @@ test.describe('Zora Tactical Dashboard', () => {
     });
 
     await send('first');
-    dropSseClients();
+    await dropSseClients();
     await heldSeen; // reconnect fired job-scoped recovery for job 1
 
     // Job 1 finishes live, then the tab starts job 2.
