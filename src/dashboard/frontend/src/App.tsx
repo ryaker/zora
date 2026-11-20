@@ -466,14 +466,28 @@ const App: React.FC = () => {
 
   // SSE event stream → chat messages + task step tracking
   useEffect(() => {
+    // #167: reconnect recovery is scoped to THIS tab's job. Global /api/jobs is
+    // not used: another tab's running job must not keep this tab "Working", and
+    // a stale snapshot must not clear a newer submission.
     const reconcileJobState = async () => {
+      const jobId = activeJobRef.current;
+      if (!jobId) return; // nothing to recover (idle, or POST still pending)
       try {
-        const res = await axios.get('/api/jobs');
-        const jobs: Array<{ status: string }> = res.data?.jobs ?? [];
-        const hasRunning = jobs.some((j) => j.status === 'running');
-        if (!hasRunning) setTaskRunning(false);
+        const res = await axios.get(`/api/task/${encodeURIComponent(jobId)}`);
+        // Discard if the active job changed while the request was in flight.
+        if (activeJobRef.current !== jobId) return;
+        const status = res.data?.status;
+        if (status === 'completed') {
+          processEventRef.current({ type: 'job_completed', jobId, data: { jobId, text: res.data?.text } }, jobId);
+        } else if (status === 'failed') {
+          processEventRef.current({ type: 'job_failed', jobId, data: { jobId, error: res.data?.error } }, jobId);
+        } else if (status === 'unknown') {
+          // The daemon no longer knows this job (restart): it cannot finish.
+          processEventRef.current({ type: 'job_failed', jobId, data: { jobId, error: 'Task state lost (daemon restarted)' } }, jobId);
+        }
+        // 'running': keep waiting for the live stream.
       } catch {
-        // ignore — daemon may still be starting
+        // ignore — daemon may still be starting; the next reconnect retries
       }
     };
 

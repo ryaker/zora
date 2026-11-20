@@ -70,6 +70,25 @@ export class DashboardServer {
   private _server: Server | undefined;
   /** TYPE-12: Map SSE clients to their verbosity level */
   private readonly _sseClients: Map<ExpressResponse, VerbosityLevel> = new Map();
+  /**
+   * #167: outcome of dashboard-submitted jobs, for per-job reconnect recovery.
+   * Fed by the same job_completed / job_failed broadcasts that settle a job
+   * (task-promise settlement), so it agrees with the SSE terminal contract —
+   * unlike /api/jobs, whose status is inferred from provider events.
+   * Bounded; oldest entries are evicted first.
+   */
+  private readonly _jobOutcomes: Map<string, { status: 'running' | 'completed' | 'failed'; text?: string; error?: string }> = new Map();
+  private static readonly MAX_JOB_OUTCOMES = 200;
+
+  private _recordJobOutcome(jobId: string, outcome: { status: 'running' | 'completed' | 'failed'; text?: string; error?: string }): void {
+    this._jobOutcomes.delete(jobId); // re-insert to refresh eviction order
+    this._jobOutcomes.set(jobId, outcome);
+    while (this._jobOutcomes.size > DashboardServer.MAX_JOB_OUTCOMES) {
+      const oldest = this._jobOutcomes.keys().next().value;
+      if (oldest === undefined) break;
+      this._jobOutcomes.delete(oldest);
+    }
+  }
   /** TLCI cost tracker — undefined when not configured */
   private readonly _tlciCostTracker: CostTracker | undefined;
   private readonly _authToken: string | undefined;
@@ -290,6 +309,18 @@ export class DashboardServer {
       }
     });
 
+    /**
+     * GET /api/task/:jobId — job-scoped recovery for a reconnecting chat tab.
+     * status: running | completed | failed | unknown (never seen, or the
+     * daemon restarted and lost it).
+     */
+    this._app.get('/api/task/:jobId', (req, res) => {
+      const jobId = req.params['jobId'] ?? '';
+      const outcome = this._jobOutcomes.get(jobId);
+      if (!outcome) return res.json({ ok: true, jobId, status: 'unknown' });
+      res.json({ ok: true, jobId, ...outcome });
+    });
+
     /** GET /api/jobs — R14: List active and historical jobs via SessionManager */
     this._app.get('/api/jobs', async (_req, res) => {
       try {
@@ -368,6 +399,8 @@ export class DashboardServer {
 
       try {
         const jobId = await submitTask(prompt.trim());
+        // Never overwrite a terminal outcome that settled before this line ran.
+        if (!this._jobOutcomes.has(jobId)) this._recordJobOutcome(jobId, { status: 'running' });
         // Note: job_started event is now emitted by the orchestrator via onEvent callback
         res.json({ ok: true, jobId });
       } catch (err) {
@@ -550,6 +583,12 @@ export class DashboardServer {
    * the reassembled string to the `onmessage` handler.
    */
   broadcastEvent(event: { type: string; data: unknown; jobId?: string }): void {
+    if (event.jobId && (event.type === 'job_completed' || event.type === 'job_failed')) {
+      const d = (event.data ?? {}) as Record<string, unknown>;
+      this._recordJobOutcome(event.jobId, event.type === 'job_completed'
+        ? { status: 'completed', text: typeof d['text'] === 'string' ? d['text'] : undefined }
+        : { status: 'failed', error: typeof d['error'] === 'string' ? d['error'] : 'Task failed' });
+    }
     const json = JSON.stringify(event);
     // Split on any literal newline that might have survived serialisation
     const lines = json.split(/\r?\n/);

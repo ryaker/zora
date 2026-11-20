@@ -148,4 +148,87 @@ test.describe('Zora Tactical Dashboard', () => {
     await expect(page.getByText('Working...', { exact: true })).toBeHidden();
     await expect(page.getByText('The answer is 4.', { exact: true })).toHaveCount(1);
   });
+
+  // Drop every SSE connection so each tab's EventSource auto-reconnects.
+  const dropSseClients = () => {
+    for (const client of [...(server as any)._sseClients.keys()]) client.end();
+  };
+
+  test('reconnect recovers only this tab\'s missed terminal while another job still runs', async ({ browser }) => {
+    queuedJobs = ['job_rc_a', 'job_rc_b'];
+    const ctx = await browser.newContext();
+    await ctx.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const open = async () => {
+      const page = await ctx.newPage();
+      const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+      await page.goto(`http://localhost:${port}`);
+      await connected;
+      return page;
+    };
+    const send = async (page: Awaited<ReturnType<typeof open>>, text: string) => {
+      await page.locator('[placeholder="Ask Zora to do something..."]').fill(text);
+      const posted = page.waitForResponse(r => r.url().endsWith('/api/task') && r.request().method() === 'POST');
+      await page.click('button:has-text("SEND")');
+      expect((await posted).ok()).toBe(true);
+    };
+    const tabA = await open();
+    const tabB = await open();
+    await send(tabA, 'alpha');
+    await send(tabB, 'beta');
+
+    // Tab A misses its completion: drop SSE, settle job A while nobody listens.
+    dropSseClients();
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_rc_a', data: { jobId: 'job_rc_a', text: 'A recovered' } });
+
+    // On reconnect A recovers job A only; B's job is still running and must not matter.
+    await expect(tabA.getByText('A recovered', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(tabA.getByText('Working...', { exact: true })).toBeHidden();
+    await expect(tabB.getByText('Working...', { exact: true })).toBeVisible();
+    await expect(tabB.getByText('A recovered', { exact: true })).toHaveCount(0);
+    await ctx.close();
+  });
+
+  test('a stale reconnect response cannot clear a newer submission', async ({ page }) => {
+    queuedJobs = ['job_st_1', 'job_st_2'];
+    await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+    await page.goto(`http://localhost:${port}`);
+    await connected;
+    const send = async (text: string) => {
+      await page.locator('[placeholder="Ask Zora to do something..."]').fill(text);
+      const posted = page.waitForResponse(r => r.url().endsWith('/api/task') && r.request().method() === 'POST');
+      await page.click('button:has-text("SEND")');
+      expect((await posted).ok()).toBe(true);
+    };
+
+    // Hold job 1's recovery response so it arrives late.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let held!: () => void;
+    const heldSeen = new Promise<void>(resolve => { held = resolve; });
+    await page.route('**/api/task/job_st_1', async route => {
+      held();
+      await gate;
+      await route.fulfill({ json: { ok: true, jobId: 'job_st_1', status: 'completed', text: 'STALE' } });
+    });
+
+    await send('first');
+    dropSseClients();
+    await heldSeen; // reconnect fired job-scoped recovery for job 1
+
+    // Job 1 finishes live, then the tab starts job 2.
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_st_1', data: { jobId: 'job_st_1', text: 'first done' } });
+    await expect(page.getByText('first done', { exact: true })).toBeVisible();
+    await send('second');
+    await expect(page.getByText('Working...', { exact: true })).toBeVisible();
+
+    // The stale job-1 response lands now: it must be discarded.
+    release();
+    await page.waitForTimeout(300);
+    await expect(page.getByText('Working...', { exact: true })).toBeVisible();
+    await expect(page.getByText('STALE', { exact: true })).toHaveCount(0);
+
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_st_2', data: { jobId: 'job_st_2', text: 'second done' } });
+    await expect(page.getByText('second done', { exact: true })).toBeVisible();
+  });
 });
