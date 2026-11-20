@@ -17,6 +17,9 @@ test.describe('Zora Tactical Dashboard', () => {
   const port = 7071;
   const jobId = 'job_browser_test';
   let submittedPrompt: string | undefined;
+  // #167: when set, submitTask hands out these jobIds in order and emits an
+  // early text event BEFORE returning, so the SSE event races the POST response.
+  let queuedJobs: string[] = [];
 
   test.beforeAll(async () => {
     await fs.mkdir(testDir, { recursive: true });
@@ -38,7 +41,11 @@ test.describe('Zora Tactical Dashboard', () => {
       loop, sessionManager, steeringManager, authMonitor, port,
       submitTask: async (prompt) => {
         submittedPrompt = prompt;
-        return jobId;
+        const queued = queuedJobs.shift();
+        if (!queued) return jobId;
+        server.broadcastEvent({ type: 'text', jobId: queued, data: { text: `early:${queued} ` } });
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return queued;
       },
     });
     await server.start();
@@ -70,8 +77,75 @@ test.describe('Zora Tactical Dashboard', () => {
     expect((await submitted).ok()).toBe(true);
     expect(submittedPrompt).toBe('Engage impulse engines');
     await expect(page.getByText('Working...', { exact: true })).toBeVisible();
-    server.broadcastEvent({ type: 'done', data: { jobId, text: `Completed: ${submittedPrompt}` } });
+    // Provider `done` is not terminal; only the task promise settling is.
+    server.broadcastEvent({ type: 'done', jobId, data: { text: 'provider stream finished' } });
+    await expect(page.getByText('Working...', { exact: true })).toBeVisible();
+    server.broadcastEvent({ type: 'job_completed', jobId, data: { jobId, text: `Completed: ${submittedPrompt}` } });
     await expect(page.getByText('Completed: Engage impulse engines', { exact: true })).toBeVisible();
     await expect(page.getByText('Working...', { exact: true })).toBeHidden();
+  });
+
+  test('overlapping jobs in two tabs only complete their own tab', async ({ browser }) => {
+    queuedJobs = ['job_tab_a', 'job_tab_b'];
+    const ctx = await browser.newContext();
+    await ctx.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const open = async () => {
+      const page = await ctx.newPage();
+      const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+      await page.goto(`http://localhost:${port}`);
+      await connected;
+      return page;
+    };
+    const send = async (page: Awaited<ReturnType<typeof open>>, text: string) => {
+      await page.locator('[placeholder="Ask Zora to do something..."]').fill(text);
+      const posted = page.waitForResponse(r => r.url().endsWith('/api/task') && r.request().method() === 'POST');
+      await page.click('button:has-text("SEND")');
+      expect((await posted).ok()).toBe(true);
+    };
+    const tabA = await open();
+    const tabB = await open();
+    await send(tabA, 'alpha');
+    await send(tabB, 'beta');
+
+    // Early events that raced the POST response are replayed into the right tab only.
+    await expect(tabA.getByText('early:job_tab_a', { exact: false })).toBeVisible();
+    await expect(tabA.getByText('early:job_tab_b', { exact: false })).toHaveCount(0);
+    await expect(tabB.getByText('early:job_tab_b', { exact: false })).toBeVisible();
+    await expect(tabB.getByText('early:job_tab_a', { exact: false })).toHaveCount(0);
+
+    // Job B finishes first (out of submission order): tab A must keep working.
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_tab_b', data: { jobId: 'job_tab_b', text: 'B result' } });
+    await expect(tabB.getByText('B result', { exact: true })).toBeVisible();
+    await expect(tabB.getByText('Working...', { exact: true })).toBeHidden();
+    await expect(tabA.getByText('Working...', { exact: true })).toBeVisible();
+    await expect(tabA.getByText('B result', { exact: true })).toHaveCount(0);
+
+    // Job A fails: error lands only under tab A.
+    server.broadcastEvent({ type: 'job_failed', jobId: 'job_tab_a', data: { jobId: 'job_tab_a', error: 'boom' } });
+    await expect(tabA.getByText('Task failed: boom', { exact: true })).toBeVisible();
+    await expect(tabA.getByText('Working...', { exact: true })).toBeHidden();
+    await expect(tabB.getByText('Task failed: boom', { exact: true })).toHaveCount(0);
+    await ctx.close();
+  });
+
+  test('final result is reconciled against the same job\'s streamed output', async ({ page }) => {
+    await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+    await page.goto(`http://localhost:${port}`);
+    await connected;
+    await page.locator('[placeholder="Ask Zora to do something..."]').fill('reconcile');
+    const posted = page.waitForResponse(r => r.url().endsWith('/api/task') && r.request().method() === 'POST');
+    await page.click('button:has-text("SEND")');
+    await posted;
+
+    // text → tool_call → tool_result → done: same answer must not be appended twice.
+    server.broadcastEvent({ type: 'text', jobId, data: { text: 'Interim thought.' } });
+    server.broadcastEvent({ type: 'tool_call', jobId, data: { tool: 'Read' } });
+    server.broadcastEvent({ type: 'tool_result', jobId, data: { result: 'ok' } });
+    server.broadcastEvent({ type: 'text', jobId, data: { text: 'The answer is 4.' } });
+    server.broadcastEvent({ type: 'done', jobId, data: { text: 'The answer is 4.' } });
+    server.broadcastEvent({ type: 'job_completed', jobId, data: { jobId, text: 'The answer is 4.' } });
+    await expect(page.getByText('Working...', { exact: true })).toBeHidden();
+    await expect(page.getByText('The answer is 4.', { exact: true })).toHaveCount(1);
   });
 });

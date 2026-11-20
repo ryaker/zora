@@ -549,7 +549,7 @@ export class DashboardServer {
    * the browser's EventSource will concatenate them with `\n` before handing
    * the reassembled string to the `onmessage` handler.
    */
-  broadcastEvent(event: { type: string; data: unknown }): void {
+  broadcastEvent(event: { type: string; data: unknown; jobId?: string }): void {
     const json = JSON.stringify(event);
     // Split on any literal newline that might have survived serialisation
     const lines = json.split(/\r?\n/);

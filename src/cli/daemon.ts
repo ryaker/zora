@@ -255,11 +255,16 @@ async function main() {
     submitTask: async (prompt: string) => {
       // Generate jobId immediately and kick off task in background (don't await)
       const jobId = `job_${crypto.randomUUID()}`;
+      // #167: the SSE stream is shared by every dashboard tab, so each event is
+      // stamped with its jobId, and settlement of the task promise (not the
+      // provider's `done`/`task.end`) is the authoritative terminal signal.
       orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
-        dashboard.broadcastEvent({ type: event.type, data: event.content });
-      } }).catch(err => {
+        dashboard.broadcastEvent({ type: event.type, jobId, data: event.content });
+      } }).then(result => {
+        dashboard.broadcastEvent({ type: 'job_completed', jobId, data: { jobId, text: typeof result === 'string' ? result : undefined } });
+      }).catch(err => {
         log.error({ jobId, err }, 'Task failed');
-        dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
+        dashboard.broadcastEvent({ type: 'job_failed', jobId, data: { jobId, error: err instanceof Error ? err.message : String(err) } });
       });
       return jobId;
     },
