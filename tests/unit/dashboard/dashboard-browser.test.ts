@@ -15,6 +15,8 @@ test.describe('Zora Tactical Dashboard', () => {
   let server: DashboardServer;
   const testDir = path.join(os.tmpdir(), 'zora-dashboard-test');
   const port = 7071;
+  const jobId = 'job_browser_test';
+  let submittedPrompt: string | undefined;
 
   test.beforeAll(async () => {
     await fs.mkdir(testDir, { recursive: true });
@@ -32,7 +34,13 @@ test.describe('Zora Tactical Dashboard', () => {
     const authMonitor = new AuthMonitor({ providers: [provider], notifications });
     const loop = new ExecutionLoop({ provider, engine, sessionManager, steeringManager });
 
-    server = new DashboardServer({ loop, sessionManager, steeringManager, authMonitor, port });
+    server = new DashboardServer({
+      loop, sessionManager, steeringManager, authMonitor, port,
+      submitTask: async (prompt) => {
+        submittedPrompt = prompt;
+        return jobId;
+      },
+    });
     await server.start();
   });
 
@@ -47,16 +55,23 @@ test.describe('Zora Tactical Dashboard', () => {
     await expect(page.locator('text=ZORA / DASHBOARD')).toBeVisible();
   });
 
-  test('injects steering message via UI', async ({ page }) => {
+  test('submits a task via chat and displays its final result', async ({ page }) => {
     // Dismiss onboarding overlay so the main input is interactive
     await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const connected = page.waitForResponse(response => response.url().endsWith('/api/events') && response.ok());
     await page.goto(`http://localhost:${port}`);
+    await connected;
 
     const input = page.locator('[placeholder="Ask Zora to do something..."]');
     await input.fill('Engage impulse engines');
+    const submitted = page.waitForResponse(response => response.url().endsWith('/api/task') && response.request().method() === 'POST');
     await page.click('button:has-text("SEND")');
 
-    // Message appears as a user chat bubble
-    await expect(page.locator('.bubble-user:has-text("Engage impulse engines")')).toBeVisible({ timeout: 5000 });
+    expect((await submitted).ok()).toBe(true);
+    expect(submittedPrompt).toBe('Engage impulse engines');
+    await expect(page.getByText('Working...', { exact: true })).toBeVisible();
+    server.broadcastEvent({ type: 'done', data: { jobId, text: `Completed: ${submittedPrompt}` } });
+    await expect(page.getByText('Completed: Engage impulse engines', { exact: true })).toBeVisible();
+    await expect(page.getByText('Working...', { exact: true })).toBeHidden();
   });
 });
