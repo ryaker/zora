@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Shield, Send, Gauge, Sparkles, LayoutGrid, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+import { classifyTaskEvent, eventJobId, reconcileFinalText } from './task-events';
 import ReactMarkdown from 'react-markdown';
 
 import WelcomeOnboarding from './components/WelcomeOnboarding';
@@ -29,6 +30,8 @@ interface Message {
   type: 'agent' | 'user' | 'system' | 'tool-call' | 'tool-result';
   content: string;
   timestamp: Date;
+  /** #167: job this message belongs to (agent/tool output), when known. */
+  jobId?: string;
 }
 
 interface ProviderStatus {
@@ -203,6 +206,13 @@ const App: React.FC = () => {
   // Task tracking
   const [taskSteps, setTaskSteps] = useState<TaskStep[]>([]);
   const [taskRunning, setTaskRunning] = useState(false);
+  // #167: SSE is shared by all tabs. Track this tab's job, buffer events that
+  // arrive before the POST response reveals the jobId, and per-job streamed text.
+  const activeJobRef = useRef<string | null>(null);
+  const submitPendingRef = useRef(false);
+  const eventBufferRef = useRef<any[]>([]);
+  const streamedRef = useRef<Map<string, string>>(new Map());
+  const processEventRef = useRef<(data: any, jobId: string) => void>(() => {});
   const [currentTaskPrompt, setCurrentTaskPrompt] = useState<string | undefined>();
 
   const handleOnboardingComplete = () => {
@@ -227,15 +237,28 @@ const App: React.FC = () => {
     setCurrentTaskPrompt(prompt);
     setTaskRunning(true);
     setTaskSteps([]);
+    activeJobRef.current = null;
+    submitPendingRef.current = true;
+    eventBufferRef.current = [];
 
     try {
-      await axios.post('/api/steer', {
-        jobId: selectedJob,
-        message: prompt,
-        author: 'operator',
-        source: 'dashboard',
-      });
+      // #167: /api/steer only injects into an already-running job; a new chat
+      // message must be submitted as a task. Progress arrives over SSE.
+      const res = await axios.post('/api/task', { prompt });
+      const jobId: unknown = res.data?.jobId;
+      submitPendingRef.current = false;
+      if (typeof jobId !== 'string' || !jobId) throw new Error('POST /api/task returned no jobId');
+      activeJobRef.current = jobId;
+      // Replay this job's events that raced the response, in arrival order.
+      const buffered = eventBufferRef.current;
+      eventBufferRef.current = [];
+      for (const ev of buffered) {
+        if (eventJobId(ev) === jobId) processEventRef.current(ev, jobId);
+      }
     } catch (err) {
+      submitPendingRef.current = false;
+      eventBufferRef.current = [];
+      activeJobRef.current = null;
       console.error('Task submission failed', err);
       setMessages(prev => [
         ...prev,
@@ -349,16 +372,122 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // #167: handle one SSE event already known to belong to this tab's job.
+  // Terminal state comes from job_completed / job_failed (task promise
+  // settlement). Provider `done` / `task.end` are NOT terminal.
+  const processJobEvent = (data: any, jobId: string) => {
+    const life = classifyTaskEvent(data);
+    if (life.finished) {
+      setTaskRunning(false);
+      if (data.type === 'job_completed') {
+        // Reconcile against what streamed for THIS job, not the last bubble.
+        const extra = reconcileFinalText(streamedRef.current.get(jobId) ?? '', life.resultText);
+        if (extra) {
+          setMessages(prev => [...prev, { id: ++messageIdCounter, type: 'agent' as const, content: extra, timestamp: new Date(), jobId }].slice(-MAX_MESSAGES));
+        }
+      } else if (data.type === 'job_failed') {
+        setMessages(prev => [
+          ...prev,
+          { id: ++messageIdCounter, type: 'system' as const, content: `Task failed: ${life.failure}`, timestamp: new Date(), jobId },
+        ].slice(-MAX_MESSAGES));
+      }
+      streamedRef.current.delete(jobId);
+      activeJobRef.current = null;
+      return;
+    }
+    // Provider stream finished; the job may still fail over or retry.
+    if (data.type === 'done' || data.type === 'task.end') return;
+
+    let msgType: Message['type'] = 'agent';
+    let content = '';
+
+    if (data.type === 'job_update') {
+      msgType = 'system';
+      content = `Task ${data.data?.status === 'completed' ? 'completed' : data.data?.status ?? 'update'}`;
+      // Track task completion
+      if (data.data?.status === 'completed' || data.data?.status === 'failed') {
+        setTaskRunning(false);
+      }
+    } else if (data.type === 'tool_call') {
+      msgType = 'tool-call';
+      content = data.data?.tool ?? JSON.stringify(data);
+      // Track as a task step
+      const toolName = data.data?.tool ?? 'unknown';
+      let stepType: TaskStep['type'] = 'think';
+      if (toolName.toLowerCase().includes('read') || toolName.toLowerCase().includes('glob') || toolName.toLowerCase().includes('grep')) {
+        stepType = 'read';
+      } else if (toolName.toLowerCase().includes('write') || toolName.toLowerCase().includes('edit')) {
+        stepType = 'write';
+      } else if (toolName.toLowerCase().includes('bash') || toolName.toLowerCase().includes('shell')) {
+        stepType = 'shell';
+      }
+      setTaskSteps(prev => [...prev, {
+        type: stepType,
+        label: content,
+        timestamp: new Date(),
+      }]);
+    } else if (data.type === 'tool_result') {
+      msgType = 'tool-result';
+      content = data.data?.result ?? JSON.stringify(data);
+    } else if (data.type === 'text_delta' || data.type === 'text.delta' || data.type === 'text') {
+      // Append to the last agent message rather than creating a new bubble per delta
+      const text = data.data?.text ?? data.data?.delta ?? '';
+        if (text) {
+          streamedRef.current.set(jobId, (streamedRef.current.get(jobId) ?? '') + text);
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last?.type === 'agent' && last.jobId === jobId) {
+            const updated = { ...last, content: last.content + text };
+            return [...prev.slice(0, -1), updated];
+          }
+          return [...prev, { id: ++messageIdCounter, type: 'agent' as const, content: text, timestamp: new Date(), jobId }].slice(-MAX_MESSAGES);
+        });
+      }
+      return; // handled above, skip the generic push below
+    } else if (data.type === 'error') {
+      msgType = 'system';
+      content = data.data?.message ?? 'An error occurred';
+      setTaskSteps(prev => [...prev, {
+        type: 'error',
+        label: content,
+        timestamp: new Date(),
+      }]);
+    } else {
+      msgType = 'system';
+      content = JSON.stringify(data);
+    }
+
+    setMessages(prev => [
+      ...prev,
+      { id: ++messageIdCounter, type: msgType, content, timestamp: new Date(), jobId },
+    ].slice(-MAX_MESSAGES));
+  };
+  processEventRef.current = processJobEvent;
+
   // SSE event stream → chat messages + task step tracking
   useEffect(() => {
+    // #167: reconnect recovery is scoped to THIS tab's job. Global /api/jobs is
+    // not used: another tab's running job must not keep this tab "Working", and
+    // a stale snapshot must not clear a newer submission.
     const reconcileJobState = async () => {
+      const jobId = activeJobRef.current;
+      if (!jobId) return; // nothing to recover (idle, or POST still pending)
       try {
-        const res = await axios.get('/api/jobs');
-        const jobs: Array<{ status: string }> = res.data?.jobs ?? [];
-        const hasRunning = jobs.some((j) => j.status === 'running');
-        if (!hasRunning) setTaskRunning(false);
+        const res = await axios.get(`/api/task/${encodeURIComponent(jobId)}`);
+        // Discard if the active job changed while the request was in flight.
+        if (activeJobRef.current !== jobId) return;
+        const status = res.data?.status;
+        if (status === 'completed') {
+          processEventRef.current({ type: 'job_completed', jobId, data: { jobId, text: res.data?.text } }, jobId);
+        } else if (status === 'failed') {
+          processEventRef.current({ type: 'job_failed', jobId, data: { jobId, error: res.data?.error } }, jobId);
+        } else if (status === 'unknown') {
+          // The daemon no longer knows this job (restart): it cannot finish.
+          processEventRef.current({ type: 'job_failed', jobId, data: { jobId, error: 'Task state lost (daemon restarted)' } }, jobId);
+        }
+        // 'running': keep waiting for the live stream.
       } catch {
-        // ignore — daemon may still be starting
+        // ignore — daemon may still be starting; the next reconnect retries
       }
     };
 
@@ -376,68 +505,14 @@ const App: React.FC = () => {
           return;
         }
 
-        let msgType: Message['type'] = 'agent';
-        let content = '';
-
-        if (data.type === 'job_update') {
-          msgType = 'system';
-          content = `Task ${data.data?.status === 'completed' ? 'completed' : data.data?.status ?? 'update'}`;
-          // Track task completion
-          if (data.data?.status === 'completed' || data.data?.status === 'failed') {
-            setTaskRunning(false);
-          }
-        } else if (data.type === 'tool_call') {
-          msgType = 'tool-call';
-          content = data.data?.tool ?? JSON.stringify(data);
-          // Track as a task step
-          const toolName = data.data?.tool ?? 'unknown';
-          let stepType: TaskStep['type'] = 'think';
-          if (toolName.toLowerCase().includes('read') || toolName.toLowerCase().includes('glob') || toolName.toLowerCase().includes('grep')) {
-            stepType = 'read';
-          } else if (toolName.toLowerCase().includes('write') || toolName.toLowerCase().includes('edit')) {
-            stepType = 'write';
-          } else if (toolName.toLowerCase().includes('bash') || toolName.toLowerCase().includes('shell')) {
-            stepType = 'shell';
-          }
-          setTaskSteps(prev => [...prev, {
-            type: stepType,
-            label: content,
-            timestamp: new Date(),
-          }]);
-        } else if (data.type === 'tool_result') {
-          msgType = 'tool-result';
-          content = data.data?.result ?? JSON.stringify(data);
-        } else if (data.type === 'text_delta' || data.type === 'text.delta' || data.type === 'text') {
-          // Append to the last agent message rather than creating a new bubble per delta
-          const text = data.data?.text ?? data.data?.delta ?? '';
-          if (text) {
-            setMessages(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.type === 'agent') {
-                const updated = { ...last, content: last.content + text };
-                return [...prev.slice(0, -1), updated];
-              }
-              return [...prev, { id: ++messageIdCounter, type: 'agent' as const, content: text, timestamp: new Date() }].slice(-MAX_MESSAGES);
-            });
-          }
-          return; // handled above, skip the generic push below
-        } else if (data.type === 'error') {
-          msgType = 'system';
-          content = data.data?.message ?? 'An error occurred';
-          setTaskSteps(prev => [...prev, {
-            type: 'error',
-            label: content,
-            timestamp: new Date(),
-          }]);
-        } else {
-          msgType = 'system';
-          content = JSON.stringify(data);
+        // #167: scope to this tab's job; buffer events that race the POST response.
+        const evJob = eventJobId(data);
+        if (!evJob) return;
+        if (evJob !== activeJobRef.current) {
+          if (submitPendingRef.current && eventBufferRef.current.length < 500) eventBufferRef.current.push(data);
+          return;
         }
-
-        setMessages(prev => [
-          ...prev,
-          { id: ++messageIdCounter, type: msgType, content, timestamp: new Date() },
-        ].slice(-MAX_MESSAGES));
+        processEventRef.current(data, evJob);
       } catch {
         // Ignore parse errors from SSE
       }
