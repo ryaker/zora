@@ -48,6 +48,7 @@ export {
   NODE_LABELS,
   graphConfigFromEnv,
   isEntityKind,
+  type MemoryFacts,
   type DecisionRecord,
   type DecisionResult,
   type EdgeType,
