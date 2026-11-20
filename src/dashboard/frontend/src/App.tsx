@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Shield, Send, Gauge, Sparkles, LayoutGrid, BookOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+import { classifyTaskEvent } from './task-events';
 import ReactMarkdown from 'react-markdown';
 
 import WelcomeOnboarding from './components/WelcomeOnboarding';
@@ -229,12 +230,9 @@ const App: React.FC = () => {
     setTaskSteps([]);
 
     try {
-      await axios.post('/api/steer', {
-        jobId: selectedJob,
-        message: prompt,
-        author: 'operator',
-        source: 'dashboard',
-      });
+      // #167: /api/steer only injects into an already-running job; a new chat
+      // message must be submitted as a task. Progress arrives over SSE.
+      await axios.post('/api/task', { prompt });
     } catch (err) {
       console.error('Task submission failed', err);
       setMessages(prev => [
@@ -374,6 +372,31 @@ const App: React.FC = () => {
           // Reconnect: reconcile UI state against actual backend job state
           reconcileJobState();
           return;
+        }
+
+        // #167: done / job_failed end the task (the backend never sends job_update).
+        const life = classifyTaskEvent(data);
+        if (life.finished) {
+          setTaskRunning(false);
+          if (data.type === 'done') {
+            if (life.resultText) {
+              const text = life.resultText;
+              // Only add the result when text deltas did not already render it.
+              setMessages(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.type === 'agent') return prev;
+                return [...prev, { id: ++messageIdCounter, type: 'agent' as const, content: text, timestamp: new Date() }].slice(-MAX_MESSAGES);
+              });
+            }
+            return;
+          }
+          if (data.type === 'job_failed') {
+            setMessages(prev => [
+              ...prev,
+              { id: ++messageIdCounter, type: 'system' as const, content: `Task failed: ${life.failure}`, timestamp: new Date() },
+            ].slice(-MAX_MESSAGES));
+            return;
+          }
         }
 
         let msgType: Message['type'] = 'agent';
