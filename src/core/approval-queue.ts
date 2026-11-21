@@ -57,6 +57,19 @@ export class ApprovalQueue {
   }
 
   /**
+   * #174: could request() with these arguments get an answer, rather than
+   * auto-denying because no send handler is wired? Lets callers skip costly
+   * work (LLM synthesis) whose result could only be discarded. It mirrors
+   * request()'s own gates and never approves anything itself.
+   */
+  canDecide(opts: { score: number; bypassBlanketAllow?: boolean }): boolean {
+    if (!this._config.enabled) return false;
+    const blanketActive = this._blanketSessionScoped || Date.now() < this._blanketAllowUntil;
+    if (blanketActive && !opts.bypassBlanketAllow && opts.score < this._blanketMaxScore) return true;
+    return this._sendFn !== undefined;
+  }
+
+  /**
    * Request approval for a high-risk action.
    * Returns true if approved (or blanket-allowed), false if denied/timed out.
    */

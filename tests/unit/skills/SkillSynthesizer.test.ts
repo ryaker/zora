@@ -14,6 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { SkillSynthesizer, SKILL_THRESHOLD } from '../../../src/skills/SkillSynthesizer.js';
 import { hashContent } from '../../../src/skills/SkillsLock.js';
+import { ApprovalQueue } from '../../../src/core/approval-queue.js';
 
 // ─── shouldSynthesize ────────────────────────────────────────────────
 
@@ -278,5 +279,49 @@ describe('SkillSynthesizer.maybeGenerateSkill without a confirmation route (LEAN
     const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider, skipConfirmation: true });
     await synth.maybeGenerateSkill(longSession);
     expect(execute).toHaveBeenCalled();
+  });
+});
+
+// ─── #174: enabled-but-senderless approval queue ──────────────────────
+
+describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot ask (#174)', () => {
+  const longSession = { taskDescription: 'deploy the thing', toolCalls: 20, turns: 20 };
+  const cfg = { enabled: true, timeoutMs: 1000, retryAsApproval: false, retryWindowMs: 0 };
+
+  async function run(queue: ApprovalQueue) {
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      const execute = vi.fn(async function* () { /* no events */ });
+      const provider = { name: 'fake', execute } as unknown as import('../../../src/types.js').LLMProvider;
+      const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider });
+      synth.setApprovalQueue(queue);
+      await synth.maybeGenerateSkill(longSession);
+      return execute;
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+  }
+
+  it('skips synthesis when the queue is enabled but has no send handler', async () => {
+    expect(await run(new ApprovalQueue(cfg))).not.toHaveBeenCalled();
+  });
+
+  it('still synthesizes once a send handler is wired', async () => {
+    const q = new ApprovalQueue(cfg);
+    q.setSendHandler(async () => {});
+    expect(await run(q)).toHaveBeenCalled();
+  });
+
+  it('still synthesizes when a blanket grant covers it, even with no sender', async () => {
+    const q = new ApprovalQueue(cfg);
+    q.setSessionBlanketAllow(80);
+    expect(await run(q)).toHaveBeenCalled();
+  });
+
+  it('canDecide is false for a disabled queue and never approves anything itself', () => {
+    const q = new ApprovalQueue({ ...cfg, enabled: false });
+    q.setSendHandler(async () => {});
+    expect(q.canDecide({ score: 50 })).toBe(false);
   });
 });

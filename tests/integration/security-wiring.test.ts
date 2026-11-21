@@ -343,6 +343,8 @@ Testing fail-closed behaviour.
 
     // Before: isEnabled check verifies queue works
     expect(queue.isEnabled()).toBe(true);
+    // #174: synthesis is skipped when the queue has nobody to ask, so wire a sender.
+    queue.setSendHandler(async () => {});
 
     // Wire it in via the post-boot setter (mirrors Orchestrator wiring)
     synth.setApprovalQueue(queue);
