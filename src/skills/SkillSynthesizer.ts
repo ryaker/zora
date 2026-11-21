@@ -305,7 +305,7 @@ export class SkillSynthesizer {
    */
   /** True when _confirmWithUser() has some route to a yes/no answer. */
   private _canConfirm(): boolean {
-    return this._skipConfirmation || Boolean(process.stdin.isTTY) || Boolean(this._approvalQueue?.isEnabled());
+    return this._skipConfirmation || Boolean(process.stdin.isTTY) || Boolean(this._approvalQueue?.canDecide({ score: SYNTH_APPROVAL_SCORE }));
   }
 
   private async _confirmWithUser(name: string, content: string): Promise<boolean> {
@@ -318,7 +318,7 @@ export class SkillSynthesizer {
         try {
           const approved = await this._approvalQueue.request({
             action: `Save auto-generated skill: ${name}\n\n${content.slice(0, 500)}${content.length > 500 ? '\n…(truncated)' : ''}`,
-            score: 50,  // Medium risk — writing a new file to the skills dir
+            score: SYNTH_APPROVAL_SCORE,  // Medium risk — writing a new file to the skills dir
             jobId: `skill-synthesizer:${name}`,
             tool: 'SkillSynthesizer',
           });
@@ -351,6 +351,9 @@ export class SkillSynthesizer {
     });
   }
 }
+
+// #174: shared so the pre-synthesis check and the real request agree on the score.
+const SYNTH_APPROVAL_SCORE = 50;
 
 // ─── Synthesis Prompt ─────────────────────────────────────────────────
 
