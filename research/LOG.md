@@ -71,3 +71,17 @@
   3. Approver transport lost with requests pending (#218, needs-richard if behavior changes).
 - Critique (reviewer): pending.
 - Decision issue: none; shortlist items filed as `agent:todo`.
+
+## 2026-11-23 — Weekly round: WATCHLIST release sweep
+- Source: GitHub releases API for each WATCHLIST repo (release bodies read for NanoClaw v2026.11.0, OpenClaw v2026.11.7, OneCLI v2.20.0, Claude Agent SDK v0.3.330, OpenCode v2.4.0). 0 Nimble requests (MCP still returns 401). `meetopenbot/openbot` returned no releases; OpenAI Agents SDK has only 0.22.0 / 0.22.0-alpha.3 since Nov 12.
+- Change summary:
+  - **NanoClaw v2026.11.0** (stable, Nov 20): OneCLI 1.45 per-agent key grants; webhook server binds 127.0.0.1 by default; Node security-release floor; agent images on Claude Code 2.1.321 / SDK 0.3.321 with Haiku 5.5; templates for agent creation; Cursor provider. Relevance: **adopt (ops, not code)** — the Air runs rc.1; move to stable via `/update-nanoclaw` after checking the BREAKING list (OneCLI DB password, Node version). Needs Richard (infra/secrets), not an `agent:todo`.
+  - **Claude Agent SDK v0.3.330** (Zora pins `^0.3.232`): new `settings_not_in_effect` informational message when settings fail validation; `query()` now throws on an unparseable JSON-string `settings`; SDK MCP result lost/swapped on reconnect fixed. Relevance: **adopt** — bump the dependency and run tests/security/tool-enforcement.test.ts; check that Zora's `settings` usage does not pass a JSON string, and surface `settings_not_in_effect` in the audit log (a silently ignored settings file is a policy-visibility concern). Not verified: whether Zora passes `settings` at all; implementer must grep first.
+  - **OpenClaw v2026.11.7**: conversation recovery across restarts, slash commands in ordinary prose no longer execute, warn before retrying a tool action whose reply was lost, steering preserved through long tools, subagent results stay attached to their turn. Relevance: **watch** — compare against Zora's RetryQueue and channel command parsing in source before proposing anything.
+  - **OpenCode v2.4.x** (reviewer runtime): automations (cron / MCP-event triggers), Copilot no longer reads `GITHUB_TOKEN`, MCP protocol negotiation. Relevance: **watch** — if the reviewer runtime auto-updates, confirm `"automations": false` unless wanted.
+  - **OneCLI v2.20.0** (CLI/app, Nov 9): UI features only. **ignore**. Gateway version is tracked via NanoClaw's update guide.
+  - **CopilotKit OpenBot v1.2.0-rc.1–3** and **DeepSeek Harness v0.2.3-alpha.x**: prereleases. **watch**; revisit on stable.
+  - **NVIDIA Auto Ontology**: only README/doc commits since the Nov 18 evaluation. **ignore**.
+- Proposal: (1) one S-size `agent:todo`: bump `@anthropic-ai/claude-agent-sdk` to 0.3.330 with the checks above. (2) Richard-facing note: upgrade NanoClaw to v2026.11.0 stable. No decision issues this week.
+- Critique (reviewer): pending.
+- Decision issue: none.
