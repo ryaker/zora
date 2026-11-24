@@ -186,6 +186,21 @@ prompt = "say hello"
       expect(manager.scheduledCount).toBe(0);
     });
 
+    it('stale callbacks and stopAll do not submit', async () => {
+      manager.scheduleRoutine(def({ max_runs: 5 }));
+      submitTaskMock.mockClear();
+      let resolveOld!: (v: string) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
+      const old = manager.runRoutine(def({ max_runs: 5 }));
+      manager.stopAll();
+      resolveOld('x');
+      await old;
+      expect(submitTaskMock).toHaveBeenCalledTimes(1);
+      // registration gone after stopAll: a fresh manual run is untracked and never unloads
+      await manager.runRoutine(def({ max_runs: 1 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
     it('routines without until are never unloaded', async () => {
       manager.scheduleRoutine(def(undefined));
       for (let i = 0; i < 3; i++) await manager.runRoutine(def(undefined));

@@ -227,7 +227,9 @@ export class RoutineManager {
   private async _runAndCheck(definition: RoutineDefinition, reg?: Registration): Promise<string> {
     const { routine, task } = definition;
     const until = routine.until;
-    const tracked = until && reg && !reg.obsolete ? reg : undefined;
+    // A stale scheduled/watch callback (unloaded, reloaded or stopAll'd) must not submit (#202).
+    if (reg?.obsolete) return '';
+    const tracked = until && reg ? reg : undefined;
 
     if (tracked && until && until.max_runs !== undefined && tracked.successes + tracked.inFlight >= until.max_runs) {
       log.info({ routine: routine.name }, 'Routine max_runs capacity reserved — skipping overlapping trigger');
@@ -411,6 +413,8 @@ export class RoutineManager {
       task.destroy();
     }
     this._scheduledTasks.clear();
+    for (const reg of this._registrations.values()) reg.obsolete = true;
+    this._registrations.clear();
 
     // Stop all file-change watchers and clear tracking state.
     this._eventTriggers.unwatchAll();
