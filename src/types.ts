@@ -685,6 +685,21 @@ export interface RoutineConfig {
    * Defaults to 0 (no debounce) when absent. Applies only to file_change triggers.
    */
   debounce?: string | number;
+  /**
+   * Done-when (#202). Evaluated on the routine's OWN successful run results,
+   * never on a goal-completion signal (none exists). When it holds the routine
+   * is unloaded. In-memory: a daemon restart or file reload re-registers it.
+   * At least one field is required; an invalid `until` rejects the routine
+   * (silently ignoring it would make a "stop when done" routine run forever).
+   */
+  until?: RoutineUntil;
+}
+
+export interface RoutineUntil {
+  /** Stop once a run's result text contains this (case-sensitive, 1–200 chars). */
+  contains?: string;
+  /** Stop after this many successful runs (positive integer). */
+  max_runs?: number;
 }
 
 export interface RoutineDefinition {
