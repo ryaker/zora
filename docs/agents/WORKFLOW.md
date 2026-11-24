@@ -29,7 +29,7 @@ any state → needs-richard   (3 review rounds, protected path, CI fails twice f
 ## Hard rules (both agents)
 
 1. Never push to `main`. Never force-push. Only the reviewer merges, and only an `agent:approved` PR with green CI that is not `needs-richard`.
-2. At most 2 open agent PRs; at most 4 implement tasks per day.
+2. At most 3 open PRs for the architect (the reviewer reviews every PR waiting on each wake); at most 4 implement tasks per day. A PR is exempt from the cap only while it is parked awaiting Richard's decision (`needs-richard` and no agent work pending on it), not merely because the label is present; once Richard unparks it, it counts again. Parked PRs stay unmerged. The daily implement limit and merge rules are unchanged.
 3. Max 3 review rounds per PR, then `needs-richard` and stop.
 4. Changes to `policy.toml`, `.github/`, `src/security/`, or anything touching secrets → `needs-richard`.
 5. Before every action, check the pinned **Agent control** issue. If it has `agents:paused`, do nothing.
