@@ -2233,7 +2233,13 @@ export class Orchestrator {
     const agentWorkspaceCwd = this._config.agent.workspace
       ? this._config.agent.workspace.replace(/^~/, os.homedir())
       : process.cwd();
-    const makeExtractFn = (systemPrompt: string) => async (prompt: string): Promise<string> => {
+    const makeExtractFn = (systemPrompt: string) => async (prompt: string, signal?: AbortSignal): Promise<string> => {
+      // Caller-owned deadline: aborting this cancels the SDK request itself.
+      const abortController = new AbortController();
+      if (signal) {
+        if (signal.aborted) abortController.abort();
+        else signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      }
       const extractLoop = new ExecutionLoop({
         systemPrompt,
         // SEC-23: a single-shot text call over conversation content that may
@@ -2252,6 +2258,7 @@ export class Orchestrator {
         }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
+        abortController,
       });
       return extractLoop.run(prompt);
     };
@@ -2276,7 +2283,7 @@ export class Orchestrator {
 
     // Persist each new item
     let savedCount = 0;
-    const persisted: Array<{ id: string; summary: string }> = [];
+    const persisted: Array<{ id: string; summary: string; createdAt: number }> = [];
     for (const item of uniqueItems) {
       try {
         const created = await this._memoryManager.structuredMemory.createItem({
@@ -2288,7 +2295,9 @@ export class Orchestrator {
           category: item.category,
         });
         savedCount++;
-        persisted.push({ id: created.id, summary: item.summary });
+        // Only items whose save succeeded reach enrichment (a throw above skips this).
+        const createdAt = Date.parse(created.created_at);
+        persisted.push({ id: created.id, summary: item.summary, createdAt: Number.isFinite(createdAt) ? createdAt : Date.now() });
       } catch (err) {
         log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
       }
@@ -2313,6 +2322,7 @@ export class Orchestrator {
           persisted,
           new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT)),
           facts => graph.recordFacts(facts),
+          { isEnabled: () => graph.ontologyEnabled },
         );
       } catch (err) {
         log.debug({ err, jobId: taskContext.jobId }, 'Ontology enrichment failed');

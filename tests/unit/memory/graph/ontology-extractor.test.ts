@@ -8,6 +8,7 @@ import {
   MAX_EXTRACT_ENTITIES,
   MAX_EXTRACT_INPUT,
   MAX_EXTRACT_NAME,
+  MAX_EXTRACT_RESPONSE,
   MAX_EXTRACT_PREDICATE,
   buildOntologyPrompt,
   parseOntologyResponse,
@@ -107,6 +108,11 @@ describe('parseOntologyResponse', () => {
     expect(f.relations).toEqual([]);
   });
 
+  it('rejects an oversized raw response before parsing', () => {
+    const pad = ' '.repeat(MAX_EXTRACT_RESPONSE);
+    expect(parseOntologyResponse(JSON.stringify(good) + pad, 'm', 1, SRC)).toBeNull();
+  });
+
   it('caps entity count', () => {
     const entities = Array.from({ length: MAX_EXTRACT_ENTITIES + 10 }, (_, i) => ({ name: `E${i}`, kind: 'concept' }));
     const f = parseOntologyResponse(JSON.stringify({ entities }), 'm', 1, SRC_ALL)!;
@@ -127,7 +133,7 @@ describe('grounding', () => {
 });
 
 describe('enrichMemoriesWithOntology', () => {
-  const items = Array.from({ length: 8 }, (_, i) => ({ id: `mem_${i}`, summary: 'Zora uses SparrowDB' }));
+  const items = Array.from({ length: 8 }, (_, i) => ({ id: `mem_${i}`, summary: 'Zora uses SparrowDB', createdAt: 1000 + i }));
   const ok = async () => JSON.stringify(good);
 
   it('caps the number of model calls per run', async () => {
@@ -148,6 +154,32 @@ describe('enrichMemoriesWithOntology', () => {
     expect(rec).not.toHaveBeenCalled();
     expect(fn).toHaveBeenCalledTimes(1);
     expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('provenance ts is the persisted creation time, not extraction time', async () => {
+    const rec = vi.fn();
+    await enrichMemoriesWithOntology(items.slice(0, 2), new OntologyExtractor(ok), rec);
+    expect(rec.mock.calls.map(c => c[0].ts)).toEqual([1000, 1001]);
+  });
+
+  it('aborts the in-flight request when the budget expires', async () => {
+    let seen: AbortSignal | undefined;
+    const fn = vi.fn((_p: string, signal?: AbortSignal) => {
+      seen = signal;
+      return new Promise<string>(() => {});
+    });
+    await enrichMemoriesWithOntology(items, new OntologyExtractor(fn), vi.fn(), { budgetMs: 30 });
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('re-checks availability before every call', async () => {
+    let calls = 0;
+    const fn = vi.fn(ok);
+    const n = await enrichMemoriesWithOntology(items, new OntologyExtractor(fn), vi.fn(), {
+      isEnabled: () => calls++ < 2,
+    });
+    expect(n).toBe(2);
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it('a throwing recorder or model never propagates', async () => {

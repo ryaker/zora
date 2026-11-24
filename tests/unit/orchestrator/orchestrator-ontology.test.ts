@@ -11,12 +11,18 @@ import type { TaskContext, ZoraPolicy } from '../../../src/types.js';
 
 const loopCalls: Array<{ systemPrompt: string; allowedTools?: unknown }> = [];
 let responder: (systemPrompt: string) => string = () => '[]';
+const loopSignals: AbortSignal[] = [];
+let onLoopStart: (systemPrompt: string) => void = () => {};
 
 vi.mock('../../../src/orchestrator/execution-loop.js', async orig => {
   const actual = await orig<typeof import('../../../src/orchestrator/execution-loop.js')>();
   class FakeLoop {
-    constructor(private readonly opts: { systemPrompt: string; allowedTools?: unknown }) {}
+    constructor(
+      private readonly opts: { systemPrompt: string; allowedTools?: unknown; abortController?: AbortController },
+    ) {}
     async run(): Promise<string> {
+      onLoopStart(this.opts.systemPrompt);
+      if (this.opts.abortController) loopSignals.push(this.opts.abortController.signal);
       loopCalls.push({ systemPrompt: this.opts.systemPrompt, allowedTools: this.opts.allowedTools });
       return responder(this.opts.systemPrompt);
     }
@@ -42,9 +48,10 @@ interface Internals {
   _policyEngine: unknown;
 }
 
+const CREATED_AT = '2026-01-02T03:04:05.000Z';
 const ITEM_COUNT = ONTOLOGY_MAX_ITEMS_PER_RUN + 3;
 
-function setup(ontologyEnabled: boolean | null) {
+function setup(ontologyEnabled: boolean | null, opts: { failSaveAt?: number; enabledAfter?: () => boolean } = {}) {
   const config = structuredClone(DEFAULT_CONFIG);
   config.agent.log_level = 'error';
   config.agent.workspace = path.join(os.tmpdir(), 'zora-onto-test');
@@ -55,7 +62,11 @@ function setup(ontologyEnabled: boolean | null) {
     baseDir: path.join(os.tmpdir(), 'zora-onto-test'),
     skipChannels: true,
   });
+  let saveAttempts = 0;
   const events: string[] = [];
+  onLoopStart = sys => {
+    if (sys.includes('entities and relations')) events.push('ontology-start');
+  };
   const created: string[] = [];
   const recorded: Array<{ memId: string }> = [];
   const internals = orch as unknown as Internals;
@@ -65,10 +76,12 @@ function setup(ontologyEnabled: boolean | null) {
     structuredMemory: {
       listItems: async () => [],
       createItem: async (i: { summary: string }) => {
+        saveAttempts++;
+        if (opts.failSaveAt === saveAttempts - 1) throw new Error('disk full');
         events.push('save');
         const id = `mem_${created.length}`;
         created.push(id);
-        return { id, ...i };
+        return { id, ...i, created_at: CREATED_AT };
       },
     },
     appendDailyNote: async () => {
@@ -79,7 +92,9 @@ function setup(ontologyEnabled: boolean | null) {
     ontologyEnabled === null
       ? null
       : {
-          ontologyEnabled,
+          get ontologyEnabled() {
+            return opts.enabledAfter ? opts.enabledAfter() : ontologyEnabled;
+          },
           recordFacts: (f: { memId: string }) => {
             events.push('graph');
             recorded.push(f);
@@ -112,6 +127,7 @@ const ctx = {
 
 beforeEach(() => {
   loopCalls.length = 0;
+  loopSignals.length = 0;
   responder = sys =>
     sys.includes('entities and relations')
       ? JSON.stringify({
@@ -147,6 +163,11 @@ describe('orchestrator ontology enrichment (#194)', () => {
     const firstGraph = events.indexOf('graph');
     expect(firstGraph).toBeGreaterThan(events.lastIndexOf('save'));
     expect(firstGraph).toBeGreaterThan(events.indexOf('note'));
+    // Enrichment (the first ontology model call) starts only after saves and the note.
+    expect(events.indexOf('ontology-start')).toBeGreaterThan(events.lastIndexOf('save'));
+    expect(events.indexOf('ontology-start')).toBeGreaterThan(events.indexOf('note'));
+    // Each ontology call is cancellable: it was given an AbortController.
+    expect(loopSignals.length).toBe(loopCalls.length);
 
     const ontologyCalls = loopCalls.filter(c => c.systemPrompt.includes('entities and relations'));
     expect(ontologyCalls).toHaveLength(ONTOLOGY_MAX_ITEMS_PER_RUN);
@@ -156,5 +177,24 @@ describe('orchestrator ontology enrichment (#194)', () => {
     expect(recorded.map(r => r.memId)).toEqual(created.slice(0, ONTOLOGY_MAX_ITEMS_PER_RUN));
     const facts = recorded[0] as unknown as { entities: Array<{ name: string }> };
     expect(facts.entities.map(e => e.name).sort()).toEqual(['SparrowDB', 'Zora']); // 'Invented' ungrounded
+    // Provenance time is the persisted item's creation time.
+    expect((recorded[0] as unknown as { ts: number }).ts).toBe(Date.parse(CREATED_AT));
+  });
+
+  it('items whose save failed are never enriched', async () => {
+    const { internals, created, recorded } = setup(true, { failSaveAt: 0 });
+    await internals._runExtractionAsync(ctx);
+    expect(created).toHaveLength(ITEM_COUNT - 1);
+    const ids = recorded.map(r => r.memId);
+    expect(ids).toHaveLength(ONTOLOGY_MAX_ITEMS_PER_RUN);
+    for (const id of ids) expect(created).toContain(id);
+  });
+
+  it('stops enriching when the graph tier stops being available mid-run', async () => {
+    let checks = 0;
+    const { internals, recorded } = setup(true, { enabledAfter: () => ++checks <= 3 });
+    await internals._runExtractionAsync(ctx);
+    expect(recorded.length).toBeLessThan(ONTOLOGY_MAX_ITEMS_PER_RUN);
+    expect(recorded.length).toBeGreaterThan(0);
   });
 });

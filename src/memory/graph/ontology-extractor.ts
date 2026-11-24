@@ -25,6 +25,8 @@ export const MAX_EXTRACT_NAME = 200;
 export const MAX_EXTRACT_PREDICATE = 100;
 /** Source text beyond this is not sent to the model. */
 export const MAX_EXTRACT_INPUT = 8000;
+/** A raw model response larger than this is rejected before parsing. */
+export const MAX_EXTRACT_RESPONSE = 32_000;
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
@@ -64,6 +66,7 @@ export function parseOntologyResponse(
   sourceText: string,
 ): MemoryFacts | null {
   const haystack = sourceText.toLowerCase();
+  if (typeof raw !== 'string' || raw.length > MAX_EXTRACT_RESPONSE) return null;
   let parsed: unknown;
   try {
     // Models often wrap JSON in a fence; strip one if present, nothing more.
@@ -115,16 +118,22 @@ export function parseOntologyResponse(
   return { memId, ts, entities, relations };
 }
 
-export type OntologyExtractFn = (prompt: string) => Promise<string>;
+/** `signal` aborts the underlying model request (deadline / cancellation). */
+export type OntologyExtractFn = (prompt: string, signal?: AbortSignal) => Promise<string>;
 
 export class OntologyExtractor {
   constructor(private readonly _extractFn: OntologyExtractFn) {}
 
   /** Extract facts for one memory. Never throws; null means "store nothing". */
-  async extract(memId: string, text: string, ts: number = Date.now()): Promise<MemoryFacts | null> {
+  async extract(
+    memId: string,
+    text: string,
+    ts: number = Date.now(),
+    signal?: AbortSignal,
+  ): Promise<MemoryFacts | null> {
     if (!memId || typeof text !== 'string' || text.trim().length === 0) return null;
     try {
-      const raw = await this._extractFn(buildOntologyPrompt(text));
+      const raw = await this._extractFn(buildOntologyPrompt(text), signal);
       return parseOntologyResponse(raw, memId, ts, text);
     } catch {
       return null;
@@ -139,11 +148,15 @@ export const ONTOLOGY_BUDGET_MS = 60_000;
 export interface EnrichableItem {
   id: string;
   summary: string;
+  /** The persisted memory's own creation time (epoch ms): provenance time, not extraction time. */
+  createdAt: number;
 }
 
 export interface EnrichOptions {
   maxItems?: number;
   budgetMs?: number;
+  /** Re-checked before every model call, so a tier that went away mid-run stops enrichment. */
+  isEnabled?: () => boolean;
 }
 
 /**
@@ -164,12 +177,18 @@ export async function enrichMemoriesWithOntology(
   for (const item of items.slice(0, maxItems)) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
+    if (opts.isEnabled && !opts.isEnabled()) break;
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const facts = await Promise.race([
-        extractor.extract(item.id, item.summary),
+        extractor.extract(item.id, item.summary, item.createdAt, controller.signal),
         new Promise<null>(resolve => {
-          timer = setTimeout(() => resolve(null), remaining);
+          timer = setTimeout(() => {
+            // Cancel the in-flight SDK request, not just stop waiting for it.
+            controller.abort();
+            resolve(null);
+          }, remaining);
           timer.unref?.();
         }),
       ]);
