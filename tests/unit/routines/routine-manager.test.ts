@@ -4,6 +4,7 @@ import type { RoutineDefinition } from '../../../src/types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import cron from 'node-cron';
 
 const { mockWarn } = vi.hoisted(() => {
   const mockWarn = vi.fn();
@@ -186,19 +187,26 @@ prompt = "say hello"
       expect(manager.scheduledCount).toBe(0);
     });
 
-    it('stale callbacks and stopAll do not submit', async () => {
-      manager.scheduleRoutine(def({ max_runs: 5 }));
-      submitTaskMock.mockClear();
-      let resolveOld!: (v: string) => void;
-      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
-      const old = manager.runRoutine(def({ max_runs: 5 }));
-      manager.stopAll();
-      resolveOld('x');
-      await old;
-      expect(submitTaskMock).toHaveBeenCalledTimes(1);
-      // registration gone after stopAll: a fresh manual run is untracked and never unloads
-      await manager.runRoutine(def({ max_runs: 1 }));
-      expect(manager.scheduledCount).toBe(0);
+    it('ignores cron callbacks delivered after replacement or stopAll', async () => {
+      const schedule = vi.spyOn(cron, 'schedule');
+      try {
+        manager.scheduleRoutine(def({ max_runs: 5 }));
+        manager.scheduleRoutine(def({ max_runs: 5 }));
+        const [old, current] = schedule.mock.calls.map(([, callback]) => callback);
+        expect(old).toBeTypeOf('function');
+        expect(current).toBeTypeOf('function');
+        if (typeof old !== 'function' || typeof current !== 'function') throw new Error('Expected cron callbacks');
+        await old({} as Parameters<typeof old>[0]);
+        expect(submitTaskMock).not.toHaveBeenCalled();
+        await current({} as Parameters<typeof current>[0]);
+        expect(submitTaskMock).toHaveBeenCalledTimes(1);
+
+        manager.stopAll();
+        await current({} as Parameters<typeof current>[0]);
+        expect(submitTaskMock).toHaveBeenCalledTimes(1);
+      } finally {
+        schedule.mockRestore();
+      }
     });
 
     it('routines without until are never unloaded', async () => {
