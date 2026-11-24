@@ -325,3 +325,37 @@ describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot
     expect(q.canDecide({ score: 50 })).toBe(false);
   });
 });
+
+// ─── #201 review card ────────────────────────────────────────────────
+
+import { buildSkillReviewCard, REVIEW_CARD_PREVIEW_CHARS } from '../../../src/skills/SkillSynthesizer.js';
+import crypto from 'node:crypto';
+
+describe('buildSkillReviewCard (#201)', () => {
+  const content = '---\nname: demo\ndescription: Does a demo thing\n---\n# Demo\nbody';
+  const session = { taskDescription: 'refactor\x1b[31m the\nthing', toolCalls: 9, turns: 4 } as never;
+
+  it('shows provenance, destination, hash and the no-auto-publish statement', () => {
+    const card = buildSkillReviewCard({ name: 'demo', content, destPath: '/x/skills/demo/SKILL.md', session });
+    expect(card).toContain('Proposed skill: demo');
+    expect(card).toContain('Description: Does a demo thing');
+    expect(card).toContain('Session: 9 tool calls, 4 turns');
+    expect(card).toContain('Will write: /x/skills/demo/SKILL.md');
+    expect(card).toContain(crypto.createHash('sha256').update(content).digest('hex'));
+    expect(card).toContain('never auto-published');
+  });
+
+  it('strips control characters from the source task', () => {
+    const card = buildSkillReviewCard({ name: 'demo', content, destPath: '/p', session });
+    expect(card).toContain('Source task: refactor [31m the thing'.replace('[31m', '[31m'));
+    expect(card).not.toContain('\x1b');
+  });
+
+  it('truncates long content previews but hashes the full content', () => {
+    const big = `${content}\n${'a'.repeat(REVIEW_CARD_PREVIEW_CHARS * 2)}`;
+    const card = buildSkillReviewCard({ name: 'demo', content: big, destPath: '/p', session });
+    expect(card).toContain('truncated');
+    expect(card).toContain(crypto.createHash('sha256').update(big).digest('hex'));
+    expect(card.length).toBeLessThan(REVIEW_CARD_PREVIEW_CHARS + 800);
+  });
+});

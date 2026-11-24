@@ -23,6 +23,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import readline from 'node:readline';
 import type { LLMProvider, AgentEvent, TaskContext } from '../types.js';
 import type { ApprovalQueue } from '../core/approval-queue.js';
@@ -36,6 +37,61 @@ const log = createLogger('skill-synthesizer');
 export const SKILL_THRESHOLD = { toolCalls: 8, turns: 8 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────
+
+/** #201: card limits. The preview is a convenience, the hash is the identity. */
+export const REVIEW_CARD_PREVIEW_CHARS = 1200;
+const REVIEW_CARD_TASK_CHARS = 200;
+
+export interface SkillReviewCardInput {
+  name: string;
+  content: string;
+  /** Where the skill will be written if approved. */
+  destPath: string;
+  /** Provenance: the session this proposal was synthesized from. */
+  session: SessionSummary;
+}
+
+/** Strip control characters (incl. ANSI escapes' ESC) and collapse whitespace. */
+function oneLine(text: string, max: number): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+}
+
+/**
+ * #201: the proposal a human reviews before a synthesized skill is saved.
+ * Pure text, shared by the TTY prompt and the approval queue so both show the
+ * same thing: what it is, where it came from, what approving does, and a
+ * SHA-256 that is also the lock-file hash if approved. Nothing here publishes;
+ * saving still requires an explicit Approve.
+ */
+export function buildSkillReviewCard(input: SkillReviewCardInput): string {
+  const { name, content, destPath, session } = input;
+  const { frontmatter } = parseFrontmatterSafe(content);
+  const sha = crypto.createHash('sha256').update(content).digest('hex');
+  const preview = content.length > REVIEW_CARD_PREVIEW_CHARS
+    ? `${content.slice(0, REVIEW_CARD_PREVIEW_CHARS)}\n…(truncated, ${content.length} chars total)`
+    : content;
+  return [
+    `Proposed skill: ${oneLine(name, 64)}`,
+    `Description: ${oneLine(frontmatter.description ?? '(none)', 300)}`,
+    `Source task: ${oneLine(session.taskDescription, REVIEW_CARD_TASK_CHARS)}`,
+    `Session: ${session.toolCalls} tool calls, ${session.turns} turns`,
+    `Will write: ${destPath}`,
+    `SHA-256: ${sha}`,
+    'Approving saves this file and records the hash in skills.lock.json. Rejecting discards it. It is never auto-published.',
+    '',
+    preview,
+  ].join('\n');
+}
+
+function parseFrontmatterSafe(content: string): { frontmatter: { description?: string } } {
+  try {
+    return { frontmatter: parseFrontmatter(content) as { description?: string } };
+  } catch {
+    return { frontmatter: {} };
+  }
+}
 
 export interface SessionSummary {
   /** First user message or session title — becomes the task_summary in the prompt. */
@@ -279,7 +335,7 @@ export class SkillSynthesizer {
       return;
     }
 
-    const confirmed = await this._confirmWithUser(name, content);
+    const confirmed = await this._confirmWithUser(name, content, session);
     if (!confirmed) {
       log.info({ skill: name }, 'User declined skill save');
       return;
@@ -308,7 +364,10 @@ export class SkillSynthesizer {
     return this._skipConfirmation || Boolean(process.stdin.isTTY) || Boolean(this._approvalQueue?.canDecide({ score: SYNTH_APPROVAL_SCORE }));
   }
 
-  private async _confirmWithUser(name: string, content: string): Promise<boolean> {
+  private async _confirmWithUser(name: string, content: string, session: SessionSummary): Promise<boolean> {
+    const card = buildSkillReviewCard({
+      name, content, session, destPath: path.join(this._skillsDir, name, 'SKILL.md'),
+    });
     if (this._skipConfirmation) {
       return true;
     }
@@ -317,7 +376,7 @@ export class SkillSynthesizer {
       if (this._approvalQueue?.isEnabled()) {
         try {
           const approved = await this._approvalQueue.request({
-            action: `Save auto-generated skill: ${name}\n\n${content.slice(0, 500)}${content.length > 500 ? '\n…(truncated)' : ''}`,
+            action: `Save auto-generated skill\n\n${card}`,
             score: SYNTH_APPROVAL_SCORE,  // Medium risk — writing a new file to the skills dir
             jobId: `skill-synthesizer:${name}`,
             tool: 'SkillSynthesizer',
@@ -337,9 +396,7 @@ export class SkillSynthesizer {
     }
 
     console.log('\n─────────────────────────────────────────');
-    console.log(`[SKILL] Proposed skill: ${name}`);
-    console.log('─────────────────────────────────────────');
-    console.log(content);
+    console.log(card);
     console.log('─────────────────────────────────────────');
 
     return new Promise<boolean>((resolve) => {
