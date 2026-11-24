@@ -23,11 +23,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import readline from 'node:readline';
 import type { LLMProvider, AgentEvent, TaskContext } from '../types.js';
 import type { ApprovalQueue } from '../core/approval-queue.js';
-import { SkillsLock } from './SkillsLock.js';
+import { SkillsLock, hashContent } from './SkillsLock.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('skill-synthesizer');
@@ -38,51 +37,84 @@ export const SKILL_THRESHOLD = { toolCalls: 8, turns: 8 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-/** #201: card limits. The preview is a convenience, the hash is the identity. */
-export const REVIEW_CARD_PREVIEW_CHARS = 1200;
-const REVIEW_CARD_TASK_CHARS = 200;
+/** #201: the remote preview is a convenience and is always labelled truncated. */
+export const REMOTE_PREVIEW_CHARS = 500;
 
-export interface SkillReviewCardInput {
-  name: string;
-  content: string;
-  /** Where the skill will be written if approved. */
-  destPath: string;
-  /** Provenance: the session this proposal was synthesized from. */
-  session: SessionSummary;
+/**
+ * Remove characters that can forge or hide terminal/chat output: C0/C1
+ * controls (ESC included, newline and tab kept) and bidi/zero-width format
+ * characters. Applied to every piece of generated text that is displayed.
+ */
+export function sanitizeDisplay(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2069\ufeff]/g, '\uFFFD');
 }
 
-/** Strip control characters (incl. ANSI escapes' ESC) and collapse whitespace. */
 function oneLine(text: string, max: number): string {
-  // eslint-disable-next-line no-control-regex
-  const cleaned = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleaned = sanitizeDisplay(text).replace(/\s+/g, ' ').trim();
   return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
+/** Telegram's legacy Markdown mode: neutralise the characters that open entities. */
+function escapeMarkdown(text: string): string {
+  return text.replace(/([\\_*`\[])/g, '\\$1');
+}
+
+export interface SkillReviewInput {
+  name: string;
+  content: string;
+  session: SessionSummary;
+}
+
+/** Path shown to a person, relative to the skills dir so no host paths leave the machine. */
+function relDest(name: string): string {
+  return `skills/${oneLine(name, 64)}/SKILL.md`;
+}
+
 /**
- * #201: the proposal a human reviews before a synthesized skill is saved.
- * Pure text, shared by the TTY prompt and the approval queue so both show the
- * same thing: what it is, where it came from, what approving does, and a
- * SHA-256 that is also the lock-file hash if approved. Nothing here publishes;
- * saving still requires an explicit Approve.
+ * #201: LOCAL review text (TTY). Shows the entire proposed file so the person
+ * can actually read what they approve, plus provenance and the SHA-256 that
+ * will be recorded in skills.lock.json. Everything generated is sanitized.
  */
-export function buildSkillReviewCard(input: SkillReviewCardInput): string {
-  const { name, content, destPath, session } = input;
+export function buildLocalReviewText(input: SkillReviewInput & { destPath: string }): string {
+  const { name, content, session, destPath } = input;
   const { frontmatter } = parseFrontmatterSafe(content);
-  const sha = crypto.createHash('sha256').update(content).digest('hex');
-  const preview = content.length > REVIEW_CARD_PREVIEW_CHARS
-    ? `${content.slice(0, REVIEW_CARD_PREVIEW_CHARS)}\n…(truncated, ${content.length} chars total)`
-    : content;
   return [
     `Proposed skill: ${oneLine(name, 64)}`,
     `Description: ${oneLine(frontmatter.description ?? '(none)', 300)}`,
-    `Source task: ${oneLine(session.taskDescription, REVIEW_CARD_TASK_CHARS)}`,
+    `Source task: ${oneLine(session.taskDescription, 200)}`,
     `Session: ${session.toolCalls} tool calls, ${session.turns} turns`,
-    `Will write: ${destPath}`,
-    `SHA-256: ${sha}`,
-    'Approving saves this file and records the hash in skills.lock.json. Rejecting discards it. It is never auto-published.',
+    `Will write: ${sanitizeDisplay(destPath)}`,
+    `SHA-256: ${hashContent(content)} (${content.length} chars, full text below)`,
     '',
-    preview,
+    sanitizeDisplay(content),
   ].join('\n');
+}
+
+/**
+ * #201: REMOTE review card (ApprovalQueue → Telegram, Markdown mode). Data
+ * minimisation: no source prompt and no host path leave the machine — only a
+ * provenance id, session stats, a relative destination, the hash and a short,
+ * escaped, explicitly truncated preview. The full text is inspectable locally.
+ * Approval semantics are the queue's own (a blanket allow grant may still apply).
+ */
+export function buildRemoteReviewCard(input: SkillReviewInput): string {
+  const { name, content, session } = input;
+  const { frontmatter } = parseFrontmatterSafe(content);
+  const clean = sanitizeDisplay(content);
+  const truncated = clean.length > REMOTE_PREVIEW_CHARS;
+  const preview = truncated ? clean.slice(0, REMOTE_PREVIEW_CHARS) : clean;
+  return escapeMarkdown([
+    `Proposed skill: ${oneLine(name, 64)}`,
+    `Description: ${oneLine(frontmatter.description ?? '(none)', 200)}`,
+    `Provenance: skill-synthesizer:${oneLine(name, 64)} (${session.toolCalls} tool calls, ${session.turns} turns)`,
+    `Will write: ${relDest(name)} (under the skills dir)`,
+    `SHA-256: ${hashContent(content)} (${content.length} chars)`,
+    truncated
+      ? `Preview (first ${REMOTE_PREVIEW_CHARS} of ${content.length} chars; the rest is NOT shown here — inspect locally):`
+      : 'Preview (complete):',
+    preview,
+  ].join('\n'));
 }
 
 function parseFrontmatterSafe(content: string): { frontmatter: { description?: string } } {
@@ -365,9 +397,6 @@ export class SkillSynthesizer {
   }
 
   private async _confirmWithUser(name: string, content: string, session: SessionSummary): Promise<boolean> {
-    const card = buildSkillReviewCard({
-      name, content, session, destPath: path.join(this._skillsDir, name, 'SKILL.md'),
-    });
     if (this._skipConfirmation) {
       return true;
     }
@@ -376,7 +405,7 @@ export class SkillSynthesizer {
       if (this._approvalQueue?.isEnabled()) {
         try {
           const approved = await this._approvalQueue.request({
-            action: `Save auto-generated skill\n\n${card}`,
+            action: `Save auto-generated skill\n\n${buildRemoteReviewCard({ name, content, session })}`,
             score: SYNTH_APPROVAL_SCORE,  // Medium risk — writing a new file to the skills dir
             jobId: `skill-synthesizer:${name}`,
             tool: 'SkillSynthesizer',
@@ -396,7 +425,9 @@ export class SkillSynthesizer {
     }
 
     console.log('\n─────────────────────────────────────────');
-    console.log(card);
+    console.log(buildLocalReviewText({
+      name, content, session, destPath: path.join(this._skillsDir, name, 'SKILL.md'),
+    }));
     console.log('─────────────────────────────────────────');
 
     return new Promise<boolean>((resolve) => {

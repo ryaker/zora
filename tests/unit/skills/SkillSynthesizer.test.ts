@@ -326,36 +326,85 @@ describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot
   });
 });
 
-// ─── #201 review card ────────────────────────────────────────────────
+// ─── #201 review text / card / flow ──────────────────────────────────
 
-import { buildSkillReviewCard, REVIEW_CARD_PREVIEW_CHARS } from '../../../src/skills/SkillSynthesizer.js';
-import crypto from 'node:crypto';
+import {
+  buildLocalReviewText, buildRemoteReviewCard, sanitizeDisplay, REMOTE_PREVIEW_CHARS,
+} from '../../../src/skills/SkillSynthesizer.js';
 
-describe('buildSkillReviewCard (#201)', () => {
-  const content = '---\nname: demo\ndescription: Does a demo thing\n---\n# Demo\nbody';
-  const session = { taskDescription: 'refactor\x1b[31m the\nthing', toolCalls: 9, turns: 4 } as never;
+describe('skill review text (#201)', () => {
+  const content = '---\nname: demo\ndescription: Does a *demo* thing\n---\n# Demo\nbody';
+  const session = { taskDescription: 'SECRET-PROMPT refactor\x1b[31m the thing', toolCalls: 9, turns: 4 };
 
-  it('shows provenance, destination, hash and the no-auto-publish statement', () => {
-    const card = buildSkillReviewCard({ name: 'demo', content, destPath: '/x/skills/demo/SKILL.md', session });
-    expect(card).toContain('Proposed skill: demo');
-    expect(card).toContain('Description: Does a demo thing');
-    expect(card).toContain('Session: 9 tool calls, 4 turns');
-    expect(card).toContain('Will write: /x/skills/demo/SKILL.md');
-    expect(card).toContain(crypto.createHash('sha256').update(content).digest('hex'));
-    expect(card).toContain('never auto-published');
+  it('local text shows the FULL content, hash, size and sanitizes controls', () => {
+    const big = `${content}\n${'a'.repeat(5000)}\x1b[2J‮`;
+    const t = buildLocalReviewText({ name: 'demo', content: big, session, destPath: '/h/skills/demo/SKILL.md' });
+    expect(t).toContain('a'.repeat(5000));
+    expect(t).toContain(hashContent(big));
+    expect(t).not.toMatch(/[\x1b‮]/);
+    expect(t).toContain('Source task: SECRET-PROMPT');
   });
 
-  it('strips control characters from the source task', () => {
-    const card = buildSkillReviewCard({ name: 'demo', content, destPath: '/p', session });
-    expect(card).toContain('Source task: refactor [31m the thing'.replace('[31m', '[31m'));
-    expect(card).not.toContain('\x1b');
+  it('remote card omits the source prompt and host path, escapes Markdown, labels truncation', () => {
+    const big = `${content}\n${'a'.repeat(REMOTE_PREVIEW_CHARS * 2)}`;
+    const c = buildRemoteReviewCard({ name: 'demo', content: big, session });
+    expect(c).not.toContain('SECRET-PROMPT');
+    expect(c).not.toContain('/h/');
+    expect(c).toContain('skills/demo/SKILL.md');
+    expect(c).toContain(hashContent(big));
+    expect(c).toContain('inspect locally');
+    expect(c).toContain('\\*demo\\*');
+    expect(c).not.toContain('a'.repeat(REMOTE_PREVIEW_CHARS + 1));
   });
 
-  it('truncates long content previews but hashes the full content', () => {
-    const big = `${content}\n${'a'.repeat(REVIEW_CARD_PREVIEW_CHARS * 2)}`;
-    const card = buildSkillReviewCard({ name: 'demo', content: big, destPath: '/p', session });
-    expect(card).toContain('truncated');
-    expect(card).toContain(crypto.createHash('sha256').update(big).digest('hex'));
-    expect(card.length).toBeLessThan(REVIEW_CARD_PREVIEW_CHARS + 800);
+  it('sanitizeDisplay keeps newline/tab and removes ESC and bidi', () => {
+    expect(sanitizeDisplay('a\n\tb\x1b‮c')).toBe('a\n\tb��c');
+  });
+});
+
+describe('SkillSynthesizer approval flow (#201)', () => {
+  const skill = '---\nname: flow-demo\ndescription: Flow *demo*\n---\n# Flow\nsteps';
+  const session = { taskDescription: 'SECRET-PROMPT deploy', toolCalls: 20, turns: 20 };
+  const cfg = { enabled: true, timeoutMs: 2000, retryAsApproval: false, retryWindowMs: 0 };
+
+  async function flow(decision: 'allow' | 'deny') {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zs-flow-'));
+    const provider = {
+      name: 'fake',
+      async *execute() { yield { type: 'text', timestamp: new Date(), content: { text: skill } }; },
+    } as unknown as import('../../../src/types.js').LLMProvider;
+    const q = new ApprovalQueue(cfg);
+    const sent: string[] = [];
+    let writtenWhenAsked: boolean | undefined;
+    q.setSendHandler(async (msg: string) => {
+      sent.push(msg);
+      writtenWhenAsked = await fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md')).then(() => true, () => false);
+      const token = /ZORA-[A-Z0-9]+/.exec(msg)![0];
+      q.handleReply(token, decision);
+    });
+    const synth = new SkillSynthesizer({ baseDir, provider });
+    synth.setApprovalQueue(q);
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try { await synth.maybeGenerateSkill(session); } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+    return { baseDir, sent, writtenWhenAsked };
+  }
+
+  it('approve: nothing written before the decision; file and lock hash match the reviewed text', async () => {
+    const { baseDir, sent, writtenWhenAsked } = await flow('allow');
+    expect(writtenWhenAsked).toBe(false);
+    expect(sent[0]).toContain(hashContent(skill));
+    expect(sent[0]).not.toContain('SECRET-PROMPT');
+    const onDisk = await fs.readFile(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'), 'utf-8');
+    expect(onDisk).toBe(skill);
+    const lock = JSON.parse(await fs.readFile(path.join(baseDir, 'skills', 'skills.lock.json'), 'utf-8'));
+    expect(JSON.stringify(lock)).toContain(hashContent(skill));
+  });
+
+  it('deny: nothing is written', async () => {
+    const { baseDir } = await flow('deny');
+    await expect(fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'))).rejects.toThrow();
   });
 });
