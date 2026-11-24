@@ -1,6 +1,7 @@
-# Zora agent workflow (zora-architect + zora-reviewer)
+# Zora agent workflow (zora-architect + zora-reviewer + zora-referee)
 
-Two NanoClaw agents on the M2 Air improve Zora without Richard relaying messages.
+Two NanoClaw agents on the M2 Air improve Zora without Richard relaying messages, with a third
+agent (Zora Referee, Hermes Agent on an open model) that breaks technical deadlocks on demand.
 GitHub is the source of truth; labels are the state machine; NanoClaw `send_message`
 is only a nudge.
 
@@ -8,13 +9,15 @@ is only a nudge.
 |---|---|---|---|---|
 | `zora-architect` | NanoClaw `claude` (Claude Agent SDK) / Anthropic credits | Claude Sonnet 5.5 | Claude Opus 5.5 (planning, ADRs) | Plans, implements, fixes review comments |
 | `zora-reviewer` | NanoClaw `opencode` → OpenAI API / OpenAI credits | gpt-6.2-sol | gpt-6.2-astra (weekly audit) | Reviews PRs, writes tests, adversarial audit |
+| Zora Referee | Hermes Agent (separate from NanoClaw) → local Ollama → Ollama Cloud credits | `deepseek-v4.1-flash:cloud` | none | On-demand technical tie-breaker; see [referee.md](referee.md) |
 
 ## Label state machine
 
 ```
-agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ ≤3 rounds)
+agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ ≤5 rounds)
            → agent:approved → CI green → reviewer squash-merges → progress note on #184
-any state → needs-richard   (3 review rounds, protected path, CI fails twice for the same reason, budget ≥90%)
+round 5 or same disagreement twice → Zora Referee → REFEREE RULING: (binding) → back to the loop
+any state → needs-richard   (protected path, product/security call, no convergence after a ruling, CI fails twice for the same reason, budget ≥90%)
 ```
 
 - `agent:todo` — triaged by Richard or proposed by the architect and approved by Richard.
@@ -30,10 +33,12 @@ any state → needs-richard   (3 review rounds, protected path, CI fails twice f
 
 1. Never push to `main`. Never force-push. Only the reviewer merges, and only an `agent:approved` PR with green CI that is not `needs-richard`.
 2. At most 3 open PRs for the architect (the reviewer reviews every PR waiting on each wake); at most 4 implement tasks per day. A PR is exempt from the cap only while it is parked awaiting Richard's decision (`needs-richard` and no agent work pending on it), not merely because the label is present; once Richard unparks it, it counts again. Parked PRs stay unmerged. The daily implement limit and merge rules are unchanged.
-3. Max 3 review rounds per PR, then `needs-richard` and stop.
+3. Max 5 review rounds per PR. At round 5 without convergence, or when the same disagreement repeats twice in a row,
+   escalate to Zora Referee (see below) instead of `needs-richard`.
 4. Changes to `policy.toml`, `.github/`, `src/security/`, or anything touching secrets → `needs-richard`.
-5. Before every action, check the pinned **Agent control** issue. If it has `agents:paused`, do nothing.
-6. Before every action, read `ops/spend.md`. Obey the budget thresholds below.
+5. Before every action, check the pinned **Agent control** issue (#189, canonical even when it has no labels). If it has `agents:paused`, do nothing.
+6. Before every action, read `ops/spend.md`. Obey the budget thresholds below. "Not yet measured" there is expected
+   (no admin usage keys); treat unmeasured spend as under budget, not a blocker. Provider-side monthly caps enforce spend.
 7. Every agent-to-agent message ends with an explicit next owner and a stop condition
    ("your turn, reply once, then wait"). No "always reply" loops.
 8. Quiet hours: no work 22:00–08:00 America/Los_Angeles.
@@ -51,6 +56,37 @@ any state → needs-richard   (3 review rounds, protected path, CI fails twice f
 
 Cycles: Anthropic credits refresh on the Claude Ultra billing date (10th);
 OpenAI credits refresh on the ChatGPT Pro billing date (5th).
+
+## Zora Referee: rulings and escalation
+
+- **Trigger:** review round 5 without convergence, or the same disagreement repeated twice in a row.
+- **How:** the architect or reviewer posts one message in `#zora-agents`:
+  `<@U0CLG53F8U9> PR #N, round K: architect says …; reviewer says ….` (the Referee only reacts to that mention).
+- **Ruling:** the Referee reads the PR, diff, review threads and checks with `gh`, then posts one PR comment starting
+  `REFEREE RULING:` with a verdict, a numbered decision per point, and the next owner. The ruling is **binding** for
+  technical questions; agents apply it and continue the normal loop.
+- **`needs-richard` is reserved for:** protected paths (`policy.toml`, `.github/`, `src/security/`, secrets), real
+  product or security-policy judgment calls, a PR that still fails to converge after a ruling, CI failing twice for the
+  same reason, and budget ≥90%. If the Referee reports missing GitHub auth or no ruling arrives within 2 wakes,
+  fall back to `needs-richard`.
+- The Referee never pushes, merges, approves, or relabels (other than adding `needs-richard`). Details: [referee.md](referee.md).
+
+## `#zora-agents` Slack (personal Yaker workspace)
+
+- Richard chats with the agents in `#zora-agents` (`C0CLEQGCJU9`). NanoClaw's Slack app (bot `@NanoClaw`) is wired to
+  zora-architect, which replies to every human message there (no @mention needed); unknown humans need approval.
+- zora-reviewer has an outbound-only destination (it posts, never answers chat). Zora Referee is a separate Slack app
+  that answers only when @mentioned by Richard or `@NanoClaw`.
+- Proactive posts (1–2 lines each): PR opened (architect), PR merged and `needs-richard` blockers (reviewer), the 08:30 PT
+  daily planning summary, and Monday research / Friday audit wrap-ups. Agents stay silent on idle 30-minute polls.
+- Bot-to-bot messages: NanoClaw admits other bots' messages only in rooms listed in `SLACK_A2A_ROOMS` (NanoClaw's
+  `slack-a2a-rooms` skill), capped at `SLACK_A2A_MAX_HOPS=6` consecutive bot messages until a human speaks. Agents never
+  post bare acknowledgements to each other in Slack; decisions live on GitHub.
+
+## Where to follow along
+
+- GitHub Project board: https://github.com/users/ryaker/projects/1 (Todo / In Progress / In Review / Needs Richard / Done).
+- Roadmap and merge notes: #184. Agent control: #189. Planning: Discussion #196.
 
 ## Research and decisions
 
