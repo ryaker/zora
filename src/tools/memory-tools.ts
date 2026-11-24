@@ -12,6 +12,8 @@ import type { MemoryManager } from '../memory/memory-manager.js';
 import type { StructuredMemory } from '../memory/structured-memory.js';
 import type { ValidationPipeline } from '../memory/validation-pipeline.js';
 import type { MemoryItem, MemoryItemType, SourceType } from '../memory/memory-types.js';
+import type { GraphMemoryClient } from '../memory/graph/graph-memory-worker.js';
+import { isEntityKind, type EntityRecord } from '../memory/graph/graph-types.js';
 
 const VALID_TYPES: MemoryItemType[] = ['profile', 'event', 'knowledge', 'behavior', 'skill', 'tool'];
 const VALID_SOURCE_TYPES: SourceType[] = ['user_instruction', 'agent_analysis', 'tool_output'];
@@ -22,12 +24,13 @@ const VALID_SOURCE_TYPES: SourceType[] = ['user_instruction', 'agent_analysis', 
 export function createMemoryTools(
   memoryManager: MemoryManager,
   validationPipeline: ValidationPipeline,
+  graph?: GraphMemoryClient | null,
 ): CustomToolDefinition[] {
   const structuredMemory = memoryManager.structuredMemory;
 
   return [
     createMemorySaveTool(structuredMemory, validationPipeline),
-    createMemorySearchTool(memoryManager),
+    createMemorySearchTool(memoryManager, graph ?? null),
     createMemoryForgetTool(memoryManager),
   ];
 }
@@ -118,7 +121,20 @@ function createMemorySaveTool(
   };
 }
 
-function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinition {
+/** Cap on graph-expanded candidates per search (#194c). */
+const MAX_GRAPH_CANDIDATES = 20;
+
+function parseEntity(raw: unknown): EntityRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.name !== 'string' || r.name.trim() === '' || !isEntityKind(r.kind)) return null;
+  return { name: r.name.trim(), kind: r.kind };
+}
+
+function createMemorySearchTool(
+  memoryManager: MemoryManager,
+  graph: GraphMemoryClient | null,
+): CustomToolDefinition {
   return {
     name: 'memory_search',
     description:
@@ -145,6 +161,28 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
         min_score: {
           type: 'number',
           description: 'Minimum salience score threshold (0-1 range typical).',
+        },
+        entity: {
+          type: 'object',
+          description:
+            'Optional (#194c): also return memories that evidence this entity, e.g. {"name":"Zora","kind":"project"}. ' +
+            'Ignored unless ontology memory is enabled.',
+          properties: {
+            name: { type: 'string' },
+            kind: { type: 'string', enum: ['person', 'project', 'tool', 'concept'] },
+          },
+        },
+        relation: {
+          type: 'object',
+          description:
+            'Optional (#194c): also return memories asserting this relation, e.g. ' +
+            '{"from":{"name":"Zora","kind":"project"},"to":{"name":"SparrowDB","kind":"tool"},"predicate":"uses"}. ' +
+            'Ignored unless ontology memory is enabled.',
+          properties: {
+            from: { type: 'object' },
+            to: { type: 'object' },
+            predicate: { type: 'string' },
+          },
         },
       },
     },
@@ -180,7 +218,39 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
       // Trim to limit
       scores = scores.slice(0, limit);
 
-      if (scores.length === 0) {
+      // #194c: entity/relation-aware expansion. The graph only proposes memory IDs;
+      // every ID must still resolve through the same read path as a lexical hit
+      // (peekItem: archived/forgotten items don't resolve) and pass the type filter
+      // before it can be returned. Nothing the graph names is cited unless it is
+      // in that authorized set. Flag off => client returns [] => no change.
+      const graphIds: string[] = [];
+      if (graph?.ontologyEnabled) {
+        const entity = parseEntity(input.entity);
+        const rel = input.relation as Record<string, unknown> | undefined;
+        const from = parseEntity(rel?.from);
+        const to = parseEntity(rel?.to);
+        const predicate = typeof rel?.predicate === 'string' ? rel.predicate.trim() : '';
+        try {
+          if (entity) graphIds.push(...(await graph.sourcesOf(entity.name, entity.kind, MAX_GRAPH_CANDIDATES)));
+          if (from && to && predicate) {
+            graphIds.push(...(await graph.relationSources(from, to, predicate, MAX_GRAPH_CANDIDATES)));
+          }
+        } catch {
+          // Graph is an accelerator, never a dependency: fall back to lexical results.
+        }
+      }
+      const seen = new Set(scores.map(s => s.itemId));
+      const graphItems: MemoryItem[] = [];
+      for (const id of graphIds) {
+        if (seen.has(id) || typeof id !== 'string') continue;
+        seen.add(id);
+        const item = await memoryManager.structuredMemory.peekItem(id);
+        if (!item) continue;
+        if (typeFilter && item.type !== typeFilter) continue;
+        graphItems.push(item);
+      }
+
+      if (scores.length === 0 && graphItems.length === 0) {
         return { results: [], message: 'No matching memories found.' };
       }
 
@@ -197,7 +267,19 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
               created: item.created_at,
             }
           : null;
-      }).filter(Boolean);
+      }).filter(Boolean) as Array<Record<string, unknown>>;
+
+      for (const item of graphItems) {
+        results.push({
+          id: item.id,
+          content: item.summary,
+          type: item.type,
+          tags: item.tags,
+          score: null,
+          created: item.created_at,
+          via: 'graph',
+        });
+      }
 
       return { results, count: results.length };
     },
