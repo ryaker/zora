@@ -14,7 +14,7 @@ This repository is spec-first. Code will land after the core architecture and se
 
 ## Dependencies
 
-The repo-root `.npmrc` sets `min-release-age=3`: npm (11.x or newer) will not resolve versions published in the last 3 days. Older npm ignores the key. Exemption rule: to adopt a newer release urgently (e.g. a security fix), pass `--min-release-age=0` for that single install, state the package, version and reason in the PR description, and have the reviewer confirm. Do not change `.npmrc` to grant a standing exemption. Lockfile installs (`npm ci`) are unaffected because they use pinned versions.
+The repo-root `.npmrc` sets `min-release-age=3`: npm 11.10.0 or newer will not resolve versions published in the last 3 days, including transitive dependencies. Older npm is not expected to enforce it. There is no contributor-level exemption: do not pass `--min-release-age=0` or edit `.npmrc` to bypass the gate. Any exemption needs Richard's prior approval on issue #217. `npm ci --ignore-scripts` (what CI runs) installs from the committed lockfile; a dry run with this `.npmrc` completed cleanly.
 
 ## Proposals
 
