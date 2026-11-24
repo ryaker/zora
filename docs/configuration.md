@@ -289,6 +289,7 @@ Human-in-the-loop steering controls.
 | `enabled` | boolean | `true` | Enable the steering system. |
 | `poll_interval` | string | `"5s"` | How often the agent checks for steering messages during execution. |
 | `dashboard_port` | integer | `7070` | Port for the dashboard web server. |
+| `dashboard_token` | string | unset | Bearer token for the dashboard API (supports `env:VAR`). The operator environment variable `ZORA_DASHBOARD_TOKEN`, when set, **wins** over this value so a project-local config cannot replace an operator-supplied credential. Blank values are rejected. |
 | `notify_on_flag` | boolean | `true` | Notify when an action is flagged for approval. |
 | `flag_timeout` | string | `"5m"` | How long to wait for approval before auto-denying. |
 | `auto_approve_low_risk` | boolean | `true` | Automatically approve low-risk flagged actions. |

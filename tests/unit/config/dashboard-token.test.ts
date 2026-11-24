@@ -14,6 +14,7 @@ import { SteeringManager } from '../../../src/steering/steering-manager.js';
 import { AuthMonitor } from '../../../src/orchestrator/auth-monitor.js';
 import os from 'node:os';
 import { loadConfigFromString, ConfigError } from '../../../src/config/loader.js';
+import { resolveDashboardToken } from "../../../src/config/dashboard-token.js";
 import type { ZoraConfig } from '../../../src/types.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -57,18 +58,26 @@ describe('steering.dashboard_token (#174)', () => {
     expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(200);
   });
 
-  it('explicit (config) token takes precedence over ZORA_DASHBOARD_TOKEN', async () => {
+  it('operator ZORA_DASHBOARD_TOKEN wins over project config, resolved from a real parsed config', async () => {
+    const parsed = loadConfigFromString('[steering]\ndashboard_token = "cfg-token"\n');
     process.env['ZORA_DASHBOARD_TOKEN'] = 'env-token';
-    const app = makeServer('cfg-token');
-    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer env-token')).status).toBe(401);
-    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(200);
+    const app = makeServer(resolveDashboardToken(parsed.steering.dashboard_token));
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(401);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer env-token')).status).toBe(200);
+  });
+
+  it('config token is used when the env var is unset or blank', () => {
+    expect(resolveDashboardToken('cfg', {})).toBe('cfg');
+    expect(resolveDashboardToken('cfg', { ZORA_DASHBOARD_TOKEN: '  ' })).toBe('cfg');
+    expect(resolveDashboardToken(undefined, {})).toBeUndefined();
+    expect(resolveDashboardToken('cfg', { ZORA_DASHBOARD_TOKEN: 'env' })).toBe('env');
   });
 
   it('daemon passes the configured token to DashboardServer', () => {
     // Source-level guard: the daemon is not unit-constructible, and the original
     // bug was precisely this argument being absent.
     const src = fs.readFileSync(path.join(ROOT, 'src/cli/daemon.ts'), 'utf8');
-    expect(src).toMatch(/dashboardToken:\s*config\.steering\.dashboard_token/);
+    expect(src).toMatch(/dashboardToken:\s*resolveDashboardToken\(config\.steering\.dashboard_token\)/);
   });
 });
 
