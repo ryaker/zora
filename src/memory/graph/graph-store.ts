@@ -154,6 +154,7 @@ import {
 } from './identifiers.js';
 import type { CypherParams, SparrowDatabase, SparrowModule } from './sparrow-loader.js';
 import { loadSparrow } from './sparrow-loader.js';
+import { createHash } from 'node:crypto';
 import {
   describeGraphOwner,
   isDatabaseLockedError,
@@ -163,6 +164,7 @@ import {
 import {
   isEntityKind,
   NODE_LABELS,
+  type MemoryFacts,
   type DecisionRecord,
   type DecisionResult,
   type EntityKind,
@@ -403,6 +405,82 @@ export class GraphStore {
     }
   }
 
+  /**
+   * Record a source memory and the entities/relations extracted from it (#194).
+   *
+   * Isolation: facts go to `OntEntity` / `Assertion` nodes, never to the legacy
+   * `Entity` / `RELATES_TO` records, so legacy recall (`neighbours` etc.)
+   * cannot surface derived facts and a legacy edge cannot shadow an ontology
+   * one. Sources per fact: an `OntEntity` is keyed by (kind, name) and linked
+   * to each memory that mentions it; each relation assertion is its own node
+   * carrying the asserting `memId`, so two memories — or two predicates — on
+   * the same pair stay independently attributable. All writes are replay-safe.
+   */
+  recordFacts(facts: MemoryFacts): void {
+    // Identity fields are never trimmed or truncated: that would let two distinct
+    // facts share a key (and a citation). Out-of-domain values are rejected, and
+    // reads apply the same rule so write and lookup always agree.
+    const memId = exactId(facts.memId, MAX_MEM_ID);
+    if (!memId) return;
+    const memory = identity('Memory', 'memId', memId);
+    const ts = safeTs(facts.ts);
+    this._upsertNode(memory, { ts });
+
+    const touch = (e: EntityRecord): string | null => {
+      const name = exactId(e.name, MAX_PROP_LENGTH);
+      if (!name) return null;
+      const kind: EntityKind = isEntityKind(e.kind) ? e.kind : 'concept';
+      const okey = ontKey(kind, name);
+      const node = identity('OntEntity', 'okey', okey);
+      this._upsertNode(node, { name, kind });
+      this._link(node, 'EVIDENCED_BY', memory);
+      return okey;
+    };
+
+    for (const entity of facts.entities ?? []) touch(entity);
+    for (const rel of facts.relations ?? []) {
+      const fromKey = touch(rel.from);
+      const toKey = touch(rel.to);
+      const predicate = exactId(rel.kind, MAX_PREDICATE);
+      if (!fromKey || !toKey || !predicate || fromKey === toKey) continue;
+      // JSON array encoding is unambiguous for variable-length fields.
+      const akey = createHash('sha256')
+        .update(JSON.stringify([memId, fromKey, predicate, toKey]))
+        .digest('hex');
+      this._upsertNode(identity('Assertion', 'akey', akey), {
+        fromKey,
+        toKey,
+        predicate,
+        memId,
+        ts,
+      });
+    }
+  }
+
+  /** Memory IDs that mention an entity of this exact kind and name. */
+  sourcesOf(name: string, kind: EntityKind, limit = 20): string[] {
+    const anchor = exactId(name, MAX_PROP_LENGTH);
+    if (!anchor || !isEntityKind(kind)) return [];
+    const rows = this._query(
+      `MATCH (a:OntEntity {okey: $okey})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
+      { okey: ontKey(kind, anchor) },
+    );
+    return uniqueIds(rows, 'm.memId', limit);
+  }
+
+  /** Memory IDs that assert exactly this (from, predicate, to) relation. */
+  relationSources(from: EntityRecord, to: EntityRecord, predicate: string, limit = 20): string[] {
+    const f = exactId(from.name, MAX_PROP_LENGTH);
+    const t = exactId(to.name, MAX_PROP_LENGTH);
+    const p = exactId(predicate, MAX_PREDICATE);
+    if (!f || !t || !p || !isEntityKind(from.kind) || !isEntityKind(to.kind)) return [];
+    const rows = this._query(
+      `MATCH (a:Assertion {fromKey: $f, toKey: $t, predicate: $p}) RETURN a.memId LIMIT ${this._maxRows}`,
+      { f: ontKey(from.kind, f), t: ontKey(to.kind, t), p },
+    );
+    return uniqueIds(rows, 'a.memId', limit);
+  }
+
   /** Relate two entities, creating either endpoint if needed. */
   relateEntities(from: EntityRecord, to: EntityRecord, kind: string): void {
     const fromName = clamp(from.name);
@@ -443,6 +521,9 @@ export class GraphStore {
             break;
           case 'relateEntities':
             this.relateEntities(write.from, write.to, write.kind);
+            break;
+          case 'recordFacts':
+            this.recordFacts(write.facts);
             break;
         }
       } catch (err) {
@@ -905,6 +986,33 @@ function clamp(value: unknown, max = MAX_PROP_LENGTH): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+/** Identity of an ontology entity: one node per (kind, name). */
+function ontKey(kind: string, name: string): string {
+  return `${kind}:${name}`;
+}
+
+const MAX_MEM_ID = 200;
+const MAX_PREDICATE = 100;
+
+/**
+ * An identity value taken exactly as given, or '' when out of domain (not a
+ * string, blank, or longer than `max`). Deliberately not `clamp`: truncation
+ * or trimming would map distinct inputs onto one identity.
+ */
+function exactId(value: unknown, max: number): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > max) return '';
+  return value;
+}
+
+function uniqueIds(rows: Array<Record<string, unknown>>, col: string, limit: number): string[] {
+  const ids: string[] = [];
+  for (const row of rows) {
+    const id = str(row[col]);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids.slice(0, limit);
 }
 
 /** Coerce a timestamp to a safe integer, defaulting to now. */
