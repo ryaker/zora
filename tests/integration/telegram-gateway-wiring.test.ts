@@ -32,6 +32,7 @@ vi.mock('node-telegram-bot-api', () => {
 // ─── Imports (after mock declaration) ────────────────────────────────────────
 import { TelegramGateway } from '../../src/steering/index.js';
 import { SteeringManager } from '../../src/steering/steering-manager.js';
+import { buildRemoteReviewCard } from '../../src/skills/SkillSynthesizer.js';
 import { ApprovalQueue, DEFAULT_APPROVAL_CONFIG } from '../../src/core/approval-queue.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -162,6 +163,28 @@ describe('TelegramGateway.connectApprovalQueue()', () => {
     expect(q.getPendingCount()).toBe(1);
     q.handleReply(/ZORA-[A-Z0-9]{4}/.exec(sent)![0], 'allow');
     await expect(pending).resolves.toBe(true);
+  });
+
+  it('#201: the final Telegram payload for a skill proposal is metadata only', async () => {
+    const bot = (gateway as unknown as { _bot: { sendMessage: ReturnType<typeof vi.fn> } })._bot;
+    (gateway as unknown as { _chatIds: Map<string, number> })._chatIds.set('u1', 111);
+    let call: unknown[] = [];
+    bot.sendMessage.mockImplementation(async (...args: unknown[]) => { call = args; });
+    const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
+    gateway.connectApprovalQueue(q);
+    const body = '---\nname: demo\ndescription: SECRET-DESC *bold*\n---\nSECRET-BODY /Users/me/.zora `code` _it_';
+    const pending = q.request({
+      action: buildRemoteReviewCard({ name: 'demo', content: body, session: { taskDescription: 'SECRET-PROMPT', toolCalls: 9, turns: 4 } }),
+      score: 50, jobId: 'skill-synthesizer:demo', tool: 'SkillSynthesizer',
+    });
+    await vi.waitFor(() => expect(call.length).toBeGreaterThan(0));
+    const text = call[1] as string;
+    expect(text).not.toMatch(/SECRET|\/Users|bold|code`|_it_/);
+    expect(text).toContain('skills/demo/SKILL.md');
+    // The only backticks are the queue's own code-span delimiters (Action/Task/Job/Token), so generated text cannot close one early.
+    expect((text.match(/`/g) ?? []).length).toBe(8);
+    q.handleReply(/ZORA-[A-Z0-9]{4}/.exec(text)![0], 'deny');
+    await expect(pending).resolves.toBe(false);
   });
 
   it('#218: stop() denies pending approvals that can no longer be answered', async () => {

@@ -329,7 +329,7 @@ describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot
 // ─── #201 review text / card / flow ──────────────────────────────────
 
 import {
-  buildLocalReviewText, buildRemoteReviewCard, sanitizeDisplay, REMOTE_PREVIEW_CHARS,
+  buildLocalReviewText, buildRemoteReviewCard, sanitizeDisplay,
 } from '../../../src/skills/SkillSynthesizer.js';
 
 describe('skill review text (#201)', () => {
@@ -345,16 +345,20 @@ describe('skill review text (#201)', () => {
     expect(t).toContain('Source task: SECRET-PROMPT');
   });
 
-  it('remote card omits the source prompt and host path, escapes Markdown, labels truncation', () => {
-    const big = `${content}\n${'a'.repeat(REMOTE_PREVIEW_CHARS * 2)}`;
-    const c = buildRemoteReviewCard({ name: 'demo', content: big, session });
-    expect(c).not.toContain('SECRET-PROMPT');
-    expect(c).not.toContain('/h/');
+  it('remote card is metadata only: no prompt, host path, description or body text', () => {
+    const body = `${content}\nSECRET-PROMPT /Users/me/.zora \`x\` _y_ *z*`;
+    const c = buildRemoteReviewCard({ name: 'demo', content: body, session });
+    expect(c).not.toMatch(/SECRET-PROMPT|\/Users|demo\*|Does a|body/);
+    expect(c).not.toMatch(/[`*\[\]\n]/);
     expect(c).toContain('skills/demo/SKILL.md');
-    expect(c).toContain(hashContent(big));
-    expect(c).toContain('inspect locally');
-    expect(c).toContain('\\*demo\\*');
-    expect(c).not.toContain('a'.repeat(REMOTE_PREVIEW_CHARS + 1));
+    expect(c).toContain(hashContent(body));
+    expect(c).toContain('inspect it on the host');
+  });
+
+  it('remote card rejects a hostile name rather than echoing it', () => {
+    const c = buildRemoteReviewCard({ name: 'x`*[evil](u)', content, session });
+    expect(c).toContain('invalid-name');
+    expect(c).not.toContain('evil');
   });
 
   it('sanitizeDisplay keeps newline/tab and removes ESC and bidi', () => {
@@ -397,6 +401,7 @@ describe('SkillSynthesizer approval flow (#201)', () => {
     expect(writtenWhenAsked).toBe(false);
     expect(sent[0]).toContain(hashContent(skill));
     expect(sent[0]).not.toContain('SECRET-PROMPT');
+    expect(sent[0]).not.toContain(baseDir);
     const onDisk = await fs.readFile(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'), 'utf-8');
     expect(onDisk).toBe(skill);
     const lock = JSON.parse(await fs.readFile(path.join(baseDir, 'skills', 'skills.lock.json'), 'utf-8'));

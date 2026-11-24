@@ -37,13 +37,10 @@ export const SKILL_THRESHOLD = { toolCalls: 8, turns: 8 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-/** #201: the remote preview is a convenience and is always labelled truncated. */
-export const REMOTE_PREVIEW_CHARS = 500;
-
 /**
- * Remove characters that can forge or hide terminal/chat output: C0/C1
- * controls (ESC included, newline and tab kept) and bidi/zero-width format
- * characters. Applied to every piece of generated text that is displayed.
+ * Remove characters that can forge or hide terminal output: C0/C1 controls
+ * (ESC included, newline and tab kept) and bidi/zero-width format characters.
+ * Applied to every piece of generated text shown locally.
  */
 export function sanitizeDisplay(text: string): string {
   // eslint-disable-next-line no-control-regex
@@ -55,20 +52,10 @@ function oneLine(text: string, max: number): string {
   return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
 }
 
-/** Telegram's legacy Markdown mode: neutralise the characters that open entities. */
-function escapeMarkdown(text: string): string {
-  return text.replace(/([\\_*`\[])/g, '\\$1');
-}
-
 export interface SkillReviewInput {
   name: string;
   content: string;
   session: SessionSummary;
-}
-
-/** Path shown to a person, relative to the skills dir so no host paths leave the machine. */
-function relDest(name: string): string {
-  return `skills/${oneLine(name, 64)}/SKILL.md`;
 }
 
 /**
@@ -92,29 +79,22 @@ export function buildLocalReviewText(input: SkillReviewInput & { destPath: strin
 }
 
 /**
- * #201: REMOTE review card (ApprovalQueue → Telegram, Markdown mode). Data
- * minimisation: no source prompt and no host path leave the machine — only a
- * provenance id, session stats, a relative destination, the hash and a short,
- * escaped, explicitly truncated preview. The full text is inspectable locally.
- * Approval semantics are the queue's own (a blanket allow grant may still apply).
+ * #201: REMOTE review card (ApprovalQueue → Telegram). Metadata only, built
+ * from a closed character set so the queue's Markdown wrapper cannot be
+ * altered and no generated prose can echo the source prompt or host paths:
+ * the validated slug, integers, a hex hash and a fixed relative path. The
+ * proposed text itself is never sent; it is reviewed locally.
  */
 export function buildRemoteReviewCard(input: SkillReviewInput): string {
   const { name, content, session } = input;
-  const { frontmatter } = parseFrontmatterSafe(content);
-  const clean = sanitizeDisplay(content);
-  const truncated = clean.length > REMOTE_PREVIEW_CHARS;
-  const preview = truncated ? clean.slice(0, REMOTE_PREVIEW_CHARS) : clean;
-  return escapeMarkdown([
-    `Proposed skill: ${oneLine(name, 64)}`,
-    `Description: ${oneLine(frontmatter.description ?? '(none)', 200)}`,
-    `Provenance: skill-synthesizer:${oneLine(name, 64)} (${session.toolCalls} tool calls, ${session.turns} turns)`,
-    `Will write: ${relDest(name)} (under the skills dir)`,
-    `SHA-256: ${hashContent(content)} (${content.length} chars)`,
-    truncated
-      ? `Preview (first ${REMOTE_PREVIEW_CHARS} of ${content.length} chars; the rest is NOT shown here — inspect locally):`
-      : 'Preview (complete):',
-    preview,
-  ].join('\n'));
+  const safeName = isValidSlug(name) ? name : 'invalid-name';
+  const int = (n: number) => String(Math.max(0, Math.trunc(Number(n) || 0)));
+  return [
+    `Save auto-generated skill ${safeName} to skills/${safeName}/SKILL.md`,
+    `(${int(content.length)} chars, sha256 ${hashContent(content)},`,
+    `from ${int(session.toolCalls)} tool calls / ${int(session.turns)} turns).`,
+    'Full text is not sent here: inspect it on the host before approving.',
+  ].join(' ');
 }
 
 function parseFrontmatterSafe(content: string): { frontmatter: { description?: string } } {
@@ -405,7 +385,7 @@ export class SkillSynthesizer {
       if (this._approvalQueue?.isEnabled()) {
         try {
           const approved = await this._approvalQueue.request({
-            action: `Save auto-generated skill\n\n${buildRemoteReviewCard({ name, content, session })}`,
+            action: buildRemoteReviewCard({ name, content, session }),
             score: SYNTH_APPROVAL_SCORE,  // Medium risk — writing a new file to the skills dir
             jobId: `skill-synthesizer:${name}`,
             tool: 'SkillSynthesizer',
