@@ -145,6 +145,47 @@ prompt = "say hello"
       expect(manager.scheduledCount).toBe(0);
     });
 
+    it('a stale run settling after a same-name reload does not affect the replacement', async () => {
+      manager.scheduleRoutine(def({ contains: 'DONE' }));
+      let resolveOld!: (v: string) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
+      const old = manager.runRoutine(def({ contains: 'DONE' }));
+      manager.scheduleRoutine(def(undefined)); // replacement, no until
+      expect(manager.scheduledCount).toBe(1);
+      resolveOld('DONE');
+      await old;
+      expect(manager.scheduledCount).toBe(1);
+    });
+
+    it('a stale run does not consume the replacement max_runs count', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      let resolveOld!: (v: string) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
+      const old = manager.runRoutine(def({ max_runs: 1 }));
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      resolveOld('x');
+      await old;
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('overlapping triggers cannot exceed max_runs; failures release capacity', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      submitTaskMock.mockClear();
+      let rejectFirst!: (e: Error) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((_r, j) => { rejectFirst = j; }));
+      const first = manager.runRoutine(def({ max_runs: 1 }));
+      await manager.runRoutine(def({ max_runs: 1 })); // overlapping: skipped
+      expect(submitTaskMock).toHaveBeenCalledTimes(1);
+      rejectFirst(new Error('boom'));
+      await expect(first).rejects.toThrow('boom');
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 })); // capacity released
+      expect(submitTaskMock).toHaveBeenCalledTimes(2);
+      expect(manager.scheduledCount).toBe(0);
+    });
+
     it('routines without until are never unloaded', async () => {
       manager.scheduleRoutine(def(undefined));
       for (let i = 0; i < 3; i++) await manager.runRoutine(def(undefined));
