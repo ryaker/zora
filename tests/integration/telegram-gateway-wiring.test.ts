@@ -137,6 +137,45 @@ describe('TelegramGateway.connectApprovalQueue()', () => {
     await gateway.stop();
   });
 
+  it('#218: denies at once when no chat is known to receive the request', async () => {
+    gateway.connectApprovalQueue(queue);
+    await expect(
+      queue.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' }),
+    ).resolves.toBe(false);
+    expect(queue.getPendingCount()).toBe(0);
+  });
+
+  it('#218: one failed chat does not deny a request another chat received', async () => {
+    const bot = (gateway as unknown as { _bot: { sendMessage: ReturnType<typeof vi.fn> } })._bot;
+    const chatIds = (gateway as unknown as { _chatIds: Map<string, number> })._chatIds;
+    chatIds.set('u1', 111);
+    chatIds.set('u2', 222);
+    let sent = '';
+    bot.sendMessage.mockImplementation(async (chat: number, m: string) => {
+      if (chat === 111) throw new Error('chat 111 blocked the bot');
+      sent = m;
+    });
+    const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
+    gateway.connectApprovalQueue(q);
+    const pending = q.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' });
+    await vi.waitFor(() => expect(sent).not.toBe(''));
+    expect(q.getPendingCount()).toBe(1);
+    q.handleReply(/ZORA-[A-Z0-9]{4}/.exec(sent)![0], 'allow');
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it('#218: stop() denies pending approvals that can no longer be answered', async () => {
+    const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
+    q.setSendHandler(async () => 1);
+    gateway.connectApprovalQueue(q);
+    // Replace the transport with one that reports a reached approver, then stop the gateway.
+    q.setSendHandler(async () => 1);
+    const pending = q.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' });
+    await new Promise((r) => setTimeout(r, 10));
+    await gateway.stop();
+    await expect(pending).resolves.toBe(false);
+  });
+
   it('connectApprovalQueue() calls queue.setSendHandler()', () => {
     const spy = vi.spyOn(queue, 'setSendHandler');
 

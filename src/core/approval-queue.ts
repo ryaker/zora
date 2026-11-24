@@ -35,7 +35,13 @@ export interface PendingApproval {
   createdAt: number;
 }
 
-export type ApprovalSendFn = (message: string) => Promise<void>;
+/**
+ * Delivers an approval request. #218: it may resolve to the number of approvers
+ * actually reached; `0` (or a rejection) means nobody can answer, so the queue
+ * denies at once rather than waiting out the timeout. `void` is accepted for
+ * handlers that cannot count recipients (treated as delivered).
+ */
+export type ApprovalSendFn = (message: string) => Promise<void | number>;
 
 export class ApprovalQueue {
   private readonly _pending = new Map<string, PendingApproval>();
@@ -51,9 +57,34 @@ export class ApprovalQueue {
     this._sendFn = fn;
   }
 
+  /**
+   * #218: the approver transport went away (e.g. the gateway stopped). Requests
+   * already waiting can no longer be answered, so deny them now instead of
+   * holding the job until the timeout. Fail closed; grants are untouched.
+   */
+  clearSendHandler(): void {
+    this._sendFn = undefined;
+    for (const entry of [...this._pending.values()]) {
+      this._denyUnanswerable(entry, 'approver transport unavailable');
+    }
+  }
+
   /** Is the approval queue enabled? */
   isEnabled(): boolean {
     return this._config.enabled;
+  }
+
+  /**
+   * #174: could request() with these arguments get an answer, rather than
+   * auto-denying because no send handler is wired? Lets callers skip costly
+   * work (LLM synthesis) whose result could only be discarded. It mirrors
+   * request()'s own gates and never approves anything itself.
+   */
+  canDecide(opts: { score: number; bypassBlanketAllow?: boolean }): boolean {
+    if (!this._config.enabled) return false;
+    const blanketActive = this._blanketSessionScoped || Date.now() < this._blanketAllowUntil;
+    if (blanketActive && !opts.bypassBlanketAllow && opts.score < this._blanketMaxScore) return true;
+    return this._sendFn !== undefined;
   }
 
   /**
@@ -110,10 +141,23 @@ export class ApprovalQueue {
         createdAt: Date.now(),
       };
       this._pending.set(id, entry);
-      this._sendApprovalRequest(entry).catch(err => {
-        log.error({ err }, 'Failed to send approval request');
+      this._sendApprovalRequest(entry).then((reached) => {
+        // #218: a send that reached no approver can never be answered.
+        if (reached === 0) this._denyUnanswerable(entry, 'no approver reachable');
+      }).catch(err => {
+        log.error({ errName: err instanceof Error ? err.name : typeof err }, 'Failed to send approval request');
+        this._denyUnanswerable(entry, 'approval request could not be delivered');
       });
     });
+  }
+
+  /** #218: resolve a pending request as denied immediately (idempotent). */
+  private _denyUnanswerable(entry: PendingApproval, reason: string): void {
+    if (this._pending.get(entry.id) !== entry) return;
+    clearTimeout(entry.timer);
+    this._pending.delete(entry.id);
+    log.warn({ id: entry.id, tool: entry.tool, reason }, 'Approval request unanswerable — denying');
+    entry.resolve(false);
   }
 
   /**
@@ -183,7 +227,7 @@ export class ApprovalQueue {
     };
   }
 
-  private async _sendApprovalRequest(entry: PendingApproval): Promise<void> {
+  private async _sendApprovalRequest(entry: PendingApproval): Promise<void | number> {
     const timeoutMin = Math.round(this._config.timeoutMs / 60_000);
     const message =
       `⚠️ *Zora Action Approval Required*\n\n` +
@@ -199,7 +243,7 @@ export class ApprovalQueue {
       `  /approve ${entry.id} deny — block this action\n\n` +
       `Auto-denies in ${timeoutMin} minutes.`;
 
-    await this._sendFn!(message);
+    return this._sendFn!(message);
   }
 
   private _riskLabel(score: number): string {
