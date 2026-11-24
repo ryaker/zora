@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PolicyEngine } from '../../src/security/policy-engine.js';
+import { PolicyEngine, isWithinRoot } from '../../src/security/policy-engine.js';
 import type { ZoraPolicy } from '../../src/types.js';
 
 let root: string;
@@ -125,5 +125,41 @@ describe('#216 symlinked-ancestor handling in validatePath', () => {
   it('a deny root that simply does not exist yet does not block unrelated paths', () => {
     const e = engine({ deniedPaths: [path.join(root, 'no-such-dir', 'secret')] });
     expect(e.validatePath(path.join(allowed, 'real', 'f.txt')).allowed).toBe(true);
+  });
+
+  it('judges the OS target of "link/../x", not the lexically collapsed path', () => {
+    // Lexically allowed/ancestor-link/../real/f.txt collapses to allowed/real/f.txt (allowed),
+    // but the OS resolves ancestor-link first, so ".." is outside's parent (root).
+    fs.writeFileSync(path.join(root, 'real-f.txt'), 'x');
+    fs.mkdirSync(path.join(root, 'real'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'real', 'f.txt'), 'x');
+    const sneaky = path.join(allowed, 'ancestor-link') + '/../real/f.txt';
+    expect(engine().validatePath(sneaky).allowed).toBe(false);
+    expect(engine({ deniedPaths: [path.join(root, 'real')] }).validatePath(sneaky).allowed).toBe(false);
+  });
+
+  it('denies a ".." input that cannot be resolved by the OS (ambiguous)', () => {
+    expect(engine().validatePath(path.join(allowed, 'real') + '/../missing-dir/new.txt').allowed).toBe(false);
+  });
+
+  it('still allows an existing target reached with a plain ".." inside the allowed root', () => {
+    fs.writeFileSync(path.join(allowed, 'real', 'ok.txt'), 'x');
+    expect(engine().validatePath(path.join(allowed, 'real') + '/../real/ok.txt').allowed).toBe(true);
+  });
+});
+
+describe('isWithinRoot (#216)', () => {
+  it('matches descendants of a root that already ends in a separator', () => {
+    expect(isWithinRoot('/etc/passwd', '/')).toBe(true);
+    expect(isWithinRoot('/', '/')).toBe(true);
+  });
+  it('matches ordinary roots and rejects siblings sharing a prefix', () => {
+    expect(isWithinRoot('/a/b/c', '/a/b')).toBe(true);
+    expect(isWithinRoot('/a/b', '/a/b')).toBe(true);
+    expect(isWithinRoot('/a/bc', '/a/b')).toBe(false);
+  });
+  it('a deny rooted at the filesystem root denies descendants', () => {
+    const e = engine({ deniedPaths: ['/'], allowedPaths: ['/'] });
+    expect(e.validatePath(path.join(allowed, 'real', 'f.txt')).allowed).toBe(false);
   });
 });

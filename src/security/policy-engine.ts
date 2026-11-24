@@ -69,6 +69,15 @@ export interface PolicyExpansionRequest {
   commands?: string[];
 }
 
+/**
+ * Root-aware containment (#216): a root that already ends in a separator (the
+ * filesystem root '/' or 'C:\\') must match its descendants, not only itself.
+ */
+export function isWithinRoot(p: string, root: string): boolean {
+  if (p === root) return true;
+  return p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
 export class PolicyEngine {
   private _policy: ZoraPolicy;
   private readonly _homeDir: string;
@@ -386,8 +395,8 @@ export class PolicyEngine {
     const fsPolicy = this._policy.filesystem;
 
     // 1. Resolve path (expand ~ and make absolute)
-    let absolutePath = this._resolveHome(targetPath);
-    absolutePath = path.resolve(absolutePath);
+    const homeResolved = this._resolveHome(targetPath);
+    const absolutePath = path.resolve(homeResolved);
 
     // 2. Canonicalize (#216). Judging only the final component let a symlinked
     //    ANCESTOR (allowed/link -> /outside) pass. The deepest existing ancestor
@@ -397,7 +406,14 @@ export class PolicyEngine {
     //    outside what a path check can guarantee.
     let realPath: string;
     try {
-      realPath = this._canonicalize(absolutePath);
+      // Target consistency (#216): path.resolve() collapses '..' lexically, but
+      // the OS applies '..' AFTER following a symlink (link/../x is not the
+      // lexical parent's x). When the raw input has a '..' segment, resolve the
+      // RAW string with the OS so the policy judges what the operation opens;
+      // if that cannot be resolved the input is ambiguous and is denied.
+      realPath = /(^|[\\/])\.\.([\\/]|$)/.test(homeResolved)
+        ? fs.realpathSync(path.isAbsolute(homeResolved) ? homeResolved : `${process.cwd()}${path.sep}${homeResolved}`)
+        : this._canonicalize(absolutePath);
     } catch (err: unknown) {
       return {
         allowed: false,
@@ -952,11 +968,11 @@ export class PolicyEngine {
 
   private _isWithinAllowedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
     return policy.allowed_paths.some(allowed =>
-      this._rootForms(allowed, canonical, false).some(r => p === r || p.startsWith(r + path.sep)));
+      this._rootForms(allowed, canonical, false).some(r => isWithinRoot(p, r)));
   }
 
   private _isWithinDeniedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
     return policy.denied_paths.some(denied =>
-      this._rootForms(denied, canonical, true).some(r => p === r || p.startsWith(r + path.sep)));
+      this._rootForms(denied, canonical, true).some(r => isWithinRoot(p, r)));
   }
 }
