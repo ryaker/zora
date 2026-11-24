@@ -271,9 +271,19 @@ export class TelegramGateway {
   connectApprovalQueue(queue: ApprovalQueue): void {
     this._approvalQueue = queue;
     queue.setSendHandler(async (message: string) => {
+      // #218: report how many chats were actually reached. No known chat, or
+      // every send failing, means nobody can approve, and the queue denies at
+      // once instead of waiting out the timeout.
+      let delivered = 0;
       for (const [, chatId] of this._chatIds) {
-        await this._bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        try {
+          await this._bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+          delivered++;
+        } catch (err) {
+          log.warn({ err }, 'Approval request send failed for a chat');
+        }
       }
+      return delivered;
     });
     log.info('ApprovalQueue connected to Telegram gateway');
   }
@@ -282,6 +292,8 @@ export class TelegramGateway {
    * Stops the bot.
    */
   async stop(): Promise<void> {
+    // #218: pending approvals can no longer be answered once polling stops.
+    this._approvalQueue?.clearSendHandler();
     await this._bot.stopPolling();
   }
 }

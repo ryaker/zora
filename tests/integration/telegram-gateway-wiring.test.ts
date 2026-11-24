@@ -137,6 +137,26 @@ describe('TelegramGateway.connectApprovalQueue()', () => {
     await gateway.stop();
   });
 
+  it('#218: denies at once when no chat is known to receive the request', async () => {
+    gateway.connectApprovalQueue(queue);
+    await expect(
+      queue.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' }),
+    ).resolves.toBe(false);
+    expect(queue.getPendingCount()).toBe(0);
+  });
+
+  it('#218: stop() denies pending approvals that can no longer be answered', async () => {
+    const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
+    q.setSendHandler(async () => 1);
+    gateway.connectApprovalQueue(q);
+    // Replace the transport with one that reports a reached approver, then stop the gateway.
+    q.setSendHandler(async () => 1);
+    const pending = q.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' });
+    await new Promise((r) => setTimeout(r, 10));
+    await gateway.stop();
+    await expect(pending).resolves.toBe(false);
+  });
+
   it('connectApprovalQueue() calls queue.setSendHandler()', () => {
     const spy = vi.spyOn(queue, 'setSendHandler');
 
