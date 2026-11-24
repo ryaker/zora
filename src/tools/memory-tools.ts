@@ -25,12 +25,13 @@ export function createMemoryTools(
   memoryManager: MemoryManager,
   validationPipeline: ValidationPipeline,
   graph?: GraphMemoryClient | null,
+  graphPolicy?: GraphExpansionPolicy,
 ): CustomToolDefinition[] {
   const structuredMemory = memoryManager.structuredMemory;
 
   return [
     createMemorySaveTool(structuredMemory, validationPipeline),
-    createMemorySearchTool(memoryManager, graph ?? null),
+    createMemorySearchTool(memoryManager, graph ?? null, graphPolicy),
     createMemoryForgetTool(memoryManager),
   ];
 }
@@ -121,8 +122,25 @@ function createMemorySaveTool(
   };
 }
 
-/** Cap on graph-expanded candidates per search (#194c). */
+/** Cap on graph-expanded candidates per search, across entity + relation lookups (#194c). */
 const MAX_GRAPH_CANDIDATES = 20;
+
+/** Structured-memory identity shape; anything else from the graph is dropped (#194c). */
+const MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Trusted source-eligibility check for graph-proposed memories (#194c).
+ * Resolving via peekItem proves existence only, not that the source may be
+ * surfaced here. Graph expansion is INERT unless the runtime supplies this.
+ */
+export interface GraphExpansionPolicy {
+  isSourceEligible(item: MemoryItem): boolean;
+}
+
+/** Case-insensitive mention check: re-validates against CURRENT item content. */
+function mentions(item: MemoryItem, name: string): boolean {
+  return item.summary.toLowerCase().includes(name.toLowerCase());
+}
 
 function parseEntity(raw: unknown): EntityRecord | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -134,6 +152,7 @@ function parseEntity(raw: unknown): EntityRecord | null {
 function createMemorySearchTool(
   memoryManager: MemoryManager,
   graph: GraphMemoryClient | null,
+  graphPolicy?: GraphExpansionPolicy,
 ): CustomToolDefinition {
   return {
     name: 'memory_search',
@@ -165,8 +184,8 @@ function createMemorySearchTool(
         entity: {
           type: 'object',
           description:
-            'Optional (#194c): also return memories that evidence this entity, e.g. {"name":"Zora","kind":"project"}. ' +
-            'Ignored unless ontology memory is enabled.',
+            'Optional (#194c): also return PROVISIONAL candidate memories linked to this entity, e.g. {"name":"Zora","kind":"project"}. ' +
+            'Candidates are re-checked against current content but are not verified facts. Ignored unless ontology memory is enabled.',
           properties: {
             name: { type: 'string' },
             kind: { type: 'string', enum: ['person', 'project', 'tool', 'concept'] },
@@ -175,7 +194,7 @@ function createMemorySearchTool(
         relation: {
           type: 'object',
           description:
-            'Optional (#194c): also return memories asserting this relation, e.g. ' +
+            'Optional (#194c): also return PROVISIONAL candidate memories linked to this relation (both entities must appear in current content), e.g. ' +
             '{"from":{"name":"Zora","kind":"project"},"to":{"name":"SparrowDB","kind":"tool"},"predicate":"uses"}. ' +
             'Ignored unless ontology memory is enabled.',
           properties: {
@@ -223,31 +242,45 @@ function createMemorySearchTool(
       // (peekItem: archived/forgotten items don't resolve) and pass the type filter
       // before it can be returned. Nothing the graph names is cited unless it is
       // in that authorized set. Flag off => client returns [] => no change.
-      const graphIds: string[] = [];
-      if (graph?.ontologyEnabled) {
+      // Inert unless ontology is on AND the runtime supplied a source-eligibility policy.
+      // One shared budget; any graph failure discards ALL graph candidates (lexical-only).
+      const room = Math.max(0, limit - scores.length);
+      const graphItems: MemoryItem[] = [];
+      if (graph?.ontologyEnabled && graphPolicy && room > 0) {
         const entity = parseEntity(input.entity);
         const rel = input.relation as Record<string, unknown> | undefined;
         const from = parseEntity(rel?.from);
         const to = parseEntity(rel?.to);
         const predicate = typeof rel?.predicate === 'string' ? rel.predicate.trim() : '';
+        const cands: Array<{ id: string; names: string[] }> = [];
         try {
-          if (entity) graphIds.push(...(await graph.sourcesOf(entity.name, entity.kind, MAX_GRAPH_CANDIDATES)));
-          if (from && to && predicate) {
-            graphIds.push(...(await graph.relationSources(from, to, predicate, MAX_GRAPH_CANDIDATES)));
+          let budget = Math.min(MAX_GRAPH_CANDIDATES, room);
+          if (entity) {
+            const ids = await graph.sourcesOf(entity.name, entity.kind, budget);
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [entity.name] });
+            budget -= Math.min(ids.length, budget);
+          }
+          if (from && to && predicate && budget > 0) {
+            const ids = await graph.relationSources(from, to, predicate, budget);
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [from.name, to.name] });
           }
         } catch {
-          // Graph is an accelerator, never a dependency: fall back to lexical results.
+          cands.length = 0; // partial failure => lexical-only, per documented fallback
         }
-      }
-      const seen = new Set(scores.map(s => s.itemId));
-      const graphItems: MemoryItem[] = [];
-      for (const id of graphIds) {
-        if (seen.has(id) || typeof id !== 'string') continue;
-        seen.add(id);
-        const item = await memoryManager.structuredMemory.peekItem(id);
-        if (!item) continue;
-        if (typeFilter && item.type !== typeFilter) continue;
-        graphItems.push(item);
+        const seen = new Set(scores.map(s => s.itemId));
+        for (const { id, names } of cands) {
+          if (graphItems.length >= room) break;
+          if (typeof id !== 'string' || !MEMORY_ID_RE.test(id) || seen.has(id)) continue;
+          seen.add(id);
+          const item = await memoryManager.structuredMemory.peekItem(id);
+          if (!item) continue;
+          if (typeFilter && item.type !== typeFilter) continue;
+          // Unscored candidates cannot satisfy a score floor.
+          if (minScore !== undefined) continue;
+          if (!graphPolicy.isSourceEligible(item)) continue;
+          if (!names.every(n => mentions(item, n))) continue; // stale-evidence guard
+          graphItems.push(item);
+        }
       }
 
       if (scores.length === 0 && graphItems.length === 0) {
@@ -278,6 +311,7 @@ function createMemorySearchTool(
           score: null,
           created: item.created_at,
           via: 'graph',
+          provisional: true, // candidate only; not a verified fact, not a citation grant
         });
       }
 
