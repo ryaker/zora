@@ -22,7 +22,7 @@
 
 | Package | Version | Purpose | Used In |
 |---|---|---|---|
-| @anthropic-ai/claude-agent-sdk | ^0.3.232 | Claude LLM execution, streaming, in-process MCP tool server, PreToolUse/PostToolUse hooks | src/providers/claude-provider.ts, src/tools/zora-mcp-server.ts, src/hooks/sdk-hook-bridge.ts |
+| @anthropic-ai/claude-agent-sdk | ^0.3.330 | Claude LLM execution, streaming, in-process MCP tool server, PreToolUse/PostToolUse hooks | src/providers/claude-provider.ts, src/tools/zora-mcp-server.ts, src/hooks/sdk-hook-bridge.ts |
 | commander | ^14.0.3 | CLI argument parsing | src/cli/index.ts |
 | express | ^4.21.2 | Dashboard REST API server | src/dashboard/server.ts |
 | pino | ^10.3.1 | Structured JSON logger | src/utils/logger.ts |

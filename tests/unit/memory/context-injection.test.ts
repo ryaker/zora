@@ -87,6 +87,22 @@ describe('Context Injection — MEM-13', () => {
       expect(context.some(c => c.includes('Zora uses pino for logging'))).toBe(false);
     });
 
+    it('names tools as the SDK exposes them and does not promise availability (#169)', async () => {
+      const { createMemoryTools } = await import('../../../src/tools/memory-tools.js');
+      const { qualifyZoraToolName } = await import('../../../src/tools/zora-mcp-server.js');
+      // Names must match the actual registered definitions, not hand-typed strings.
+      const registered = createMemoryTools(manager, {} as never).map(t => t.name);
+      expect(registered).toEqual(expect.arrayContaining(['memory_search', 'memory_save']));
+
+      const summary = (await manager.loadContext()).find(c => c.includes('[MEMORY]')) ?? '';
+      for (const name of ['memory_search', 'memory_save', 'recall_context']) {
+        expect(summary).toContain(qualifyZoraToolName(name));
+        // No bare-name instruction left behind.
+        expect(summary).not.toMatch(new RegExp(`(?<!__)Use ${name}`));
+      }
+      expect(summary).toContain('When available');
+    });
+
     it('includes all populated tiers as index info', async () => {
       // Tier 1
       const ltPath = path.join(baseDir, config.long_term_file);

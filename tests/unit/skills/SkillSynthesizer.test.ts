@@ -14,6 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { SkillSynthesizer, SKILL_THRESHOLD } from '../../../src/skills/SkillSynthesizer.js';
 import { hashContent } from '../../../src/skills/SkillsLock.js';
+import { ApprovalQueue } from '../../../src/core/approval-queue.js';
 
 // ─── shouldSynthesize ────────────────────────────────────────────────
 
@@ -278,5 +279,120 @@ describe('SkillSynthesizer.maybeGenerateSkill without a confirmation route (LEAN
     const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider, skipConfirmation: true });
     await synth.maybeGenerateSkill(longSession);
     expect(execute).toHaveBeenCalled();
+  });
+});
+
+// ─── #174: enabled-but-senderless approval queue ──────────────────────
+
+describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot ask (#174)', () => {
+  const longSession = { taskDescription: 'deploy the thing', toolCalls: 20, turns: 20 };
+  const cfg = { enabled: true, timeoutMs: 1000, retryAsApproval: false, retryWindowMs: 0 };
+
+  async function run(queue: ApprovalQueue) {
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try {
+      const execute = vi.fn(async function* () { /* no events */ });
+      const provider = { name: 'fake', execute } as unknown as import('../../../src/types.js').LLMProvider;
+      const synth = new SkillSynthesizer({ baseDir: await fs.mkdtemp(path.join(os.tmpdir(), 'zs-')), provider });
+      synth.setApprovalQueue(queue);
+      await synth.maybeGenerateSkill(longSession);
+      return execute;
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+  }
+
+  it('skips synthesis when the queue is enabled but has no send handler', async () => {
+    expect(await run(new ApprovalQueue(cfg))).not.toHaveBeenCalled();
+  });
+
+  it('still synthesizes once a send handler is wired', async () => {
+    const q = new ApprovalQueue(cfg);
+    q.setSendHandler(async () => {});
+    expect(await run(q)).toHaveBeenCalled();
+  });
+
+  it('still synthesizes when a blanket grant covers it, even with no sender', async () => {
+    const q = new ApprovalQueue(cfg);
+    q.setSessionBlanketAllow(80);
+    expect(await run(q)).toHaveBeenCalled();
+  });
+
+  it('canDecide is false for a disabled queue and never approves anything itself', () => {
+    const q = new ApprovalQueue({ ...cfg, enabled: false });
+    q.setSendHandler(async () => {});
+    expect(q.canDecide({ score: 50 })).toBe(false);
+  });
+});
+
+// ─── #201 review text / card / flow ──────────────────────────────────
+
+import {
+  buildLocalReviewText, sanitizeDisplay,
+} from '../../../src/skills/SkillSynthesizer.js';
+
+describe('skill review text (#201)', () => {
+  const content = '---\nname: demo\ndescription: Does a *demo* thing\n---\n# Demo\nbody';
+  const session = { taskDescription: 'SECRET-PROMPT refactor\x1b[31m the thing', toolCalls: 9, turns: 4 };
+
+  it('local text shows the FULL content, hash, size and sanitizes controls', () => {
+    const big = `${content}\n${'a'.repeat(5000)}\x1b[2J‮`;
+    const t = buildLocalReviewText({ name: 'demo', content: big, session, destPath: '/h/skills/demo/SKILL.md' });
+    expect(t).toContain('a'.repeat(5000));
+    expect(t).toContain(hashContent(big));
+    expect(t).not.toMatch(/[\x1b‮]/);
+    expect(t).toContain('Source task: SECRET-PROMPT');
+  });
+
+  it('sanitizeDisplay keeps newline/tab and removes ESC and bidi', () => {
+    expect(sanitizeDisplay('a\n\tb\x1b‮c')).toBe('a\n\tb��c');
+  });
+});
+
+describe('SkillSynthesizer approval flow (#201)', () => {
+  const skill = '---\nname: flow-demo\ndescription: Flow *demo*\n---\n# Flow\nsteps';
+  const session = { taskDescription: 'SECRET-PROMPT deploy', toolCalls: 20, turns: 20 };
+  const cfg = { enabled: true, timeoutMs: 2000, retryAsApproval: false, retryWindowMs: 0 };
+
+  async function flow(decision: 'allow' | 'deny') {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zs-flow-'));
+    const provider = {
+      name: 'fake',
+      async *execute() { yield { type: 'text', timestamp: new Date(), content: { text: skill } }; },
+    } as unknown as import('../../../src/types.js').LLMProvider;
+    const q = new ApprovalQueue(cfg);
+    const sent: string[] = [];
+    let writtenWhenAsked: boolean | undefined;
+    q.setSendHandler(async (msg: string) => {
+      sent.push(msg);
+      writtenWhenAsked = await fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md')).then(() => true, () => false);
+      const token = /ZORA-[A-Z0-9]+/.exec(msg)![0];
+      q.handleReply(token, decision);
+    });
+    const synth = new SkillSynthesizer({ baseDir, provider });
+    synth.setApprovalQueue(q);
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try { await synth.maybeGenerateSkill(session); } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+    return { baseDir, sent, writtenWhenAsked };
+  }
+
+  it('approve: nothing written before the decision; file and lock hash match the reviewed text', async () => {
+    const { baseDir, sent, writtenWhenAsked } = await flow('allow');
+    expect(writtenWhenAsked).toBe(false);
+    // Remote approval text is intentionally unchanged by #201 (local TTY card only).
+    expect(sent[0]).toContain('Save auto-generated skill: flow-demo');
+    const onDisk = await fs.readFile(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'), 'utf-8');
+    expect(onDisk).toBe(skill);
+    const lock = JSON.parse(await fs.readFile(path.join(baseDir, 'skills', 'skills.lock.json'), 'utf-8'));
+    expect(JSON.stringify(lock)).toContain(hashContent(skill));
+  });
+
+  it('deny: nothing is written', async () => {
+    const { baseDir } = await flow('deny');
+    await expect(fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'))).rejects.toThrow();
   });
 });

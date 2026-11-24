@@ -12,12 +12,20 @@
  *     (:Decision {summary, rationale, ts})
  *     (:Failure  {tool, signature, hint, ts})
  *
+ *   Auto-ontology (#194) lives in labels of its own so legacy recall can never
+ *   see it: nothing that reads Entity/RELATES_TO touches these.
+ *     (:Memory    {memId, ts})                          source memory anchor
+ *     (:OntEntity {okey, name, kind})                   okey = kind + name; one node per
+ *                                                       (kind, name), never reclassified
+ *     (:Assertion {akey, fromKey, toKey, predicate, memId, ts})
+ *                                                       one node per (memory, from, predicate, to)
+ *
  *   Edges
  *     (:Task)-[:MENTIONS]->(:Entity)
  *     (:Task)-[:PRODUCED]->(:Decision)
  *     (:Task)-[:HIT]->(:Failure)
  *     (:Decision)-[:SUPERSEDES]->(:Decision)
- *     (:Entity)-[:RELATES_TO {relKind}]->(:Entity)
+ *     (:OntEntity)-[:EVIDENCED_BY]->(:Memory)
  *
  * Property names are unique across the whole ontology, not merely per label.
  * SparrowDB resolves a projected property by name rather than by the pattern
@@ -26,11 +34,11 @@
  */
 
 /** Node labels in the ontology. */
-export const NODE_LABELS = ['Entity', 'Task', 'Decision', 'Failure'] as const;
+export const NODE_LABELS = ['Entity', 'Task', 'Decision', 'Failure', 'Memory', 'OntEntity', 'Assertion'] as const;
 export type NodeLabel = (typeof NODE_LABELS)[number];
 
 /** Relationship types in the ontology. */
-export const EDGE_TYPES = ['MENTIONS', 'PRODUCED', 'HIT', 'SUPERSEDES', 'RELATES_TO'] as const;
+export const EDGE_TYPES = ['MENTIONS', 'PRODUCED', 'HIT', 'SUPERSEDES', 'RELATES_TO', 'EVIDENCED_BY'] as const;
 export type EdgeType = (typeof EDGE_TYPES)[number];
 
 /** The kinds of thing an `(:Entity)` may be. */
@@ -73,13 +81,26 @@ export interface FailureRecord {
   ts: number;
 }
 
+/**
+ * A source memory and the facts auto-extracted from it (#194).
+ * `memId` is the memory's own ID, so every entity and relation can be traced
+ * back to the memory it came from and nothing else.
+ */
+export interface MemoryFacts {
+  memId: string;
+  ts: number;
+  entities: EntityRecord[];
+  relations?: Array<{ from: EntityRecord; to: EntityRecord; kind: string }>;
+}
+
 /** A single write applied to the graph. Writes are idempotent by construction. */
 export type GraphWrite =
   | { op: 'upsertEntity'; entity: EntityRecord }
   | { op: 'recordTask'; task: TaskRecord; mentions?: EntityRecord[] }
   | { op: 'recordDecision'; decision: DecisionRecord; jobId?: string; supersedes?: string }
   | { op: 'recordFailure'; failure: FailureRecord; jobId?: string }
-  | { op: 'relateEntities'; from: EntityRecord; to: EntityRecord; kind: string };
+  | { op: 'relateEntities'; from: EntityRecord; to: EntityRecord; kind: string }
+  | { op: 'recordFacts'; facts: MemoryFacts };
 
 // ─── Query results ───────────────────────────────────────────────────
 
@@ -138,6 +159,11 @@ export interface GraphStats {
 export interface GraphMemoryConfig {
   /** Master switch. Default false. */
   enabled: boolean;
+  /**
+   * Auto-ontology switch (#194). Default false, and inert unless `enabled` is
+   * also true: provenance writes are dropped client-side otherwise.
+   */
+  ontology: boolean;
   /** Directory for the SparrowDB database. */
   path: string;
   /** Flush queued writes after this many milliseconds. */
@@ -156,6 +182,7 @@ export interface GraphMemoryConfig {
 
 export const DEFAULT_GRAPH_CONFIG: GraphMemoryConfig = {
   enabled: false,
+  ontology: false,
   path: '~/.zora/memory/graph.db',
   flushIntervalMs: 250,
   flushBatchSize: 32,
@@ -177,9 +204,12 @@ export function graphConfigFromEnv(
 ): GraphMemoryConfig {
   const flag = (env.ZORA_GRAPH_MEMORY ?? '').trim().toLowerCase();
   const enabled = flag === '1' || flag === 'true' || flag === 'on' || flag === 'yes';
+  const onto = (env.ZORA_GRAPH_ONTOLOGY ?? '').trim().toLowerCase();
+  const ontology = onto === '1' || onto === 'true' || onto === 'on' || onto === 'yes';
   return {
     ...DEFAULT_GRAPH_CONFIG,
     enabled,
+    ontology,
     ...(env.ZORA_GRAPH_MEMORY_PATH ? { path: env.ZORA_GRAPH_MEMORY_PATH } : {}),
     ...overrides,
   };
@@ -194,6 +224,8 @@ export type GraphQuery =
   | { op: 'relatedTasks'; jobId: string; limit: number }
   | { op: 'decisionChain'; summary: string; limit: number }
   | { op: 'failuresForTool'; tool: string; limit: number }
+  | { op: 'sourcesOf'; name: string; kind: EntityKind; limit: number }
+  | { op: 'relationSources'; from: EntityRecord; to: EntityRecord; predicate: string; limit: number }
   | { op: 'stats' };
 
 export type GraphQueryResult =
@@ -202,6 +234,8 @@ export type GraphQueryResult =
   | { op: 'relatedTasks'; tasks: TaskResult[] }
   | { op: 'decisionChain'; decisions: DecisionResult[] }
   | { op: 'failuresForTool'; failures: FailureResult[] }
+  | { op: 'sourcesOf'; memIds: string[] }
+  | { op: 'relationSources'; memIds: string[] }
   | { op: 'stats'; stats: GraphStats };
 
 /** Main thread → worker. */

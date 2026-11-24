@@ -38,12 +38,29 @@ export type RoutineTaskSubmitter = (options: {
 /** Default poll interval for EventTriggerManager (1 second). */
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
+interface Registration {
+  definition: RoutineDefinition;
+  /** Set when unloaded or replaced; completions from it are ignored. */
+  obsolete: boolean;
+  /** Successful runs (until.max_runs). */
+  successes: number;
+  /** Runs submitted and not yet settled; reserves capacity under max_runs. */
+  inFlight: number;
+}
+
 export class RoutineManager {
   private readonly _routinesDir: string;
   private readonly _submitTask: RoutineTaskSubmitter;
   private readonly _scheduledTasks: Map<string, ScheduledTask> = new Map();
   /** EventTriggerManager handles all file_change trigger routines. */
   private readonly _eventTriggers: EventTriggerManager;
+  /**
+   * #202: `until` state is scoped to one registration (one load of a routine),
+   * not to its name. A run captures its registration at trigger time, so a run
+   * that settles after a same-name reload cannot count against, or unload, the
+   * replacement.
+   */
+  private readonly _registrations: Map<string, Registration> = new Map();
   /** Tracks which watch_paths are associated with each routine name for logging. */
   private readonly _watchedRoutines: Map<string, string> = new Map();
 
@@ -92,6 +109,9 @@ export class RoutineManager {
    * switching trigger types (cron ↔ file_change) does not leave both active.
    */
   private _unloadRoutine(name: string): void {
+    const reg = this._registrations.get(name);
+    if (reg) reg.obsolete = true;
+    this._registrations.delete(name);
     if (this._scheduledTasks.has(name)) {
       this._scheduledTasks.get(name)!.destroy();
       this._scheduledTasks.delete(name);
@@ -150,7 +170,7 @@ export class RoutineManager {
    * so the Router can select the appropriate provider.
    */
   scheduleRoutine(definition: RoutineDefinition): void {
-    const { routine, task } = definition;
+    const { routine } = definition;
 
     if (!routine.schedule) {
       log.error(
@@ -166,14 +186,11 @@ export class RoutineManager {
       this._scheduledTasks.delete(routine.name);
     }
 
+    const reg = this._register(definition);
     const schedule = routine.schedule;
     const scheduledTask = cron.schedule(schedule, async () => {
       try {
-        await this._submitTask({
-          prompt: task.prompt,
-          model: routine.model_preference,
-          maxCostTier: routine.max_cost_tier,
-        });
+        await this._runAndCheck(definition, reg);
       } catch (err) {
         log.error({ routine: routine.name, err }, 'Routine execution failed');
       }
@@ -186,12 +203,66 @@ export class RoutineManager {
    * Directly runs a routine's task through the submitter (for testing and manual triggers).
    */
   async runRoutine(definition: RoutineDefinition): Promise<string> {
+    const reg = this._registrations.get(definition.routine.name);
+    // Captured now, so a completion after a same-name reload is ignored (#202).
+    return this._runAndCheck(definition, reg);
+  }
+
+  /** Replace any registration for this routine name with a fresh one. */
+  private _register(definition: RoutineDefinition): Registration {
+    const name = definition.routine.name;
+    const prev = this._registrations.get(name);
+    if (prev) prev.obsolete = true;
+    const reg: Registration = { definition, obsolete: false, successes: 0, inFlight: 0 };
+    this._registrations.set(name, reg);
+    return reg;
+  }
+
+  /**
+   * Submit one run, then evaluate `until` on its result (#202). Only a run
+   * that returned counts; a thrown run neither counts nor stops, and releases
+   * the capacity it reserved. For `max_runs`, capacity is reserved before
+   * submission so overlapping triggers cannot admit more than the cap.
+   */
+  private async _runAndCheck(definition: RoutineDefinition, reg?: Registration): Promise<string> {
     const { routine, task } = definition;
-    return this._submitTask({
-      prompt: task.prompt,
-      model: routine.model_preference,
-      maxCostTier: routine.max_cost_tier,
-    });
+    const until = routine.until;
+    // A stale scheduled/watch callback (unloaded, reloaded or stopAll'd) must not submit (#202).
+    if (reg?.obsolete) return '';
+    const tracked = until && reg ? reg : undefined;
+
+    if (tracked && until && until.max_runs !== undefined && tracked.successes + tracked.inFlight >= until.max_runs) {
+      log.info({ routine: routine.name }, 'Routine max_runs capacity reserved — skipping overlapping trigger');
+      return '';
+    }
+    if (tracked) tracked.inFlight++;
+
+    let result: string;
+    try {
+      result = await this._submitTask({
+        prompt: task.prompt,
+        model: routine.model_preference,
+        maxCostTier: routine.max_cost_tier,
+      });
+    } finally {
+      if (tracked) tracked.inFlight--;
+    }
+
+    // Obsolete registration (unloaded/reloaded while running): ignore completion.
+    if (tracked && until && !tracked.obsolete) {
+      tracked.successes++;
+      const runs = tracked.successes;
+      const hitContains = until.contains !== undefined && String(result).includes(until.contains);
+      const hitMax = until.max_runs !== undefined && runs >= until.max_runs;
+      if (hitContains || hitMax) {
+        log.info(
+          { routine: routine.name, runs, reason: hitContains ? 'contains' : 'max_runs' },
+          'Routine until-condition met — unloading',
+        );
+        this._unloadRoutine(routine.name);
+      }
+    }
+    return result;
   }
 
   /**
@@ -200,7 +271,7 @@ export class RoutineManager {
    * the same RoutineTaskSubmitter used by cron-scheduled routines.
    */
   watchRoutine(definition: RoutineDefinition): void {
-    const { routine, task } = definition;
+    const { routine } = definition;
 
     if (!routine.watch_path) {
       log.error(
@@ -211,6 +282,7 @@ export class RoutineManager {
     }
 
     const debounceMs = this._parseDebounceMs(routine.debounce ?? 0);
+    const reg = this._register(definition);
 
     // Unwatch any previous registration for this routine name
     const prevPath = this._watchedRoutines.get(routine.name);
@@ -236,11 +308,7 @@ export class RoutineManager {
 
     this._eventTriggers.watch(watchPath, debounceMs, (changedPath: string) => {
       log.info({ routine: routine.name, changedPath }, 'File-change event triggered routine');
-      void this._submitTask({
-        prompt: task.prompt,
-        model: routine.model_preference,
-        maxCostTier: routine.max_cost_tier,
-      }).catch((err: unknown) => {
+      void this._runAndCheck(definition, reg).catch((err: unknown) => {
         log.error({ routine: routine.name, changedPath, err }, 'Event-triggered routine execution failed');
       });
     });
@@ -310,6 +378,20 @@ export class RoutineManager {
       }
     }
 
+    // #202: `until` must be well-formed or the routine is rejected.
+    if (r['until'] !== undefined) {
+      const u = r['until'];
+      const c = (u as Record<string, unknown> | null)?.['contains'];
+      const m = (u as Record<string, unknown> | null)?.['max_runs'];
+      const okShape = u !== null && typeof u === 'object' && !Array.isArray(u);
+      const okContains = c === undefined || (typeof c === 'string' && c.length >= 1 && c.length <= 200);
+      const okMax = m === undefined || (typeof m === 'number' && Number.isInteger(m) && m >= 1);
+      if (!okShape || !okContains || !okMax || (c === undefined && m === undefined)) {
+        log.error({ routine: r['name'] }, 'Invalid until (need contains: 1-200 chars and/or max_runs: positive integer) — rejecting');
+        return false;
+      }
+    }
+
     // Validate optional max_cost_tier if present
     if (r['max_cost_tier'] !== undefined) {
       const validTiers = ['free', 'included', 'metered', 'premium'];
@@ -331,6 +413,8 @@ export class RoutineManager {
       task.destroy();
     }
     this._scheduledTasks.clear();
+    for (const reg of this._registrations.values()) reg.obsolete = true;
+    this._registrations.clear();
 
     // Stop all file-change watchers and clear tracking state.
     this._eventTriggers.unwatchAll();

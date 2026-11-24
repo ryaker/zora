@@ -61,7 +61,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { createGraphTools } from '../tools/graph-tools.js';
-import { GraphMemoryClient, graphConfigFromEnv } from '../memory/graph/index.js';
+import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT, enrichMemoriesWithOntology } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -97,6 +97,8 @@ import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalResponseGateway } from '../channels/signal/signal-response-gateway.js';
+import type { SettingsNotInEffectNotice } from '../providers/claude-provider.js';
+import { ClaudeProvider } from '../providers/claude-provider.js';
 
 const log = createLogger('orchestrator');
 
@@ -906,6 +908,14 @@ export class Orchestrator {
     // SDK calls the tool `Bash`. Until RateLimitHook started matching through
     // toolFilterMatches(), `l.tool === ctx.tool` was false on every real call
     // and the 60-shell-calls-per-minute ceiling had never once been applied.
+    // #219: settingSources can silently drop hooks/permission rules/sandbox
+    // settings; the SDK says so in a system message that used to be ignored.
+    // Record it in the hash-chained audit log so a weakened policy is visible.
+    for (const p of this._providers) {
+      if (p instanceof ClaudeProvider) {
+        p.setSystemNoticeHandler((notice) => this._auditSettingsNotice(notice));
+      }
+    }
     this._toolHookRunner.register(new RateLimitHook([
       { tool: 'bash', maxCalls: 60, windowMs: 60_000 },
       { tool: 'http_request', maxCalls: 100, windowMs: 60_000 },
@@ -2233,9 +2243,17 @@ export class Orchestrator {
     const agentWorkspaceCwd = this._config.agent.workspace
       ? this._config.agent.workspace.replace(/^~/, os.homedir())
       : process.cwd();
-    const extractFn = async (prompt: string): Promise<string> => {
+    const makeExtractFn = (systemPrompt: string, opts: { disableTools?: boolean } = {}) => async (prompt: string, signal?: AbortSignal): Promise<string> => {
+      // Caller-owned deadline: aborting this cancels the SDK request itself.
+      const abortController = new AbortController();
+      if (signal) {
+        if (signal.aborted) abortController.abort();
+        else signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      }
       const extractLoop = new ExecutionLoop({
-        systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+        // #219: attribute to the originating job rather than 'system'.
+        onSettingsNotice: (n) => this._auditSettingsNotice({ ...n, jobId: taskContext.jobId, source: 'execution-loop:extraction' }),
+        systemPrompt,
         // SEC-23: a single-shot text call over conversation content that may
         // itself be attacker-influenced. It has no business calling a tool, and
         // until now it silently inherited ExecutionLoop's DEFAULT_TOOLS —
@@ -2252,10 +2270,17 @@ export class Orchestrator {
         }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
+        // #194: optional ontology enrichment disables the built-in tool surface at the SDK
+        // (`tools: []`, not just an empty allowlist) and ignores settings-inherited MCP servers.
+        ...(opts.disableTools ? { tools: [], strictMcpConfig: true } : {}),
+        abortController,
       });
       return extractLoop.run(prompt);
     };
 
+    const extractFn = makeExtractFn(
+      'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+    );
     const pipeline = new ExtractionPipeline(extractFn);
     const result = await pipeline.extract(messages, categoryNames);
 
@@ -2273,9 +2298,10 @@ export class Orchestrator {
 
     // Persist each new item
     let savedCount = 0;
+    const persisted: Array<{ id: string; summary: string; createdAt: number }> = [];
     for (const item of uniqueItems) {
       try {
-        await this._memoryManager.structuredMemory.createItem({
+        const created = await this._memoryManager.structuredMemory.createItem({
           type: item.type,
           summary: item.summary,
           source: item.source || taskContext.jobId,
@@ -2284,6 +2310,12 @@ export class Orchestrator {
           category: item.category,
         });
         savedCount++;
+        // Only items whose save succeeded reach enrichment (a throw above skips this).
+        // #194: ground on what was committed (not the pre-save item) and use the persisted
+        // creation time; an unparseable timestamp skips enrichment rather than faking "now".
+        const createdAt = Date.parse(created.created_at);
+        if (!Number.isFinite(createdAt)) continue;
+        persisted.push({ id: created.id, summary: created.summary, createdAt });
       } catch (err) {
         log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
       }
@@ -2294,6 +2326,25 @@ export class Orchestrator {
       await this._memoryManager.appendDailyNote(
         `Extracted ${savedCount} memory item(s) from job ${taskContext.jobId}`,
       );
+    }
+
+    // #194: ontology enrichment runs only after ALL ordinary persistence is done,
+    // so it can never delay a memory save. Default-off (needs the graph tier and
+    // ZORA_GRAPH_ONTOLOGY); bounded by item count and wall clock; reuses the
+    // tool-less, policy-gated extraction call (toolSurface 'none'); facts are
+    // grounded in the source text and carry the memory id as provenance.
+    const graph = this._graphClient;
+    if (graph?.ontologyEnabled && persisted.length > 0) {
+      try {
+        await enrichMemoriesWithOntology(
+          persisted,
+          new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT, { disableTools: true })),
+          facts => graph.recordFacts(facts),
+          { isEnabled: () => graph.ontologyEnabled },
+        );
+      } catch (err) {
+        log.debug({ err, jobId: taskContext.jobId }, 'Ontology enrichment failed');
+      }
     }
 
     log.info(
@@ -2659,6 +2710,20 @@ export class Orchestrator {
 
   // ── Private helpers ──────────────────────────────────────────────
 
+  /** #219: metadata-only audit row for the SDK's settings_not_in_effect notice. */
+  private _auditSettingsNotice(notice: SettingsNotInEffectNotice): void {
+    if (!this._auditLogger) return;
+    void this._auditLogger.log({
+      jobId: notice.jobId ?? 'system',
+      eventType: 'notification',
+      timestamp: new Date().toISOString(),
+      provider: notice.source,
+      toolName: notice.tag,
+      parameters: {},
+      result: notice.sessionId ? { sessionId: notice.sessionId } : {},
+    }).catch(() => { /* best effort */ });
+  }
+
   /**
    * SEC-23: build the ExecutionLoop the heartbeat runs on.
    *
@@ -2678,6 +2743,7 @@ export class Orchestrator {
    */
   private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): ExecutionLoop {
     return new ExecutionLoop({
+        onSettingsNotice: (n) => this._auditSettingsNotice(n),
       systemPrompt: 'You are Zora, a helpful autonomous agent.',
       // Routed through the one shared builder so this path cannot drift away
       // from the provider path again.
@@ -2708,6 +2774,7 @@ export class Orchestrator {
       : process.cwd();
     return async (prompt: string): Promise<string> => {
       const compressLoop = new ExecutionLoop({
+        onSettingsNotice: (n) => this._auditSettingsNotice(n),
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
         // SEC-23: same reasoning as the extraction loop above — a maxTurns:1
         // summarisation call over untrusted conversation text gets no tool
