@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ClaudeProvider,
   extractSettingsNotice,
-  SETTINGS_NOTICE_MAX_CHARS,
 } from '../../../src/providers/claude-provider.js';
 import type { SDKMessage, SDKQuery, ProviderConfig } from '../../../src/providers/claude-provider.js';
 
@@ -26,18 +25,20 @@ const task = {
 } as never;
 
 describe('settings_not_in_effect notice (#219)', () => {
-  it('extracts only the exact tagged informational message', () => {
-    expect(extractSettingsNotice(notice)?.content).toBe('hooks skipped');
-    expect(extractSettingsNotice({ ...notice, tag: 'other' })).toBeNull();
-    expect(extractSettingsNotice({ ...notice, subtype: 'init' })).toBeNull();
-    expect(extractSettingsNotice({ ...notice, type: 'assistant' })).toBeNull();
-    expect(extractSettingsNotice(null)).toBeNull();
+  const ctx = { source: 'claude', jobId: 'job-9' };
+
+  it('extracts only the exact tagged informational message, metadata only', () => {
+    expect(extractSettingsNotice({ ...notice, session_id: 's1' }, ctx))
+      .toEqual({ tag: 'settings_not_in_effect', source: 'claude', jobId: 'job-9', sessionId: 's1' });
+    expect(extractSettingsNotice({ ...notice, tag: 'other' }, ctx)).toBeNull();
+    expect(extractSettingsNotice({ ...notice, subtype: 'init' }, ctx)).toBeNull();
+    expect(extractSettingsNotice({ ...notice, type: 'assistant' }, ctx)).toBeNull();
+    expect(extractSettingsNotice(null, ctx)).toBeNull();
   });
 
-  it('caps the carried text and tolerates non-string content', () => {
-    expect(extractSettingsNotice({ ...notice, content: 'x'.repeat(5000) })!.content)
-      .toHaveLength(SETTINGS_NOTICE_MAX_CHARS);
-    expect(extractSettingsNotice({ ...notice, content: 42 })!.content).toBe('');
+  it('never carries the SDK diagnostic text', () => {
+    const n = extractSettingsNotice({ ...notice, content: 'secret diagnostic' }, ctx);
+    expect(JSON.stringify(n)).not.toContain('secret diagnostic');
   });
 
   it('invokes the handler during execute and a throwing handler does not break the task', async () => {

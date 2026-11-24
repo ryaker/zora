@@ -16,6 +16,7 @@ import {
   type McpServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '../providers/index.js';
+import { extractSettingsNotice, type SettingsNotInEffectNotice } from '../providers/claude-provider.js';
 import type { ZoraSdkHooks } from '../hooks/sdk-hook-bridge.js';
 import { buildZoraMcpServer, type CustomToolDefinition } from '../tools/zora-mcp-server.js';
 import { createLogger } from '../utils/logger.js';
@@ -115,6 +116,14 @@ export interface ZoraExecutionOptions {
   canUseTool?: SdkCanUseTool;
   permissionMode?: SdkPermissionMode;
   onMessage?: (message: SDKMessage) => void;
+  /**
+   * #219: called when the SDK reports settings_not_in_effect. This loop loads
+   * user+project settings, so it can silently lose hooks/permission rules.
+   * Metadata only; observational (a throw is swallowed).
+   */
+  onSettingsNotice?: (notice: SettingsNotInEffectNotice) => void;
+  /** #219: label for the notice's `source` (default 'execution-loop'). */
+  noticeSource?: string;
   /** ERR-05: Timeout in milliseconds for stream operations (default: 30min) */
   streamTimeout?: number;
   /**
@@ -259,6 +268,13 @@ export class ExecutionLoop {
         const msg = message as Record<string, unknown>;
         if ('session_id' in message && !sessionId && typeof msg['session_id'] === 'string') {
           sessionId = msg['session_id'];
+        }
+
+        if (this._opts.onSettingsNotice) {
+          const notice = extractSettingsNotice(message, { source: this._opts.noticeSource ?? 'execution-loop' });
+          if (notice) {
+            try { this._opts.onSettingsNotice(notice); } catch { /* observational only */ }
+          }
         }
 
         // Notify listener if registered

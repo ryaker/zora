@@ -97,6 +97,7 @@ import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalResponseGateway } from '../channels/signal/signal-response-gateway.js';
+import type { SettingsNotInEffectNotice } from '../providers/claude-provider.js';
 import { ClaudeProvider } from '../providers/claude-provider.js';
 
 const log = createLogger('orchestrator');
@@ -910,20 +911,9 @@ export class Orchestrator {
     // #219: settingSources can silently drop hooks/permission rules/sandbox
     // settings; the SDK says so in a system message that used to be ignored.
     // Record it in the hash-chained audit log so a weakened policy is visible.
-    const noticeAudit = this._auditLogger;
     for (const p of this._providers) {
       if (p instanceof ClaudeProvider) {
-        p.setSystemNoticeHandler((notice) => {
-          void noticeAudit.log({
-            jobId: 'system',
-            eventType: 'notification',
-            timestamp: new Date().toISOString(),
-            provider: p.name,
-            toolName: 'settings_not_in_effect',
-            parameters: {},
-            result: { message: notice.content },
-          }).catch(() => { /* best effort */ });
-        });
+        p.setSystemNoticeHandler((notice) => this._auditSettingsNotice(notice));
       }
     }
     this._toolHookRunner.register(new RateLimitHook([
@@ -2255,6 +2245,7 @@ export class Orchestrator {
       : process.cwd();
     const extractFn = async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
+        onSettingsNotice: (n) => this._auditSettingsNotice(n),
         systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
         // SEC-23: a single-shot text call over conversation content that may
         // itself be attacker-influenced. It has no business calling a tool, and
@@ -2679,6 +2670,20 @@ export class Orchestrator {
 
   // ── Private helpers ──────────────────────────────────────────────
 
+  /** #219: metadata-only audit row for the SDK's settings_not_in_effect notice. */
+  private _auditSettingsNotice(notice: SettingsNotInEffectNotice): void {
+    if (!this._auditLogger) return;
+    void this._auditLogger.log({
+      jobId: notice.jobId ?? 'system',
+      eventType: 'notification',
+      timestamp: new Date().toISOString(),
+      provider: notice.source,
+      toolName: notice.tag,
+      parameters: {},
+      result: notice.sessionId ? { sessionId: notice.sessionId } : {},
+    }).catch(() => { /* best effort */ });
+  }
+
   /**
    * SEC-23: build the ExecutionLoop the heartbeat runs on.
    *
@@ -2698,6 +2703,7 @@ export class Orchestrator {
    */
   private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): ExecutionLoop {
     return new ExecutionLoop({
+        onSettingsNotice: (n) => this._auditSettingsNotice(n),
       systemPrompt: 'You are Zora, a helpful autonomous agent.',
       // Routed through the one shared builder so this path cannot drift away
       // from the provider path again.
@@ -2728,6 +2734,7 @@ export class Orchestrator {
       : process.cwd();
     return async (prompt: string): Promise<string> => {
       const compressLoop = new ExecutionLoop({
+        onSettingsNotice: (n) => this._auditSettingsNotice(n),
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
         // SEC-23: same reasoning as the extraction loop above — a maxTurns:1
         // summarisation call over untrusted conversation text gets no tool
