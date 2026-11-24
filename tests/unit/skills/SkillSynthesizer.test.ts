@@ -325,3 +325,74 @@ describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot
     expect(q.canDecide({ score: 50 })).toBe(false);
   });
 });
+
+// ─── #201 review text / card / flow ──────────────────────────────────
+
+import {
+  buildLocalReviewText, sanitizeDisplay,
+} from '../../../src/skills/SkillSynthesizer.js';
+
+describe('skill review text (#201)', () => {
+  const content = '---\nname: demo\ndescription: Does a *demo* thing\n---\n# Demo\nbody';
+  const session = { taskDescription: 'SECRET-PROMPT refactor\x1b[31m the thing', toolCalls: 9, turns: 4 };
+
+  it('local text shows the FULL content, hash, size and sanitizes controls', () => {
+    const big = `${content}\n${'a'.repeat(5000)}\x1b[2J‮`;
+    const t = buildLocalReviewText({ name: 'demo', content: big, session, destPath: '/h/skills/demo/SKILL.md' });
+    expect(t).toContain('a'.repeat(5000));
+    expect(t).toContain(hashContent(big));
+    expect(t).not.toMatch(/[\x1b‮]/);
+    expect(t).toContain('Source task: SECRET-PROMPT');
+  });
+
+  it('sanitizeDisplay keeps newline/tab and removes ESC and bidi', () => {
+    expect(sanitizeDisplay('a\n\tb\x1b‮c')).toBe('a\n\tb��c');
+  });
+});
+
+describe('SkillSynthesizer approval flow (#201)', () => {
+  const skill = '---\nname: flow-demo\ndescription: Flow *demo*\n---\n# Flow\nsteps';
+  const session = { taskDescription: 'SECRET-PROMPT deploy', toolCalls: 20, turns: 20 };
+  const cfg = { enabled: true, timeoutMs: 2000, retryAsApproval: false, retryWindowMs: 0 };
+
+  async function flow(decision: 'allow' | 'deny') {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'zs-flow-'));
+    const provider = {
+      name: 'fake',
+      async *execute() { yield { type: 'text', timestamp: new Date(), content: { text: skill } }; },
+    } as unknown as import('../../../src/types.js').LLMProvider;
+    const q = new ApprovalQueue(cfg);
+    const sent: string[] = [];
+    let writtenWhenAsked: boolean | undefined;
+    q.setSendHandler(async (msg: string) => {
+      sent.push(msg);
+      writtenWhenAsked = await fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md')).then(() => true, () => false);
+      const token = /ZORA-[A-Z0-9]+/.exec(msg)![0];
+      q.handleReply(token, decision);
+    });
+    const synth = new SkillSynthesizer({ baseDir, provider });
+    synth.setApprovalQueue(q);
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    try { await synth.maybeGenerateSkill(session); } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+    }
+    return { baseDir, sent, writtenWhenAsked };
+  }
+
+  it('approve: nothing written before the decision; file and lock hash match the reviewed text', async () => {
+    const { baseDir, sent, writtenWhenAsked } = await flow('allow');
+    expect(writtenWhenAsked).toBe(false);
+    // Remote approval text is intentionally unchanged by #201 (local TTY card only).
+    expect(sent[0]).toContain('Save auto-generated skill: flow-demo');
+    const onDisk = await fs.readFile(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'), 'utf-8');
+    expect(onDisk).toBe(skill);
+    const lock = JSON.parse(await fs.readFile(path.join(baseDir, 'skills', 'skills.lock.json'), 'utf-8'));
+    expect(JSON.stringify(lock)).toContain(hashContent(skill));
+  });
+
+  it('deny: nothing is written', async () => {
+    const { baseDir } = await flow('deny');
+    await expect(fs.access(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'))).rejects.toThrow();
+  });
+});
