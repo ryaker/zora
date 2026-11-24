@@ -112,6 +112,61 @@ prompt = "say hello"
     expect(manager.scheduledCount).toBe(0);
   });
 
+  describe('until (#202)', () => {
+    const def = (until: unknown): RoutineDefinition => ({
+      routine: { name: 'r-until', schedule: '* * * * *', until } as RoutineDefinition['routine'],
+      task: { prompt: 'poll' },
+    });
+
+    it('unloads after a run whose result contains the marker', async () => {
+      manager.scheduleRoutine(def({ contains: 'DONE' }));
+      submitTaskMock.mockResolvedValueOnce('still working');
+      await manager.runRoutine(def({ contains: 'DONE' }));
+      expect(manager.scheduledCount).toBe(1);
+      submitTaskMock.mockResolvedValueOnce('all DONE here');
+      await manager.runRoutine(def({ contains: 'DONE' }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('unloads after max_runs successful runs', async () => {
+      manager.scheduleRoutine(def({ max_runs: 2 }));
+      await manager.runRoutine(def({ max_runs: 2 }));
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 2 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('failed runs do not count toward max_runs', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      submitTaskMock.mockRejectedValueOnce(new Error('boom'));
+      await expect(manager.runRoutine(def({ max_runs: 1 }))).rejects.toThrow('boom');
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('routines without until are never unloaded', async () => {
+      manager.scheduleRoutine(def(undefined));
+      for (let i = 0; i < 3; i++) await manager.runRoutine(def(undefined));
+      expect(manager.scheduledCount).toBe(1);
+    });
+
+    it.each([
+      ['empty object', '{}'],
+      ['empty contains', '{ contains = "" }'],
+      ['non-string contains', '{ contains = 5 }'],
+      ['zero max_runs', '{ max_runs = 0 }'],
+      ['fractional max_runs', '{ max_runs = 1.5 }'],
+      ['non-table', '"DONE"'],
+    ])('rejects invalid until (%s) at load', async (_n, until) => {
+      await fs.mkdir(path.join(testDir, 'routines'), { recursive: true });
+      const toml = `[routine]\nname = "bad"\nschedule = "* * * * *"\nuntil = ${until}\n[task]\nprompt = "x"\n`;
+      await fs.writeFile(path.join(testDir, 'routines', 'bad.toml'), toml, 'utf8');
+      await manager.init();
+      expect(manager.scheduledCount).toBe(0);
+    });
+  });
+
   it('passes model_preference to submitTask via runRoutine', async () => {
     const definition: RoutineDefinition = {
       routine: { name: 'r-model', schedule: '* * * * *', model_preference: 'claude-haiku' },

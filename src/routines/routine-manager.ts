@@ -44,6 +44,8 @@ export class RoutineManager {
   private readonly _scheduledTasks: Map<string, ScheduledTask> = new Map();
   /** EventTriggerManager handles all file_change trigger routines. */
   private readonly _eventTriggers: EventTriggerManager;
+  /** Successful runs per routine name, for `until.max_runs`. */
+  private readonly _runCounts: Map<string, number> = new Map();
   /** Tracks which watch_paths are associated with each routine name for logging. */
   private readonly _watchedRoutines: Map<string, string> = new Map();
 
@@ -92,6 +94,7 @@ export class RoutineManager {
    * switching trigger types (cron ↔ file_change) does not leave both active.
    */
   private _unloadRoutine(name: string): void {
+    this._runCounts.delete(name);
     if (this._scheduledTasks.has(name)) {
       this._scheduledTasks.get(name)!.destroy();
       this._scheduledTasks.delete(name);
@@ -150,7 +153,7 @@ export class RoutineManager {
    * so the Router can select the appropriate provider.
    */
   scheduleRoutine(definition: RoutineDefinition): void {
-    const { routine, task } = definition;
+    const { routine } = definition;
 
     if (!routine.schedule) {
       log.error(
@@ -169,11 +172,7 @@ export class RoutineManager {
     const schedule = routine.schedule;
     const scheduledTask = cron.schedule(schedule, async () => {
       try {
-        await this._submitTask({
-          prompt: task.prompt,
-          model: routine.model_preference,
-          maxCostTier: routine.max_cost_tier,
-        });
+        await this._runAndCheck(definition);
       } catch (err) {
         log.error({ routine: routine.name, err }, 'Routine execution failed');
       }
@@ -186,12 +185,35 @@ export class RoutineManager {
    * Directly runs a routine's task through the submitter (for testing and manual triggers).
    */
   async runRoutine(definition: RoutineDefinition): Promise<string> {
+    return this._runAndCheck(definition);
+  }
+
+  /**
+   * Submit one run, then evaluate `until` on its result (#202). Only a run
+   * that returned counts; a thrown run propagates and neither counts nor stops.
+   */
+  private async _runAndCheck(definition: RoutineDefinition): Promise<string> {
     const { routine, task } = definition;
-    return this._submitTask({
+    const result = await this._submitTask({
       prompt: task.prompt,
       model: routine.model_preference,
       maxCostTier: routine.max_cost_tier,
     });
+    const until = routine.until;
+    if (until) {
+      const runs = (this._runCounts.get(routine.name) ?? 0) + 1;
+      this._runCounts.set(routine.name, runs);
+      const hitContains = until.contains !== undefined && String(result).includes(until.contains);
+      const hitMax = until.max_runs !== undefined && runs >= until.max_runs;
+      if (hitContains || hitMax) {
+        log.info(
+          { routine: routine.name, runs, reason: hitContains ? 'contains' : 'max_runs' },
+          'Routine until-condition met — unloading',
+        );
+        this._unloadRoutine(routine.name);
+      }
+    }
+    return result;
   }
 
   /**
@@ -200,7 +222,7 @@ export class RoutineManager {
    * the same RoutineTaskSubmitter used by cron-scheduled routines.
    */
   watchRoutine(definition: RoutineDefinition): void {
-    const { routine, task } = definition;
+    const { routine } = definition;
 
     if (!routine.watch_path) {
       log.error(
@@ -236,11 +258,7 @@ export class RoutineManager {
 
     this._eventTriggers.watch(watchPath, debounceMs, (changedPath: string) => {
       log.info({ routine: routine.name, changedPath }, 'File-change event triggered routine');
-      void this._submitTask({
-        prompt: task.prompt,
-        model: routine.model_preference,
-        maxCostTier: routine.max_cost_tier,
-      }).catch((err: unknown) => {
+      void this._runAndCheck(definition).catch((err: unknown) => {
         log.error({ routine: routine.name, changedPath, err }, 'Event-triggered routine execution failed');
       });
     });
@@ -306,6 +324,20 @@ export class RoutineManager {
     } else {
       // cron or absent: schedule is required
       if (typeof r['schedule'] !== 'string') {
+        return false;
+      }
+    }
+
+    // #202: `until` must be well-formed or the routine is rejected.
+    if (r['until'] !== undefined) {
+      const u = r['until'];
+      const c = (u as Record<string, unknown> | null)?.['contains'];
+      const m = (u as Record<string, unknown> | null)?.['max_runs'];
+      const okShape = u !== null && typeof u === 'object' && !Array.isArray(u);
+      const okContains = c === undefined || (typeof c === 'string' && c.length >= 1 && c.length <= 200);
+      const okMax = m === undefined || (typeof m === 'number' && Number.isInteger(m) && m >= 1);
+      if (!okShape || !okContains || !okMax || (c === undefined && m === undefined)) {
+        log.error({ routine: r['name'] }, 'Invalid until (need contains: 1-200 chars and/or max_runs: positive integer) — rejecting');
         return false;
       }
     }
