@@ -127,24 +127,24 @@ describe('#216 symlinked-ancestor handling in validatePath', () => {
     expect(e.validatePath(path.join(allowed, 'real', 'f.txt')).allowed).toBe(true);
   });
 
-  it('judges the OS target of "link/../x", not the lexically collapsed path', () => {
-    // Lexically allowed/ancestor-link/../real/f.txt collapses to allowed/real/f.txt (allowed),
-    // but the OS resolves ancestor-link first, so ".." is outside's parent (root).
-    fs.writeFileSync(path.join(root, 'real-f.txt'), 'x');
-    fs.mkdirSync(path.join(root, 'real'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'real', 'f.txt'), 'x');
-    const sneaky = path.join(allowed, 'ancestor-link') + '/../real/f.txt';
-    expect(engine().validatePath(sneaky).allowed).toBe(false);
-    expect(engine({ deniedPaths: [path.join(root, 'real')] }).validatePath(sneaky).allowed).toBe(false);
-  });
-
-  it('denies a ".." input that cannot be resolved by the OS (ambiguous)', () => {
-    expect(engine().validatePath(path.join(allowed, 'real') + '/../missing-dir/new.txt').allowed).toBe(false);
-  });
-
-  it('still allows an existing target reached with a plain ".." inside the allowed root', () => {
+  it('rejects any ".." segment (policy cannot prove it judges the target the operation opens)', () => {
     fs.writeFileSync(path.join(allowed, 'real', 'ok.txt'), 'x');
-    expect(engine().validatePath(path.join(allowed, 'real') + '/../real/ok.txt').allowed).toBe(true);
+    for (const p of [
+      path.join(allowed, 'ancestor-link') + '/../real/f.txt',
+      path.join(allowed, 'real') + '/../real/ok.txt',
+      path.join(allowed, 'real') + '/../missing-dir/new.txt',
+      '../outside/data.txt',
+      '..',
+    ]) {
+      expect(engine().validatePath(p).allowed).toBe(false);
+      expect(engine({ follow: true }).validatePath(p).allowed).toBe(false);
+    }
+  });
+
+  it('does not mistake dotted names for parent segments', () => {
+    fs.writeFileSync(path.join(allowed, 'real', '..data'), 'x');
+    expect(engine().validatePath(path.join(allowed, 'real', '..data')).allowed).toBe(true);
+    expect(engine().validatePath(path.join(allowed, 'real', 'a..b')).allowed).toBe(true);
   });
 });
 

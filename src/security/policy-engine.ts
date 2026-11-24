@@ -406,14 +406,15 @@ export class PolicyEngine {
     //    outside what a path check can guarantee.
     let realPath: string;
     try {
-      // Target consistency (#216): path.resolve() collapses '..' lexically, but
-      // the OS applies '..' AFTER following a symlink (link/../x is not the
-      // lexical parent's x). When the raw input has a '..' segment, resolve the
-      // RAW string with the OS so the policy judges what the operation opens;
-      // if that cannot be resolved the input is ambiguous and is denied.
-      realPath = /(^|[\\/])\.\.([\\/]|$)/.test(homeResolved)
-        ? fs.realpathSync(path.isAbsolute(homeResolved) ? homeResolved : `${process.cwd()}${path.sep}${homeResolved}`)
-        : this._canonicalize(absolutePath);
+      // Target consistency (#216): path.resolve() collapses '..' lexically but the
+      // OS applies '..' after following a symlink, and Node's realpath also
+      // normalizes before it walks, so no check here can prove it judges the
+      // target the operation will open. Reject parent-directory segments at this
+      // boundary (fail closed) rather than guess; callers pass a clean path.
+      if (/(^|[\\/])\.\.([\\/]|$)/.test(homeResolved)) {
+        throw new Error("parent-directory ('..') segments are not accepted in policy-checked paths");
+      }
+      realPath = this._canonicalize(absolutePath);
     } catch (err: unknown) {
       return {
         allowed: false,
