@@ -81,6 +81,45 @@ export interface SDKSystemMessage {
   tools?: string[];
 }
 
+/**
+ * #219: the SDK reports "some settings did not load" as an informational system
+ * message tagged `settings_not_in_effect`. The tag lives in the bundled Claude
+ * Code binary, not the SDK's type declarations, so it is read structurally.
+ *
+ * Only the stable tag and trusted metadata are carried. The SDK's diagnostic
+ * text is deliberately dropped: it is not under Zora's control, so it must not
+ * be persisted into the audit log (a length cap is not redaction).
+ */
+export interface SettingsNotInEffectNotice {
+  tag: 'settings_not_in_effect';
+  /** Zora job the run belongs to, when known. */
+  jobId?: string;
+  /** SDK session id from the same message, when present. */
+  sessionId?: string;
+  /** Which Zora path observed it (provider name or execution-loop label). */
+  source: string;
+}
+
+export type SystemNoticeHandler = (notice: SettingsNotInEffectNotice) => void;
+
+/** Returns a metadata-only notice if `message` is the settings_not_in_effect system message. */
+export function extractSettingsNotice(
+  message: unknown,
+  ctx: { source: string; jobId?: string },
+): SettingsNotInEffectNotice | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const m = message as Record<string, unknown>;
+  if (m.type !== 'system' || m.subtype !== 'informational' || m.tag !== 'settings_not_in_effect') {
+    return null;
+  }
+  return {
+    tag: 'settings_not_in_effect',
+    source: ctx.source,
+    ...(ctx.jobId ? { jobId: ctx.jobId } : {}),
+    ...(typeof m.session_id === 'string' ? { sessionId: m.session_id } : {}),
+  };
+}
+
 export interface SDKUserMessage {
   type: 'user';
   uuid?: string;
@@ -210,6 +249,13 @@ export class ClaudeProvider implements LLMProvider {
   private _totalOutputTokens = 0;
   private _requestCount = 0;
   private _lastRequestAt: Date | null = null;
+
+  /** #219: receives settings_not_in_effect notices; wired by the Orchestrator to the audit log. */
+  private _systemNoticeHandler: SystemNoticeHandler | null = null;
+
+  setSystemNoticeHandler(handler: SystemNoticeHandler | null): void {
+    this._systemNoticeHandler = handler;
+  }
 
   constructor(options: ClaudeProviderOptions) {
     const { config } = options;
@@ -412,6 +458,15 @@ export class ClaudeProvider implements LLMProvider {
             source: this.name,
             content: { turn: turnCount },
           };
+        }
+
+        const notice = extractSettingsNotice(message, { source: this.name, jobId: task.jobId });
+        if (notice && this._systemNoticeHandler) {
+          try {
+            this._systemNoticeHandler(notice);
+          } catch {
+            // Observational only: an audit failure must not break the task.
+          }
         }
 
         const events = this._mapSDKMessage(message);
