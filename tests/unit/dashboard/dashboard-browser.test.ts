@@ -59,7 +59,8 @@ test.describe('Zora Tactical Dashboard', () => {
     await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
     await page.goto(`http://localhost:${port}`);
     await expect(page).toHaveTitle(/Zora — Tactical Interface/);
-    await expect(page.locator('text=ZORA / DASHBOARD')).toBeVisible();
+    // Header is `ZORA / <project name or DASHBOARD>`; the fixture project name varies.
+    await expect(page.getByText(/^ZORA \/ \S+/).first()).toBeVisible();
   });
 
   test('submits a task via chat and displays its final result', async ({ page }) => {
@@ -223,6 +224,43 @@ test.describe('Zora Tactical Dashboard', () => {
 
     release();
     await expect(page.getByText('PP recovered', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Working...', { exact: true })).toBeHidden();
+  });
+
+  test('event burst overflowing the pre-POST buffer still recovers the terminal event', async ({ page }) => {
+    // #167 round-4 P1: >500 events before the POST response drop the terminal
+    // event; overflow must trigger reconciliation after the jobId binds.
+    queuedJobs = ['job_ov_1'];
+    await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+    await page.goto(`http://localhost:${port}`);
+    await connected;
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let upstreamDone!: () => void;
+    const upstream = new Promise<void>(resolve => { upstreamDone = resolve; });
+    await page.route('**/api/task', async route => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const response = await route.fetch();
+      upstreamDone();
+      await gate;
+      await route.fulfill({ response });
+    });
+
+    await page.locator('[placeholder="Ask Zora to do something..."]').fill('burst');
+    await page.click('button:has-text("SEND")');
+    await upstream;
+
+    for (let i = 0; i < 600; i++) {
+      server.broadcastEvent({ type: 'text', jobId: 'job_ov_1', data: { text: '.' } });
+    }
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_ov_1', data: { jobId: 'job_ov_1', text: 'OV recovered' } });
+    // Healthy stream (no reconnect): let the browser drain the burst before releasing the POST.
+    await page.waitForTimeout(500);
+
+    release();
+    await expect(page.getByText('OV recovered', { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText('Working...', { exact: true })).toBeHidden();
   });
 

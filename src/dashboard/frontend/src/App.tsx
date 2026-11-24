@@ -523,7 +523,12 @@ const App: React.FC = () => {
         const evJob = eventJobId(data);
         if (!evJob) return;
         if (evJob !== activeJobRef.current) {
-          if (submitPendingRef.current && eventBufferRef.current.length < 500) eventBufferRef.current.push(data);
+          if (submitPendingRef.current) {
+            if (eventBufferRef.current.length < 500) eventBufferRef.current.push(data);
+            // Buffer full: a terminal event may be among the dropped ones, so the
+            // stream is as good as interrupted; reconcile once the jobId is bound.
+            else sseInterruptedRef.current = true;
+          }
           return;
         }
         processEventRef.current(data, evJob);
