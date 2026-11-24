@@ -23,6 +23,7 @@ import { createLogger } from '../utils/logger.js';
 import { CostTracker } from './cost-tracker.js';
 import { shouldIncludeEvent } from '../utils/event-filter.js';
 import type { VerbosityLevel } from '../utils/event-filter.js';
+import { resolveDashboardToken } from '../config/dashboard-token.js';
 import type { AgentEvent, ProjectConfig } from '../types.js';
 
 const log = createLogger('dashboard');
@@ -91,7 +92,9 @@ export class DashboardServer {
   constructor(options: DashboardOptions) {
     this._options = options;
     this._tlciCostTracker = options.costTracker;
-    this._authToken = options.dashboardToken ?? process.env['ZORA_DASHBOARD_TOKEN'];
+    // #174: one selection rule (env wins, blank ignored) shared with the daemon,
+    // so a blank env var can never enable auth with an unusable token.
+    this._authToken = resolveDashboardToken(options.dashboardToken);
     this._indexHtmlPath = path.join(__dirname, 'frontend', 'dist', 'index.html');
     this._app = express();
 
@@ -579,12 +582,18 @@ export class DashboardServer {
   /** Inject __ZORA_TOKEN__ into raw index.html when auth is enabled. */
   private _renderIndex(raw: string): string {
     if (!this._authToken) return raw;
-    const script = `<script>window.__ZORA_TOKEN__=${JSON.stringify(this._authToken)};</script>`;
+    // #174: the token can now come from config, so serialize it HTML-safely
+    // (no </script> breakout, no U+2028/9) and insert with function replacers so
+    // dollar-sign sequences in the token are literal, not replacement patterns.
+    const safe = JSON.stringify(this._authToken)
+      .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026')
+      .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+    const script = `<script>window.__ZORA_TOKEN__=${safe};</script>`;
     // Case-insensitive replace so minified/transformed HTML still works
-    const patched = raw.replace(/<\/head>/i, `${script}</head>`);
+    const patched = raw.replace(/<\/head>/i, () => `${script}</head>`);
     if (patched !== raw) return patched;
     // </head> not found — prepend script to body as fallback
-    return raw.replace(/<body/i, `${script}<body`) || raw;
+    return raw.replace(/<body/i, () => `${script}<body`) || raw;
   }
 
   /** Serve index.html with __ZORA_TOKEN__ injected when auth is enabled. */

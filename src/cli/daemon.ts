@@ -40,6 +40,7 @@ import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { runSecurityAuditSilent } from './security-commands.js';
+import { resolveDashboardToken } from "../config/dashboard-token.js";
 import { TelegramGateway, type TelegramConfig } from '../steering/telegram-gateway.js';
 
 // Allow claude CLI to run as a subprocess even when launched from a Claude Code session.
@@ -245,7 +246,11 @@ async function main() {
   }
 
   // Start dashboard server
+  // #174: [steering].dashboard_token was parsed but never passed, so a configured
+  // token silently left the dashboard unauthenticated. Unset still falls back to
+  // ZORA_DASHBOARD_TOKEN; the operator env var wins over project config (resolveDashboardToken).
   const dashboard = new DashboardServer({
+    dashboardToken: resolveDashboardToken(config.steering.dashboard_token),
     providers,
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
