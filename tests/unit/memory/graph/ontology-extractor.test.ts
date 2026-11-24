@@ -11,9 +11,12 @@ import {
   MAX_EXTRACT_PREDICATE,
   buildOntologyPrompt,
   parseOntologyResponse,
+  enrichMemoriesWithOntology,
 } from '../../../../src/memory/graph/ontology-extractor.js';
 import { GraphMemoryClient, DEFAULT_GRAPH_CONFIG } from '../../../../src/memory/graph/index.js';
 
+const SRC_ALL = 'Zora uses SparrowDB. A B X Ok Ok2 Ghost ' + Array.from({ length: 40 }, (_, i) => `E${i}`).join(' ') + ' n bad name';
+const SRC = 'Zora uses SparrowDB. A, B, Ok, Ok2, E0 are names here.';
 const good = {
   entities: [
     { name: 'Zora', kind: 'project' },
@@ -24,7 +27,7 @@ const good = {
 
 describe('parseOntologyResponse', () => {
   it('accepts a valid response and attaches the source memory id', () => {
-    const f = parseOntologyResponse(JSON.stringify(good), 'mem_1', 5)!;
+    const f = parseOntologyResponse(JSON.stringify(good), 'mem_1', 5, SRC_ALL)!;
     expect(f.memId).toBe('mem_1');
     expect(f.ts).toBe(5);
     expect(f.entities).toEqual(good.entities);
@@ -34,13 +37,13 @@ describe('parseOntologyResponse', () => {
   });
 
   it('accepts a single code fence but nothing else around the JSON', () => {
-    expect(parseOntologyResponse('```json\n' + JSON.stringify(good) + '\n```', 'm', 1)).not.toBeNull();
-    expect(parseOntologyResponse('Sure! ' + JSON.stringify(good), 'm', 1)).toBeNull();
+    expect(parseOntologyResponse('```json\n' + JSON.stringify(good) + '\n```', 'm', 1, SRC_ALL)).not.toBeNull();
+    expect(parseOntologyResponse('Sure! ' + JSON.stringify(good), 'm', 1, SRC_ALL)).toBeNull();
   });
 
   it('rejects non-JSON, arrays, and responses without entities', () => {
     for (const raw of ['nope', '[]', '{}', '{"entities":"x"}', 'null', '{"entities":[]}']) {
-      expect(parseOntologyResponse(raw, 'm', 1)).toBeNull();
+      expect(parseOntologyResponse(raw, 'm', 1, SRC_ALL)).toBeNull();
     }
   });
 
@@ -49,6 +52,7 @@ describe('parseOntologyResponse', () => {
       JSON.stringify({ entities: [{ name: 'A', kind: 'weapon' }, { name: 'B', kind: 'tool' }] }),
       'm',
       1,
+      SRC_ALL,
     )!;
     expect(f.entities).toEqual([{ name: 'B', kind: 'tool' }]);
   });
@@ -58,6 +62,7 @@ describe('parseOntologyResponse', () => {
       JSON.stringify({ entities: [{ name: 'A', kind: 'tool' }, { name: 'A', kind: 'person' }] }),
       'm',
       1,
+      SRC_ALL,
     )!;
     expect(f.entities).toEqual([{ name: 'A', kind: 'tool' }]);
   });
@@ -74,6 +79,7 @@ describe('parseOntologyResponse', () => {
       }),
       'm',
       1,
+      SRC_ALL,
     )!;
     expect(f.relations).toEqual([]);
   });
@@ -95,6 +101,7 @@ describe('parseOntologyResponse', () => {
       }),
       'm',
       1,
+      SRC_ALL,
     )!;
     expect(f.entities.map(e => e.name)).toEqual(['Ok', 'Ok2']);
     expect(f.relations).toEqual([]);
@@ -102,8 +109,54 @@ describe('parseOntologyResponse', () => {
 
   it('caps entity count', () => {
     const entities = Array.from({ length: MAX_EXTRACT_ENTITIES + 10 }, (_, i) => ({ name: `E${i}`, kind: 'concept' }));
-    const f = parseOntologyResponse(JSON.stringify({ entities }), 'm', 1)!;
+    const f = parseOntologyResponse(JSON.stringify({ entities }), 'm', 1, SRC_ALL)!;
     expect(f.entities).toHaveLength(MAX_EXTRACT_ENTITIES);
+  });
+});
+
+describe('grounding', () => {
+  it('drops entities the source text never mentions, and relations touching them', () => {
+    const f = parseOntologyResponse(JSON.stringify(good), 'm', 1, 'Only zora is discussed here.')!;
+    expect(f.entities).toEqual([{ name: 'Zora', kind: 'project' }]);
+    expect(f.relations).toEqual([]);
+  });
+
+  it('returns null when nothing is grounded', () => {
+    expect(parseOntologyResponse(JSON.stringify(good), 'm', 1, 'unrelated text')).toBeNull();
+  });
+});
+
+describe('enrichMemoriesWithOntology', () => {
+  const items = Array.from({ length: 8 }, (_, i) => ({ id: `mem_${i}`, summary: 'Zora uses SparrowDB' }));
+  const ok = async () => JSON.stringify(good);
+
+  it('caps the number of model calls per run', async () => {
+    const fn = vi.fn(ok);
+    const rec = vi.fn();
+    const n = await enrichMemoriesWithOntology(items, new OntologyExtractor(fn), rec, { maxItems: 3 });
+    expect(n).toBe(3);
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(rec.mock.calls.map(c => c[0].memId)).toEqual(['mem_0', 'mem_1', 'mem_2']);
+  });
+
+  it('a hung model call is abandoned at the time budget and later items are skipped', async () => {
+    const fn = vi.fn(() => new Promise<string>(() => {}));
+    const rec = vi.fn();
+    const t0 = Date.now();
+    const n = await enrichMemoriesWithOntology(items, new OntologyExtractor(fn), rec, { budgetMs: 50 });
+    expect(n).toBe(0);
+    expect(rec).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('a throwing recorder or model never propagates', async () => {
+    const rec = vi.fn(() => {
+      throw new Error('store down');
+    });
+    await expect(
+      enrichMemoriesWithOntology(items.slice(0, 2), new OntologyExtractor(ok), rec),
+    ).resolves.toBe(0);
   });
 });
 
@@ -142,7 +195,7 @@ describe('OntologyExtractor', () => {
         memId: 'forged',
       }),
     );
-    const f = (await ex.extract('real_mem', 'note'))!;
+    const f = (await ex.extract('real_mem', 'a note about A'))!;
     expect(f.memId).toBe('real_mem');
     expect(f.entities).toEqual([{ name: 'A', kind: 'tool' }]);
   });

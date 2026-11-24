@@ -69,6 +69,7 @@ export {
 
 export {
   OntologyExtractor,
+  enrichMemoriesWithOntology,
   ONTOLOGY_SYSTEM_PROMPT,
   buildOntologyPrompt,
   parseOntologyResponse,

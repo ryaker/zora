@@ -61,7 +61,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { createGraphTools } from '../tools/graph-tools.js';
-import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT } from '../memory/graph/index.js';
+import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT, enrichMemoriesWithOntology } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -2276,13 +2276,7 @@ export class Orchestrator {
 
     // Persist each new item
     let savedCount = 0;
-    // #194: ontology extraction is default-off and inert unless the graph tier and
-    // ZORA_GRAPH_ONTOLOGY are both on. It reuses the same tool-less, policy-gated
-    // extraction call (toolSurface 'none'), and runs only on items that were
-    // already persisted, so a failure here can never block or alter the memory write.
-    const ontologyExtractor = this._graphClient?.ontologyEnabled
-      ? new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT))
-      : null;
+    const persisted: Array<{ id: string; summary: string }> = [];
     for (const item of uniqueItems) {
       try {
         const created = await this._memoryManager.structuredMemory.createItem({
@@ -2294,10 +2288,7 @@ export class Orchestrator {
           category: item.category,
         });
         savedCount++;
-        if (ontologyExtractor && this._graphClient) {
-          const facts = await ontologyExtractor.extract(created.id, item.summary);
-          if (facts) this._graphClient.recordFacts(facts);
-        }
+        persisted.push({ id: created.id, summary: item.summary });
       } catch (err) {
         log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
       }
@@ -2308,6 +2299,24 @@ export class Orchestrator {
       await this._memoryManager.appendDailyNote(
         `Extracted ${savedCount} memory item(s) from job ${taskContext.jobId}`,
       );
+    }
+
+    // #194: ontology enrichment runs only after ALL ordinary persistence is done,
+    // so it can never delay a memory save. Default-off (needs the graph tier and
+    // ZORA_GRAPH_ONTOLOGY); bounded by item count and wall clock; reuses the
+    // tool-less, policy-gated extraction call (toolSurface 'none'); facts are
+    // grounded in the source text and carry the memory id as provenance.
+    const graph = this._graphClient;
+    if (graph?.ontologyEnabled && persisted.length > 0) {
+      try {
+        await enrichMemoriesWithOntology(
+          persisted,
+          new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT)),
+          facts => graph.recordFacts(facts),
+        );
+      } catch (err) {
+        log.debug({ err, jobId: taskContext.jobId }, 'Ontology enrichment failed');
+      }
     }
 
     log.info(

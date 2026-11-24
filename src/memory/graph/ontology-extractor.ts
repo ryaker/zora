@@ -7,6 +7,11 @@
  * closed vocabulary (`ENTITY_KINDS`) with hard size caps; anything that does
  * not validate is dropped, never repaired. The extractor has no tools and no
  * write access: it returns facts and the caller decides whether to store them.
+ * Grounding: schema validity does not make a fact true, so an entity is kept only
+ * if its name literally occurs in the source text (case-insensitive), and a
+ * relation only if both endpoints are kept. Facts stay *provisional* model
+ * claims with provenance to the source memory; retrieval (PR 3) must present
+ * them as such and cite only authorized results.
  * Any failure yields `null` (fail closed) — extraction can only ever add
  * provenance-linked facts, never block or alter the memory write itself.
  */
@@ -52,7 +57,13 @@ export function buildOntologyPrompt(text: string): string {
  * Validate a raw model response into facts. Pure and deterministic; exported
  * for tests. Returns null when the response is unusable as a whole.
  */
-export function parseOntologyResponse(raw: string, memId: string, ts: number): MemoryFacts | null {
+export function parseOntologyResponse(
+  raw: string,
+  memId: string,
+  ts: number,
+  sourceText: string,
+): MemoryFacts | null {
+  const haystack = sourceText.toLowerCase();
   let parsed: unknown;
   try {
     // Models often wrap JSON in a fence; strip one if present, nothing more.
@@ -74,6 +85,8 @@ export function parseOntologyResponse(raw: string, memId: string, ts: number): M
     const kind = (e as { kind?: unknown }).kind;
     // An unknown kind is dropped, not coerced: guessing a type would misfile the entity.
     if (!name || !isEntityKind(kind)) continue;
+    // Ungrounded: the note never mentions this name, so it is the model's invention.
+    if (!haystack.includes(name.toLowerCase())) continue;
     if (byName.has(name)) continue; // first classification wins; never reclassify
     const rec: EntityRecord = { name, kind };
     byName.set(name, rec);
@@ -112,9 +125,63 @@ export class OntologyExtractor {
     if (!memId || typeof text !== 'string' || text.trim().length === 0) return null;
     try {
       const raw = await this._extractFn(buildOntologyPrompt(text));
-      return parseOntologyResponse(raw, memId, ts);
+      return parseOntologyResponse(raw, memId, ts, text);
     } catch {
       return null;
     }
   }
+}
+
+/** Per-run ceilings so enrichment cannot multiply spend or delay the caller. */
+export const ONTOLOGY_MAX_ITEMS_PER_RUN = 5;
+export const ONTOLOGY_BUDGET_MS = 60_000;
+
+export interface EnrichableItem {
+  id: string;
+  summary: string;
+}
+
+export interface EnrichOptions {
+  maxItems?: number;
+  budgetMs?: number;
+}
+
+/**
+ * Best-effort enrichment of memories that are ALREADY persisted. Sequential,
+ * at most `maxItems` model calls, and a wall-clock budget that also bounds an
+ * in-flight call. Returns how many memories yielded facts. Never throws.
+ */
+export async function enrichMemoriesWithOntology(
+  items: EnrichableItem[],
+  extractor: OntologyExtractor,
+  record: (facts: MemoryFacts) => void,
+  opts: EnrichOptions = {},
+): Promise<number> {
+  const maxItems = opts.maxItems ?? ONTOLOGY_MAX_ITEMS_PER_RUN;
+  const budgetMs = opts.budgetMs ?? ONTOLOGY_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
+  let recorded = 0;
+  for (const item of items.slice(0, maxItems)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const facts = await Promise.race([
+        extractor.extract(item.id, item.summary),
+        new Promise<null>(resolve => {
+          timer = setTimeout(() => resolve(null), remaining);
+          timer.unref?.();
+        }),
+      ]);
+      if (facts) {
+        record(facts);
+        recorded++;
+      }
+    } catch {
+      // fail closed: skip this memory
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return recorded;
 }
