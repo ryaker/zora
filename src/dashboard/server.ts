@@ -83,10 +83,15 @@ export class DashboardServer {
   private _recordJobOutcome(jobId: string, outcome: { status: 'running' | 'completed' | 'failed'; text?: string; error?: string }): void {
     this._jobOutcomes.delete(jobId); // re-insert to refresh eviction order
     this._jobOutcomes.set(jobId, outcome);
-    while (this._jobOutcomes.size > DashboardServer.MAX_JOB_OUTCOMES) {
-      const oldest = this._jobOutcomes.keys().next().value;
-      if (oldest === undefined) break;
-      this._jobOutcomes.delete(oldest);
+    // #167: the cap applies to finished jobs only. Evicting a still-running job
+    // would report it as 'unknown' and the UI would wrongly blame a restart.
+    let terminal = 0;
+    for (const o of this._jobOutcomes.values()) if (o.status !== 'running') terminal++;
+    for (const [id, o] of this._jobOutcomes) {
+      if (terminal <= DashboardServer.MAX_JOB_OUTCOMES) break;
+      if (o.status === 'running') continue;
+      this._jobOutcomes.delete(id);
+      terminal--;
     }
   }
   /** TLCI cost tracker — undefined when not configured */

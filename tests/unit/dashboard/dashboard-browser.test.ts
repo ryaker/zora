@@ -191,6 +191,41 @@ test.describe('Zora Tactical Dashboard', () => {
     await ctx.close();
   });
 
+  test('SSE reconnect while the POST response is pending still recovers the settled job', async ({ page }) => {
+    // #167 round-3 P1: terminal event missed while the jobId is unknown must be
+    // recovered once the POST response binds it.
+    queuedJobs = ['job_pp_1'];
+    await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });
+    const connected = page.waitForResponse(r => r.url().endsWith('/api/events') && r.ok());
+    await page.goto(`http://localhost:${port}`);
+    await connected;
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let upstreamDone!: () => void;
+    const upstream = new Promise<void>(resolve => { upstreamDone = resolve; });
+    await page.route('**/api/task', async route => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const response = await route.fetch(); // the daemon has accepted the task
+      upstreamDone();
+      await gate; // ...but the browser has not seen the response yet
+      await route.fulfill({ response });
+    });
+
+    await page.locator('[placeholder="Ask Zora to do something..."]').fill('pending');
+    await page.click('button:has-text("SEND")');
+    await upstream;
+
+    // Drop SSE, settle the job while disconnected, wait for the reconnect.
+    await dropSseClients();
+    server.broadcastEvent({ type: 'job_completed', jobId: 'job_pp_1', data: { jobId: 'job_pp_1', text: 'PP recovered' } });
+    await page.waitForResponse(r => r.url().includes('/api/events') && r.ok());
+
+    release();
+    await expect(page.getByText('PP recovered', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Working...', { exact: true })).toBeHidden();
+  });
+
   test('a stale reconnect response cannot clear a newer submission', async ({ page }) => {
     queuedJobs = ['job_st_1', 'job_st_2'];
     await page.addInitScript(() => { localStorage.setItem('zora_onboarding_complete', 'true'); });

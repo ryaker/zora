@@ -210,6 +210,10 @@ const App: React.FC = () => {
   // arrive before the POST response reveals the jobId, and per-job streamed text.
   const activeJobRef = useRef<string | null>(null);
   const submitPendingRef = useRef(false);
+  // #167: set when SSE (re)connects while the POST response is still pending, so a
+  // terminal event missed in that window is recovered once the jobId is bound.
+  const sseInterruptedRef = useRef(false);
+  const reconcileRef = useRef<() => void>(() => {});
   const eventBufferRef = useRef<any[]>([]);
   const streamedRef = useRef<Map<string, string>>(new Map());
   const processEventRef = useRef<(data: any, jobId: string) => void>(() => {});
@@ -239,6 +243,7 @@ const App: React.FC = () => {
     setTaskSteps([]);
     activeJobRef.current = null;
     submitPendingRef.current = true;
+    sseInterruptedRef.current = false;
     eventBufferRef.current = [];
 
     try {
@@ -254,6 +259,12 @@ const App: React.FC = () => {
       eventBufferRef.current = [];
       for (const ev of buffered) {
         if (eventJobId(ev) === jobId) processEventRef.current(ev, jobId);
+      }
+      // The stream reconnected while we did not know the jobId yet: `connected`
+      // skipped recovery then, so ask the daemon for this job's state now.
+      if (sseInterruptedRef.current) {
+        sseInterruptedRef.current = false;
+        reconcileRef.current();
       }
     } catch (err) {
       submitPendingRef.current = false;
@@ -491,6 +502,8 @@ const App: React.FC = () => {
       }
     };
 
+    reconcileRef.current = reconcileJobState;
+
     // EventSource cannot set headers — pass token as query param; server promotes it to header
     const sseUrl = _zoraToken
       ? `/api/events?token=${encodeURIComponent(_zoraToken)}`
@@ -501,6 +514,7 @@ const App: React.FC = () => {
         const data = JSON.parse(e.data);
         if (data.type === 'connected') {
           // Reconnect: reconcile UI state against actual backend job state
+          if (submitPendingRef.current) sseInterruptedRef.current = true;
           reconcileJobState();
           return;
         }
