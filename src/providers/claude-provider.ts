@@ -81,6 +81,33 @@ export interface SDKSystemMessage {
   tools?: string[];
 }
 
+/**
+ * #219: the SDK reports "some settings did not load" as an informational system
+ * message tagged `settings_not_in_effect`. The tag lives in the bundled Claude
+ * Code binary, not the SDK's type declarations, so it is read structurally.
+ */
+export interface SettingsNotInEffectNotice {
+  tag: 'settings_not_in_effect';
+  /** Text from the SDK, length-capped before it leaves the provider. */
+  content: string;
+}
+
+export type SystemNoticeHandler = (notice: SettingsNotInEffectNotice) => void;
+
+/** Cap on SDK-supplied notice text carried into the audit log. */
+export const SETTINGS_NOTICE_MAX_CHARS = 500;
+
+/** Returns the notice if `message` is the settings_not_in_effect system message. */
+export function extractSettingsNotice(message: unknown): SettingsNotInEffectNotice | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const m = message as Record<string, unknown>;
+  if (m.type !== 'system' || m.subtype !== 'informational' || m.tag !== 'settings_not_in_effect') {
+    return null;
+  }
+  const content = typeof m.content === 'string' ? m.content.slice(0, SETTINGS_NOTICE_MAX_CHARS) : '';
+  return { tag: 'settings_not_in_effect', content };
+}
+
 export interface SDKUserMessage {
   type: 'user';
   uuid?: string;
@@ -210,6 +237,13 @@ export class ClaudeProvider implements LLMProvider {
   private _totalOutputTokens = 0;
   private _requestCount = 0;
   private _lastRequestAt: Date | null = null;
+
+  /** #219: receives settings_not_in_effect notices; wired by the Orchestrator to the audit log. */
+  private _systemNoticeHandler: SystemNoticeHandler | null = null;
+
+  setSystemNoticeHandler(handler: SystemNoticeHandler | null): void {
+    this._systemNoticeHandler = handler;
+  }
 
   constructor(options: ClaudeProviderOptions) {
     const { config } = options;
@@ -412,6 +446,15 @@ export class ClaudeProvider implements LLMProvider {
             source: this.name,
             content: { turn: turnCount },
           };
+        }
+
+        const notice = extractSettingsNotice(message);
+        if (notice && this._systemNoticeHandler) {
+          try {
+            this._systemNoticeHandler(notice);
+          } catch {
+            // Observational only: an audit failure must not break the task.
+          }
         }
 
         const events = this._mapSDKMessage(message);

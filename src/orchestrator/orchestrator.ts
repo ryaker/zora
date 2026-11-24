@@ -97,6 +97,7 @@ import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalResponseGateway } from '../channels/signal/signal-response-gateway.js';
+import { ClaudeProvider } from '../providers/claude-provider.js';
 
 const log = createLogger('orchestrator');
 
@@ -906,6 +907,25 @@ export class Orchestrator {
     // SDK calls the tool `Bash`. Until RateLimitHook started matching through
     // toolFilterMatches(), `l.tool === ctx.tool` was false on every real call
     // and the 60-shell-calls-per-minute ceiling had never once been applied.
+    // #219: settingSources can silently drop hooks/permission rules/sandbox
+    // settings; the SDK says so in a system message that used to be ignored.
+    // Record it in the hash-chained audit log so a weakened policy is visible.
+    const noticeAudit = this._auditLogger;
+    for (const p of this._providers) {
+      if (p instanceof ClaudeProvider) {
+        p.setSystemNoticeHandler((notice) => {
+          void noticeAudit.log({
+            jobId: 'system',
+            eventType: 'notification',
+            timestamp: new Date().toISOString(),
+            provider: p.name,
+            toolName: 'settings_not_in_effect',
+            parameters: {},
+            result: { message: notice.content },
+          }).catch(() => { /* best effort */ });
+        });
+      }
+    }
     this._toolHookRunner.register(new RateLimitHook([
       { tool: 'bash', maxCalls: 60, windowMs: 60_000 },
       { tool: 'http_request', maxCalls: 100, windowMs: 60_000 },
