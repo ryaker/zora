@@ -279,6 +279,11 @@ export class GraphMemoryClient {
     return this._available;
   }
 
+  /** True only when the tier is live AND the ontology flag is on (default off). */
+  get ontologyEnabled(): boolean {
+    return this._available && this._config.ontology;
+  }
+
   /** Why the tier is inert, or null when it is live. */
   get unavailableReason(): string | null {
     return this._unavailableReason;

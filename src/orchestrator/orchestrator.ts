@@ -61,7 +61,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { createGraphTools } from '../tools/graph-tools.js';
-import { GraphMemoryClient, graphConfigFromEnv } from '../memory/graph/index.js';
+import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -2233,9 +2233,9 @@ export class Orchestrator {
     const agentWorkspaceCwd = this._config.agent.workspace
       ? this._config.agent.workspace.replace(/^~/, os.homedir())
       : process.cwd();
-    const extractFn = async (prompt: string): Promise<string> => {
+    const makeExtractFn = (systemPrompt: string) => async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
-        systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+        systemPrompt,
         // SEC-23: a single-shot text call over conversation content that may
         // itself be attacker-influenced. It has no business calling a tool, and
         // until now it silently inherited ExecutionLoop's DEFAULT_TOOLS —
@@ -2256,6 +2256,9 @@ export class Orchestrator {
       return extractLoop.run(prompt);
     };
 
+    const extractFn = makeExtractFn(
+      'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+    );
     const pipeline = new ExtractionPipeline(extractFn);
     const result = await pipeline.extract(messages, categoryNames);
 
@@ -2273,9 +2276,16 @@ export class Orchestrator {
 
     // Persist each new item
     let savedCount = 0;
+    // #194: ontology extraction is default-off and inert unless the graph tier and
+    // ZORA_GRAPH_ONTOLOGY are both on. It reuses the same tool-less, policy-gated
+    // extraction call (toolSurface 'none'), and runs only on items that were
+    // already persisted, so a failure here can never block or alter the memory write.
+    const ontologyExtractor = this._graphClient?.ontologyEnabled
+      ? new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT))
+      : null;
     for (const item of uniqueItems) {
       try {
-        await this._memoryManager.structuredMemory.createItem({
+        const created = await this._memoryManager.structuredMemory.createItem({
           type: item.type,
           summary: item.summary,
           source: item.source || taskContext.jobId,
@@ -2284,6 +2294,10 @@ export class Orchestrator {
           category: item.category,
         });
         savedCount++;
+        if (ontologyExtractor && this._graphClient) {
+          const facts = await ontologyExtractor.extract(created.id, item.summary);
+          if (facts) this._graphClient.recordFacts(facts);
+        }
       } catch (err) {
         log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
       }
