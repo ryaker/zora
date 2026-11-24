@@ -28,7 +28,6 @@ import type { BudgetStatus, DryRunResult } from './security-types.js';
 import type { IntentCapsuleManager } from './intent-capsule.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { ApprovalQueue } from '../core/approval-queue.js';
-import { isENOENT } from '../utils/errors.js';
 import {
   shellTokenize,
   splitChainedCommands,
@@ -390,47 +389,50 @@ export class PolicyEngine {
     let absolutePath = this._resolveHome(targetPath);
     absolutePath = path.resolve(absolutePath);
 
-    // 2. Symlink check (Spec §5.3: "Don't follow symlinks outside allowed boundaries")
-    if (!fsPolicy.follow_symlinks && this._isSymlink(absolutePath)) {
-      try {
-        const realPath = fs.realpathSync(absolutePath);
-
-        // Deny symlinks that resolve into explicitly denied paths
-        if (this._isWithinDeniedPaths(realPath, fsPolicy)) {
-          return {
-            allowed: false,
-            reason: `Symlink target ${realPath} is explicitly denied by security policy`,
-          };
-        }
-
-        if (!this._isWithinAllowedPaths(realPath, fsPolicy)) {
-          return {
-            allowed: false,
-            reason: `Symlink target ${realPath} is outside allowed boundaries`,
-          };
-        }
-      } catch (err: unknown) {
-        // If file doesn't exist yet (e.g. for write_file), we skip realpath check,
-        // but other errors should lead to failure.
-        if (!isENOENT(err)) {
-          return {
-            allowed: false,
-            reason: `Error resolving symlink ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-      }
+    // 2. Canonicalize (#216). Judging only the final component let a symlinked
+    //    ANCESTOR (allowed/link -> /outside) pass. The deepest existing ancestor
+    //    is resolved with realpath, so not-yet-existing write targets are covered
+    //    too. Anything unresolvable (loops, EACCES) fails closed. This is a
+    //    policy check, not a race-free open: a link swapped after this call is
+    //    outside what a path check can guarantee.
+    let realPath: string;
+    try {
+      realPath = this._canonicalize(absolutePath);
+    } catch (err: unknown) {
+      return {
+        allowed: false,
+        reason: `Error resolving path ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
+    const viaLink = realPath !== absolutePath;
 
-    // 3. Deny takes precedence
+    // 3. Deny takes precedence — lexically, and on the canonical path even when
+    //    follow_symlinks is true (a link must never reach a denied path).
     if (this._isWithinDeniedPaths(absolutePath, fsPolicy)) {
       return {
         allowed: false,
         reason: `Access to ${targetPath} is explicitly denied by security policy`,
       };
     }
+    if (viaLink && this._isWithinDeniedPaths(realPath, fsPolicy, true)) {
+      return {
+        allowed: false,
+        reason: `Symlink target ${realPath} is explicitly denied by security policy`,
+      };
+    }
 
-    // 4. Check allowlist
-    if (!this._isWithinAllowedPaths(absolutePath, fsPolicy)) {
+    // 4. Spec §5.3: don't follow symlinks outside allowed boundaries.
+    if (!fsPolicy.follow_symlinks && viaLink && !this._isWithinAllowedPaths(realPath, fsPolicy, true)) {
+      return {
+        allowed: false,
+        reason: `Symlink target ${realPath} is outside allowed boundaries`,
+      };
+    }
+
+    // 5. Allowlist: lexical, or canonical against canonicalized roots (so an
+    //    explicitly configured symlinked workspace root keeps working).
+    if (!this._isWithinAllowedPaths(absolutePath, fsPolicy)
+      && !this._isWithinAllowedPaths(realPath, fsPolicy, true)) {
       return {
         allowed: false,
         reason: `Access to ${targetPath} is not permitted by current capability policy`,
@@ -887,26 +889,46 @@ export class PolicyEngine {
     return p;
   }
 
-  private _isSymlink(p: string): boolean {
-    try {
-      const stats = fs.lstatSync(p);
-      return stats.isSymbolicLink();
-    } catch {
-      return false;
+  /**
+   * #216: realpath of the deepest existing ancestor plus the not-yet-existing
+   * remainder. ENOENT/ENOTDIR walk upward; every other error is thrown so the
+   * caller fails closed.
+   */
+  private _canonicalize(abs: string): string {
+    let current = abs;
+    const rest: string[] = [];
+    for (;;) {
+      try {
+        return path.join(fs.realpathSync(current), ...rest);
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+        const parent = path.dirname(current);
+        if (parent === current) return abs;
+        rest.unshift(path.basename(current));
+        current = parent;
+      }
     }
   }
 
-  private _isWithinAllowedPaths(p: string, policy: FilesystemPolicy): boolean {
-    return policy.allowed_paths.some(allowed => {
-      const absAllowed = path.resolve(this._resolveHome(allowed));
-      return p === absAllowed || p.startsWith(absAllowed + path.sep);
-    });
+  /** Canonical form of a configured root; falls back to its lexical form if it cannot be resolved. */
+  private _rootForms(root: string, canonical: boolean): string[] {
+    const lexical = path.resolve(this._resolveHome(root));
+    if (!canonical) return [lexical];
+    try {
+      return [lexical, this._canonicalize(lexical)];
+    } catch {
+      return [lexical];
+    }
   }
 
-  private _isWithinDeniedPaths(p: string, policy: FilesystemPolicy): boolean {
-    return policy.denied_paths.some(denied => {
-      const absDenied = path.resolve(this._resolveHome(denied));
-      return p === absDenied || p.startsWith(absDenied + path.sep);
-    });
+  private _isWithinAllowedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
+    return policy.allowed_paths.some(allowed =>
+      this._rootForms(allowed, canonical).some(r => p === r || p.startsWith(r + path.sep)));
+  }
+
+  private _isWithinDeniedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
+    return policy.denied_paths.some(denied =>
+      this._rootForms(denied, canonical).some(r => p === r || p.startsWith(r + path.sep)));
   }
 }
