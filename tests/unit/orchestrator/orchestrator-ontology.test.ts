@@ -9,7 +9,7 @@ import os from 'node:os';
 import { DEFAULT_CONFIG } from '../../../src/config/defaults.js';
 import type { TaskContext, ZoraPolicy } from '../../../src/types.js';
 
-const loopCalls: Array<{ systemPrompt: string; allowedTools?: unknown }> = [];
+const loopCalls: Array<{ systemPrompt: string; allowedTools?: unknown; prompt?: string }> = [];
 let responder: (systemPrompt: string) => string = () => '[]';
 const loopSignals: AbortSignal[] = [];
 let onLoopStart: (systemPrompt: string) => void = () => {};
@@ -20,10 +20,10 @@ vi.mock('../../../src/orchestrator/execution-loop.js', async orig => {
     constructor(
       private readonly opts: { systemPrompt: string; allowedTools?: unknown; abortController?: AbortController },
     ) {}
-    async run(): Promise<string> {
+    async run(prompt?: string): Promise<string> {
       onLoopStart(this.opts.systemPrompt);
       if (this.opts.abortController) loopSignals.push(this.opts.abortController.signal);
-      loopCalls.push({ systemPrompt: this.opts.systemPrompt, allowedTools: this.opts.allowedTools });
+      loopCalls.push({ systemPrompt: this.opts.systemPrompt, allowedTools: this.opts.allowedTools, prompt });
       return responder(this.opts.systemPrompt);
     }
   }
@@ -196,5 +196,33 @@ describe('orchestrator ontology enrichment (#194)', () => {
     await internals._runExtractionAsync(ctx);
     expect(recorded.length).toBeLessThan(ONTOLOGY_MAX_ITEMS_PER_RUN);
     expect(recorded.length).toBeGreaterThan(0);
+  });
+});
+
+describe('orchestrator ontology provenance (#194)', () => {
+  it('grounds on the committed summary, not the pre-save item', async () => {
+    const { internals, recorded } = setup(true);
+    const store = (internals._memoryManager as { structuredMemory: { createItem: (i: { summary: string }) => Promise<unknown> } }).structuredMemory;
+    const orig = store.createItem;
+    store.createItem = async i => {
+      const r = (await orig(i)) as { summary: string };
+      return { ...r, summary: `${r.summary} (normalized)` };
+    };
+    await internals._runExtractionAsync(ctx);
+    const ontoPrompts = loopCalls.filter(c => c.systemPrompt.includes("entities and relations")).map(c => c.prompt ?? "");
+    expect(ontoPrompts.length).toBeGreaterThan(0);
+    for (const p of ontoPrompts) expect(p).toContain("(normalized)");
+    expect(recorded.length).toBeGreaterThan(0);
+  });
+
+  it('skips enrichment for items with an invalid persisted creation time', async () => {
+    const { internals, created, recorded } = setup(true);
+    const store = (internals._memoryManager as { structuredMemory: { createItem: (i: { summary: string }) => Promise<unknown> } }).structuredMemory;
+    const orig = store.createItem;
+    store.createItem = async i => ({ ...(await orig(i) as object), created_at: 'not-a-date' });
+    await internals._runExtractionAsync(ctx);
+    expect(created).toHaveLength(ITEM_COUNT); // still persisted
+    expect(recorded).toHaveLength(0); // never enriched, no fake "now"
+    expect(loopCalls.some(c => c.systemPrompt.includes('entities and relations'))).toBe(false);
   });
 });
