@@ -92,4 +92,38 @@ describe('#216 symlinked-ancestor handling in validatePath', () => {
     fs.symlinkSync(a, b);
     expect(engine().validatePath(path.join(a, 'x')).allowed).toBe(false);
   });
+
+  it('denies a write target through a DANGLING symlink (realpath says ENOENT, the entry exists)', () => {
+    const dangling = path.join(allowed, 'dangling');
+    fs.symlinkSync(path.join(outside, 'not-yet.txt'), dangling);
+    expect(engine().validatePath(dangling).allowed).toBe(false);
+    expect(engine({ follow: true }).validatePath(dangling).allowed).toBe(false);
+  });
+
+  it('fails closed on ENOTDIR (a file used as a directory) instead of treating it as a missing suffix', () => {
+    const file = path.join(allowed, 'plain-file');
+    fs.writeFileSync(file, 'x');
+    expect(engine().validatePath(path.join(file, 'child')).allowed).toBe(false);
+  });
+
+  it('applies canonical deny rules to an already-canonical request (denied root is itself a symlink)', () => {
+    const denyLink = path.join(root, 'deny-link');
+    fs.symlinkSync(denied, denyLink);
+    const e = engine({ deniedPaths: [denyLink] });
+    expect(e.validatePath(path.join(denied, 'key.txt')).allowed).toBe(false);
+    expect(engine({ follow: true, deniedPaths: [denyLink] }).validatePath(path.join(denied, 'key.txt')).allowed).toBe(false);
+  });
+
+  it('denies when a configured deny root cannot be resolved (policy cannot establish the boundary)', () => {
+    const loopA = path.join(root, 'deny-loop-a');
+    const loopB = path.join(root, 'deny-loop-b');
+    fs.symlinkSync(loopB, loopA);
+    fs.symlinkSync(loopA, loopB);
+    expect(engine({ deniedPaths: [loopA] }).validatePath(path.join(allowed, 'real', 'f.txt')).allowed).toBe(false);
+  });
+
+  it('a deny root that simply does not exist yet does not block unrelated paths', () => {
+    const e = engine({ deniedPaths: [path.join(root, 'no-such-dir', 'secret')] });
+    expect(e.validatePath(path.join(allowed, 'real', 'f.txt')).allowed).toBe(true);
+  });
 });

@@ -414,10 +414,23 @@ export class PolicyEngine {
         reason: `Access to ${targetPath} is explicitly denied by security policy`,
       };
     }
-    if (viaLink && this._isWithinDeniedPaths(realPath, fsPolicy, true)) {
+    let deniedCanonically: boolean;
+    try {
+      deniedCanonically = this._isWithinDeniedPaths(absolutePath, fsPolicy, true)
+        || this._isWithinDeniedPaths(realPath, fsPolicy, true);
+    } catch (err: unknown) {
+      // The policy cannot establish a deny boundary: refuse rather than guess.
       return {
         allowed: false,
-        reason: `Symlink target ${realPath} is explicitly denied by security policy`,
+        reason: `Cannot resolve a denied path boundary for ${targetPath}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (deniedCanonically) {
+      return {
+        allowed: false,
+        reason: viaLink
+          ? `Symlink target ${realPath} is explicitly denied by security policy`
+          : `Access to ${targetPath} is explicitly denied by security policy`,
       };
     }
 
@@ -901,34 +914,49 @@ export class PolicyEngine {
       try {
         return path.join(fs.realpathSync(current), ...rest);
       } catch (err: unknown) {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+        // Only a genuinely absent entry may be treated as a missing suffix.
+        // ENOTDIR, ELOOP, EACCES... are unresolved filesystem state: throw.
+        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+        // realpath reports ENOENT for a DANGLING symlink too. If the entry
+        // itself exists (lstat succeeds) it is unresolved, not missing.
+        try {
+          fs.lstatSync(current);
+          throw new Error(`unresolvable existing entry ${current}`);
+        } catch (lerr: unknown) {
+          if ((lerr as NodeJS.ErrnoException)?.code !== 'ENOENT') throw lerr;
+        }
         const parent = path.dirname(current);
-        if (parent === current) return abs;
+        if (parent === current) throw new Error(`no existing ancestor for ${abs}`);
         rest.unshift(path.basename(current));
         current = parent;
       }
     }
   }
 
-  /** Canonical form of a configured root; falls back to its lexical form if it cannot be resolved. */
-  private _rootForms(root: string, canonical: boolean): string[] {
+  /**
+   * Lexical form of a configured root, plus its canonical form when requested.
+   * An allowed root that cannot be canonicalized contributes only its lexical
+   * form (never more permissive). A DENIED root that cannot be canonicalized
+   * throws so the caller denies: the boundary cannot be established.
+   */
+  private _rootForms(root: string, canonical: boolean, strict: boolean): string[] {
     const lexical = path.resolve(this._resolveHome(root));
     if (!canonical) return [lexical];
     try {
       return [lexical, this._canonicalize(lexical)];
-    } catch {
+    } catch (err) {
+      if (strict) throw err;
       return [lexical];
     }
   }
 
   private _isWithinAllowedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
     return policy.allowed_paths.some(allowed =>
-      this._rootForms(allowed, canonical).some(r => p === r || p.startsWith(r + path.sep)));
+      this._rootForms(allowed, canonical, false).some(r => p === r || p.startsWith(r + path.sep)));
   }
 
   private _isWithinDeniedPaths(p: string, policy: FilesystemPolicy, canonical = false): boolean {
     return policy.denied_paths.some(denied =>
-      this._rootForms(denied, canonical).some(r => p === r || p.startsWith(r + path.sep)));
+      this._rootForms(denied, canonical, true).some(r => p === r || p.startsWith(r + path.sep)));
   }
 }
