@@ -66,3 +66,12 @@ export {
   type TaskRecord,
   type TaskResult,
 } from './graph-types.js';
+
+export {
+  OntologyExtractor,
+  enrichMemoriesWithOntology,
+  ONTOLOGY_SYSTEM_PROMPT,
+  buildOntologyPrompt,
+  parseOntologyResponse,
+  type OntologyExtractFn,
+} from './ontology-extractor.js';

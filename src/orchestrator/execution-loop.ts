@@ -98,6 +98,14 @@ export interface ZoraExecutionOptions {
   maxTurns?: number;
   allowedTools?: string[];
   /**
+   * #194: SDK `tools` option — `[]` disables ALL built-in tools (unlike
+   * `allowedTools`, which only filters permission prompts). Forwarded only when
+   * set, so existing loops are unaffected.
+   */
+  tools?: string[];
+  /** #194: ignore MCP servers inherited from settings; only `mcpServers` here apply. */
+  strictMcpConfig?: boolean;
+  /**
    * SEC-23: static tool bans, layer [1] of the enforcement chain. Derived from
    * `ZoraPolicy` by `buildEnforcedSdkOptions()` — never hand-written at a call
    * site. Unlike `allowedTools` this removes the tool from the model's context
@@ -224,6 +232,8 @@ export class ExecutionLoop {
       hooks: this._opts.hooks ?? {},
       canUseTool: this._opts.canUseTool,
       settingSources: ['user', 'project'],
+      ...(this._opts.tools !== undefined ? { tools: this._opts.tools } : {}),
+      ...(this._opts.strictMcpConfig !== undefined ? { strictMcpConfig: this._opts.strictMcpConfig } : {}),
     };
 
     // ERR-05: Timeout protection (default 30 minutes)

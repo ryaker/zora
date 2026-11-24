@@ -61,7 +61,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { createGraphTools } from '../tools/graph-tools.js';
-import { GraphMemoryClient, graphConfigFromEnv } from '../memory/graph/index.js';
+import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT, enrichMemoriesWithOntology } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
 import { ValidationPipeline } from '../memory/validation-pipeline.js';
@@ -2243,11 +2243,17 @@ export class Orchestrator {
     const agentWorkspaceCwd = this._config.agent.workspace
       ? this._config.agent.workspace.replace(/^~/, os.homedir())
       : process.cwd();
-    const extractFn = async (prompt: string): Promise<string> => {
+    const makeExtractFn = (systemPrompt: string, opts: { disableTools?: boolean } = {}) => async (prompt: string, signal?: AbortSignal): Promise<string> => {
+      // Caller-owned deadline: aborting this cancels the SDK request itself.
+      const abortController = new AbortController();
+      if (signal) {
+        if (signal.aborted) abortController.abort();
+        else signal.addEventListener('abort', () => abortController.abort(), { once: true });
+      }
       const extractLoop = new ExecutionLoop({
         // #219: attribute to the originating job rather than 'system'.
         onSettingsNotice: (n) => this._auditSettingsNotice({ ...n, jobId: taskContext.jobId, source: 'execution-loop:extraction' }),
-        systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+        systemPrompt,
         // SEC-23: a single-shot text call over conversation content that may
         // itself be attacker-influenced. It has no business calling a tool, and
         // until now it silently inherited ExecutionLoop's DEFAULT_TOOLS —
@@ -2264,10 +2270,17 @@ export class Orchestrator {
         }),
         cwd: agentWorkspaceCwd,
         maxTurns: 1,
+        // #194: optional ontology enrichment disables the built-in tool surface at the SDK
+        // (`tools: []`, not just an empty allowlist) and ignores settings-inherited MCP servers.
+        ...(opts.disableTools ? { tools: [], strictMcpConfig: true } : {}),
+        abortController,
       });
       return extractLoop.run(prompt);
     };
 
+    const extractFn = makeExtractFn(
+      'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
+    );
     const pipeline = new ExtractionPipeline(extractFn);
     const result = await pipeline.extract(messages, categoryNames);
 
@@ -2285,9 +2298,10 @@ export class Orchestrator {
 
     // Persist each new item
     let savedCount = 0;
+    const persisted: Array<{ id: string; summary: string; createdAt: number }> = [];
     for (const item of uniqueItems) {
       try {
-        await this._memoryManager.structuredMemory.createItem({
+        const created = await this._memoryManager.structuredMemory.createItem({
           type: item.type,
           summary: item.summary,
           source: item.source || taskContext.jobId,
@@ -2296,6 +2310,12 @@ export class Orchestrator {
           category: item.category,
         });
         savedCount++;
+        // Only items whose save succeeded reach enrichment (a throw above skips this).
+        // #194: ground on what was committed (not the pre-save item) and use the persisted
+        // creation time; an unparseable timestamp skips enrichment rather than faking "now".
+        const createdAt = Date.parse(created.created_at);
+        if (!Number.isFinite(createdAt)) continue;
+        persisted.push({ id: created.id, summary: created.summary, createdAt });
       } catch (err) {
         log.debug({ err, item: item.summary }, 'Failed to save extracted memory item');
       }
@@ -2306,6 +2326,25 @@ export class Orchestrator {
       await this._memoryManager.appendDailyNote(
         `Extracted ${savedCount} memory item(s) from job ${taskContext.jobId}`,
       );
+    }
+
+    // #194: ontology enrichment runs only after ALL ordinary persistence is done,
+    // so it can never delay a memory save. Default-off (needs the graph tier and
+    // ZORA_GRAPH_ONTOLOGY); bounded by item count and wall clock; reuses the
+    // tool-less, policy-gated extraction call (toolSurface 'none'); facts are
+    // grounded in the source text and carry the memory id as provenance.
+    const graph = this._graphClient;
+    if (graph?.ontologyEnabled && persisted.length > 0) {
+      try {
+        await enrichMemoriesWithOntology(
+          persisted,
+          new OntologyExtractor(makeExtractFn(ONTOLOGY_SYSTEM_PROMPT, { disableTools: true })),
+          facts => graph.recordFacts(facts),
+          { isEnabled: () => graph.ontologyEnabled },
+        );
+      } catch (err) {
+        log.debug({ err, jobId: taskContext.jobId }, 'Ontology enrichment failed');
+      }
     }
 
     log.info(
