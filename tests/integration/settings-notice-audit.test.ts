@@ -157,7 +157,7 @@ describe('settings_not_in_effect → audit row (#219)', () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   });
 
-  async function boot(): Promise<{ provider: ClaudeProvider }> {
+  async function boot(autoExtract = false): Promise<{ provider: ClaudeProvider }> {
     dir = makeTestDir();
     await fs.mkdir(dir, { recursive: true });
     const provider = new ClaudeProvider({
@@ -165,7 +165,10 @@ describe('settings_not_in_effect → audit row (#219)', () => {
         cost_tier: 'premium', enabled: true } as never,
       queryFn: () => fakeQuery(),
     });
-    orch = new Orchestrator({ config: makeConfig(dir), policy: makePolicy(), providers: [provider], baseDir: dir });
+    const config = makeConfig(dir);
+    // Isolate: post-job extraction is a second legitimate notice source and is tested separately.
+    config.memory.auto_extract = autoExtract;
+    orch = new Orchestrator({ config, policy: makePolicy(), providers: [provider], baseDir: dir });
     await orch.boot();
     return { provider };
   }
@@ -180,6 +183,24 @@ describe('settings_not_in_effect → audit row (#219)', () => {
     expect(rows[0]).toMatchObject({ eventType: 'notification', provider: 'claude', result: { sessionId: 'sess-123' } });
     expect(rows[0]!.jobId).not.toBe('system');
     expect(JSON.stringify(rows[0])).not.toContain(SECRET_TEXT);
+  });
+
+  it('post-job extraction row carries the originating job id, not system', async () => {
+    await boot(true);
+    await orch!.submitTask({ prompt: 'hi', onEvent: () => {} });
+    let rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 50; i++) {
+      rows = (await readRows(dir)).filter((r) => r.toolName === 'settings_not_in_effect');
+      if (rows.some((r) => r.provider === 'execution-loop:extraction')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const providerRow = rows.find((r) => r.provider === 'claude');
+    const extractionRow = rows.find((r) => r.provider === 'execution-loop:extraction');
+    expect(providerRow).toBeDefined();
+    expect(extractionRow).toBeDefined();
+    expect(extractionRow!.jobId).not.toBe('system');
+    expect(extractionRow!.jobId).toBe(providerRow!.jobId);
+    expect(JSON.stringify(extractionRow)).not.toContain(SECRET_TEXT);
   });
 
   it('ExecutionLoop path (user+project settings) writes a metadata-only row', async () => {

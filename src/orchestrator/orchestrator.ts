@@ -2245,7 +2245,8 @@ export class Orchestrator {
       : process.cwd();
     const extractFn = async (prompt: string): Promise<string> => {
       const extractLoop = new ExecutionLoop({
-        onSettingsNotice: (n) => this._auditSettingsNotice(n),
+        // #219: attribute to the originating job rather than 'system'.
+        onSettingsNotice: (n) => this._auditSettingsNotice({ ...n, jobId: taskContext.jobId, source: 'execution-loop:extraction' }),
         systemPrompt: 'You extract structured memory items from conversations. Respond with ONLY a JSON array.',
         // SEC-23: a single-shot text call over conversation content that may
         // itself be attacker-influenced. It has no business calling a tool, and
