@@ -2468,11 +2468,15 @@ export class Orchestrator {
     ];
 
     // Wire existing memory tools (memory_search, memory_save, memory_forget)
-    const memoryTools = createMemoryTools(this._memoryManager, this._validationPipeline, this._graphClient, {
-      // #194c: only first-party sources may surface via the graph; untrusted tool
-      // output stays lexical-only until a per-job source-visibility check exists.
-      isSourceEligible: (item) => item.source_type !== 'tool_output',
-    });
+    const memoryTools = createMemoryTools(
+      this._memoryManager,
+      this._validationPipeline,
+      this._graphClient,
+      // #194c: no GraphExpansionPolicy is supplied, so graph expansion in memory_search
+      // stays INERT in production. Enabling it needs a trusted per-job source-visibility
+      // check, a Richard decision (see PR #230).
+      undefined,
+    );
 
     // Add recall_context tool for daily notes retrieval
     const recallContextTool: CustomToolDefinition = {
