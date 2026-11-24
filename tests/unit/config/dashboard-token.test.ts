@@ -15,6 +15,7 @@ import { AuthMonitor } from '../../../src/orchestrator/auth-monitor.js';
 import os from 'node:os';
 import { loadConfigFromString, ConfigError } from '../../../src/config/loader.js';
 import { resolveDashboardToken } from "../../../src/config/dashboard-token.js";
+import { resolveConfig } from '../../../src/config/loader.js';
 import type { ZoraConfig } from '../../../src/types.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -64,6 +65,26 @@ describe('steering.dashboard_token (#174)', () => {
     const app = makeServer(resolveDashboardToken(parsed.steering.dashboard_token));
     expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(401);
     expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer env-token')).status).toBe(200);
+  });
+
+  it('layered loader: project-local token vs operator env, incl. whitespace-only env', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zora-174c-'));
+    fs.writeFileSync(path.join(dir, 'config.toml'), '[steering]\ndashboard_token = "cfg-token"\n');
+    const { config } = await resolveConfig({ configDir: dir });
+    process.env['ZORA_DASHBOARD_TOKEN'] = 'env-token';
+    const a = makeServer(resolveDashboardToken(config.steering.dashboard_token));
+    expect((await request(a as never).get('/api/system').set('Authorization', 'Bearer env-token')).status).toBe(200);
+    expect((await request(a as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(401);
+    process.env['ZORA_DASHBOARD_TOKEN'] = '   ';
+    const b = makeServer(resolveDashboardToken(config.steering.dashboard_token));
+    expect((await request(b as never).get('/api/system').set('Authorization', 'Bearer cfg-token')).status).toBe(200);
+  });
+
+  it('whitespace-only env with no config token leaves auth off, never a blank-token gate', async () => {
+    process.env['ZORA_DASHBOARD_TOKEN'] = '   ';
+    const app = makeServer(undefined);
+    expect((await request(app as never).get('/api/system')).status).toBe(200);
+    expect((await request(app as never).get('/api/system').set('Authorization', 'Bearer    ')).status).toBe(200);
   });
 
   it('config token is used when the env var is unset or blank', () => {

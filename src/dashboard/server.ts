@@ -23,6 +23,7 @@ import { createLogger } from '../utils/logger.js';
 import { CostTracker } from './cost-tracker.js';
 import { shouldIncludeEvent } from '../utils/event-filter.js';
 import type { VerbosityLevel } from '../utils/event-filter.js';
+import { resolveDashboardToken } from '../config/dashboard-token.js';
 import type { AgentEvent, ProjectConfig } from '../types.js';
 
 const log = createLogger('dashboard');
@@ -91,7 +92,9 @@ export class DashboardServer {
   constructor(options: DashboardOptions) {
     this._options = options;
     this._tlciCostTracker = options.costTracker;
-    this._authToken = options.dashboardToken ?? process.env['ZORA_DASHBOARD_TOKEN'];
+    // #174: one selection rule (env wins, blank ignored) shared with the daemon,
+    // so a blank env var can never enable auth with an unusable token.
+    this._authToken = resolveDashboardToken(options.dashboardToken);
     this._indexHtmlPath = path.join(__dirname, 'frontend', 'dist', 'index.html');
     this._app = express();
 
