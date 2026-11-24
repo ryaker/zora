@@ -145,6 +145,25 @@ describe('TelegramGateway.connectApprovalQueue()', () => {
     expect(queue.getPendingCount()).toBe(0);
   });
 
+  it('#218: one failed chat does not deny a request another chat received', async () => {
+    const bot = (gateway as unknown as { _bot: { sendMessage: ReturnType<typeof vi.fn> } })._bot;
+    const chatIds = (gateway as unknown as { _chatIds: Map<string, number> })._chatIds;
+    chatIds.set('u1', 111);
+    chatIds.set('u2', 222);
+    let sent = '';
+    bot.sendMessage.mockImplementation(async (chat: number, m: string) => {
+      if (chat === 111) throw new Error('chat 111 blocked the bot');
+      sent = m;
+    });
+    const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
+    gateway.connectApprovalQueue(q);
+    const pending = q.request({ action: 'rm', score: 95, jobId: 'j', tool: 'bash' });
+    await vi.waitFor(() => expect(sent).not.toBe(''));
+    expect(q.getPendingCount()).toBe(1);
+    q.handleReply(/ZORA-[A-Z0-9]{4}/.exec(sent)![0], 'allow');
+    await expect(pending).resolves.toBe(true);
+  });
+
   it('#218: stop() denies pending approvals that can no longer be answered', async () => {
     const q = new ApprovalQueue({ ...DEFAULT_APPROVAL_CONFIG, enabled: true, timeoutMs: 60_000 });
     q.setSendHandler(async () => 1);

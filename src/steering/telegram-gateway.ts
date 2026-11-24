@@ -280,7 +280,7 @@ export class TelegramGateway {
           await this._bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
           delivered++;
         } catch (err) {
-          log.warn({ err }, 'Approval request send failed for a chat');
+          log.warn({ errName: err instanceof Error ? err.name : typeof err }, 'Approval request send failed for a chat');
         }
       }
       return delivered;

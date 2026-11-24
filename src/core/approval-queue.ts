@@ -145,7 +145,7 @@ export class ApprovalQueue {
         // #218: a send that reached no approver can never be answered.
         if (reached === 0) this._denyUnanswerable(entry, 'no approver reachable');
       }).catch(err => {
-        log.error({ err }, 'Failed to send approval request');
+        log.error({ errName: err instanceof Error ? err.name : typeof err }, 'Failed to send approval request');
         this._denyUnanswerable(entry, 'approval request could not be delivered');
       });
     });
