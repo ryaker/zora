@@ -65,7 +65,8 @@ export function parseOntologyResponse(
   ts: number,
   sourceText: string,
 ): MemoryFacts | null {
-  const haystack = sourceText.toLowerCase();
+  // Ground against exactly what the model was shown (the capped slice), not the full text.
+  const haystack = sourceText.slice(0, MAX_EXTRACT_INPUT).toLowerCase();
   if (typeof raw !== 'string' || raw.length > MAX_EXTRACT_RESPONSE) return null;
   let parsed: unknown;
   try {
@@ -97,6 +98,7 @@ export function parseOntologyResponse(
   }
 
   const relations: NonNullable<MemoryFacts['relations']> = [];
+  const seenRelations = new Set<string>();
   if (Array.isArray(obj.relations)) {
     for (const r of obj.relations) {
       if (relations.length >= MAX_EXTRACT_RELATIONS) break;
@@ -110,6 +112,10 @@ export function parseOntologyResponse(
       const to = byName.get(toName);
       // Endpoints must be entities the model declared with a valid kind.
       if (!from || !to) continue;
+      // Duplicates are dropped before they count toward the cap.
+      const key = JSON.stringify([fromName, predicate, toName]);
+      if (seenRelations.has(key)) continue;
+      seenRelations.add(key);
       relations.push({ from, to, kind: predicate });
     }
   }
@@ -192,7 +198,9 @@ export async function enrichMemoriesWithOntology(
           timer.unref?.();
         }),
       ]);
-      if (facts) {
+      // A result that lands after the deadline/abort must not be recorded.
+      if (facts && !controller.signal.aborted && Date.now() <= deadline
+          && (!opts.isEnabled || opts.isEnabled())) {
         record(facts);
         recorded++;
       }

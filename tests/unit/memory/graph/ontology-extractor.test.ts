@@ -173,12 +173,13 @@ describe('enrichMemoriesWithOntology', () => {
   });
 
   it('re-checks availability before every call', async () => {
-    let calls = 0;
     const fn = vi.fn(ok);
+    // Disabled once two calls were made: the second result is also dropped
+    // (availability is re-checked after the call), and no third call starts.
     const n = await enrichMemoriesWithOntology(items, new OntologyExtractor(fn), vi.fn(), {
-      isEnabled: () => calls++ < 2,
+      isEnabled: () => fn.mock.calls.length < 2,
     });
-    expect(n).toBe(2);
+    expect(n).toBe(1);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
@@ -241,5 +242,52 @@ describe('policy boundary: ontologyEnabled', () => {
     expect(flagOnly.ontologyEnabled).toBe(false); // inert unless `enabled` too
     await client.close();
     await flagOnly.close();
+  });
+});
+
+describe('round-3 hardening (#194)', () => {
+  it('grounds against the same 8000-char slice the model saw', () => {
+    const src = 'Zora. ' + 'x'.repeat(MAX_EXTRACT_INPUT) + ' Beyond';
+    const raw = JSON.stringify({ entities: [{ name: 'Zora', kind: 'project' }, { name: 'Beyond', kind: 'project' }] });
+    const facts = parseOntologyResponse(raw, 'm', 1, src)!;
+    expect(facts.entities.map(e => e.name)).toEqual(['Zora']);
+  });
+
+  it('duplicate relations do not consume the relation cap', () => {
+    const src = 'A B C';
+    const rels = [
+      ...Array.from({ length: 50 }, () => ({ from: 'A', to: 'B', predicate: 'uses' })),
+      { from: 'A', to: 'C', predicate: 'uses' },
+    ];
+    const raw = JSON.stringify({
+      entities: [{ name: 'A', kind: 'tool' }, { name: 'B', kind: 'tool' }, { name: 'C', kind: 'tool' }],
+      relations: rels,
+    });
+    const facts = parseOntologyResponse(raw, 'm', 1, src)!;
+    expect(facts.relations).toHaveLength(2);
+  });
+
+  it('a result that arrives after the budget is not recorded', async () => {
+    const record = vi.fn();
+    const slow = new OntologyExtractor(async () => {
+      await new Promise(r => setTimeout(r, 60));
+      return JSON.stringify({ entities: [{ name: 'Zora', kind: 'project' }] });
+    });
+    const n = await enrichMemoriesWithOntology(
+      [{ id: 'm1', summary: 'Zora note', createdAt: 1 }], slow, record, { budgetMs: 20 });
+    expect(n).toBe(0);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a result is not recorded if the tier was disabled while the call was in flight', async () => {
+    const record = vi.fn();
+    let enabled = true;
+    const ext = new OntologyExtractor(async () => {
+      enabled = false;
+      return JSON.stringify({ entities: [{ name: 'Zora', kind: 'project' }] });
+    });
+    await enrichMemoriesWithOntology(
+      [{ id: 'm1', summary: 'Zora note', createdAt: 1 }], ext, record, { isEnabled: () => enabled });
+    expect(record).not.toHaveBeenCalled();
   });
 });
