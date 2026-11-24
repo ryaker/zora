@@ -129,11 +129,14 @@ describeIfNative('GraphStore provenance', { timeout: 30_000 }, () => {
     expect(store.relationSources(zora, sparrow, p100)).toEqual(['x']);
     expect(store.relationSources(zora, sparrow, p100 + 'q')).toEqual([]);
 
+    // Fresh entity names (not zora/sparrow) so the memory-ID case is isolated from the relation case above.
+    const idEnt = { name: 'IdBoundaryA', kind: 'concept' as const };
+    const idEnt2 = { name: 'IdBoundaryB', kind: 'concept' as const };
     const id200 = 'i'.repeat(200);
-    store.recordFacts({ memId: id200, ts: 1, entities: [zora] });
-    store.recordFacts({ memId: id200 + 'j', ts: 1, entities: [sparrow] }); // 201: rejected
-    expect(store.sourcesOf('Zora', 'project')).toEqual([id200]);
-    expect(store.sourcesOf('SparrowDB', 'tool')).toEqual([]);
+    store.recordFacts({ memId: id200, ts: 1, entities: [idEnt] });
+    store.recordFacts({ memId: id200 + 'j', ts: 1, entities: [idEnt2] }); // 201: rejected
+    expect(store.sourcesOf('IdBoundaryA', 'concept')).toEqual([id200]);
+    expect(store.sourcesOf('IdBoundaryB', 'concept')).toEqual([]);
 
     // Opaque ids are exact: surrounding whitespace is not trimmed away.
     store.recordFacts({ memId: ' padded ', ts: 1, entities: [{ name: 'Pad', kind: 'concept' }] });
