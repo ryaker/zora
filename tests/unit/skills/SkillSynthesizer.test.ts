@@ -329,7 +329,7 @@ describe('SkillSynthesizer.maybeGenerateSkill with an approval queue that cannot
 // ─── #201 review text / card / flow ──────────────────────────────────
 
 import {
-  buildLocalReviewText, buildRemoteReviewCard, sanitizeDisplay,
+  buildLocalReviewText, sanitizeDisplay,
 } from '../../../src/skills/SkillSynthesizer.js';
 
 describe('skill review text (#201)', () => {
@@ -343,22 +343,6 @@ describe('skill review text (#201)', () => {
     expect(t).toContain(hashContent(big));
     expect(t).not.toMatch(/[\x1b‮]/);
     expect(t).toContain('Source task: SECRET-PROMPT');
-  });
-
-  it('remote card is metadata only: no prompt, host path, description or body text', () => {
-    const body = `${content}\nSECRET-PROMPT /Users/me/.zora \`x\` _y_ *z*`;
-    const c = buildRemoteReviewCard({ name: 'demo', content: body, session });
-    expect(c).not.toMatch(/SECRET-PROMPT|\/Users|demo\*|Does a|body/);
-    expect(c).not.toMatch(/[`*\[\]\n]/);
-    expect(c).toContain('skills/demo/SKILL.md');
-    expect(c).toContain(hashContent(body));
-    expect(c).toContain('inspect it on the host');
-  });
-
-  it('remote card rejects a hostile name rather than echoing it', () => {
-    const c = buildRemoteReviewCard({ name: 'x`*[evil](u)', content, session });
-    expect(c).toContain('invalid-name');
-    expect(c).not.toContain('evil');
   });
 
   it('sanitizeDisplay keeps newline/tab and removes ESC and bidi', () => {
@@ -399,9 +383,8 @@ describe('SkillSynthesizer approval flow (#201)', () => {
   it('approve: nothing written before the decision; file and lock hash match the reviewed text', async () => {
     const { baseDir, sent, writtenWhenAsked } = await flow('allow');
     expect(writtenWhenAsked).toBe(false);
-    expect(sent[0]).toContain(hashContent(skill));
-    expect(sent[0]).not.toContain('SECRET-PROMPT');
-    expect(sent[0]).not.toContain(baseDir);
+    // Remote approval text is intentionally unchanged by #201 (local TTY card only).
+    expect(sent[0]).toContain('Save auto-generated skill: flow-demo');
     const onDisk = await fs.readFile(path.join(baseDir, 'skills', 'flow-demo', 'SKILL.md'), 'utf-8');
     expect(onDisk).toBe(skill);
     const lock = JSON.parse(await fs.readFile(path.join(baseDir, 'skills', 'skills.lock.json'), 'utf-8'));
