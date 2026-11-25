@@ -85,3 +85,39 @@
 - Proposal: (1) one S-size `agent:todo`: bump `@anthropic-ai/claude-agent-sdk` to 0.3.330 with the checks above. (2) Richard-facing note: upgrade NanoClaw to v2026.11.0 stable. No decision issues this week.
 - Critique (reviewer): pending.
 - Decision issue: none.
+
+## 2026-11-24 — Auto Ontology → good agent memory (explicit ask, issue #231)
+- Sources (all read Nov 24, 2026 via fetch; 0 Nimble requests, MCP still 401): NVIDIA/auto-ontology README.md, docs/architecture.md, docs/mcp.md and NVIDIA/auto-ontology-eval README (raw.githubusercontent.com/NVIDIA/...). `skills/AGENTS.md` returned 404; the root AGENTS.md says little on these topics. Papers: Zep/Graphiti https://arxiv.org/abs/2501.13956; Mem0 https://arxiv.org/abs/2504.19413; MemGPT https://arxiv.org/abs/2310.08560; GraphRAG https://arxiv.org/abs/2404.16130; Cognee https://arxiv.org/abs/2505.24478 and https://docs.cognee.ai/core-concepts/overview; LangMem https://langchain-ai.github.io/langmem/concepts/conceptual_guide/; LongMemEval https://arxiv.org/abs/2410.10813. Vendor numbers are self-reported; none independently replicated here.
+- **Q1 — what transfers from NVIDIA (SQL catalogs → memory).** Caveat: their truth is checkable against a database; personal memory has none, so every transfer is by analogy (our inference, not NVIDIA's claim).
+  - *Answerability check*: `check_answerable` grades coverage (share of question entities with a candidate within a distance threshold) before any SQL; the agent then asks or declines. Transfers as an abstention/clarify signal before answering from memory (already shortlisted from #185).
+  - *Certify/validate loop*: machine-side checks gate output (names verified against the catalog, inferred joins kept only if data confirms). Transfers as deterministic gates on extracted facts. Zora's extractor already does this (closed kinds, literal-grounding, caps). Human certification is a flag, not a ranking boost, in NVIDIA's design.
+  - *Provenance*: every term links to its sources and every answer returns SQL and steps. Zora stores `memId` per fact; the gap is returning the facts used with each answer (citation enforcement, open in #194).
+  - *Corrections feedback*: README mentions a "Learn" capability; architecture.md describes only edits and certification, and mcp.md says all nine MCP tools are read-only. Mechanism UNVERIFIED. Design takeaway only: store a correction as a supersession event pointing at the fact it replaces.
+  - *Staleness*: not addressed by NVIDIA (compilation covers only tables with no term yet).
+  - *Eval method*: same model, two arms (schema-only vs ontology), deterministic scoring, report items fixed vs broken, withhold the headline if >5% of runs yield no output, flag confounds where only one arm gets extra prompt help. No accuracy numbers are published in their README.
+- **Q2 — how others do it.**
+  - Zep/Graphiti: temporal edges; a new edge is compared against related existing edges and, on overlap, the old edge's invalid time is set to the new edge's valid time. Entity resolution = embedding + full-text match, then an LLM duplicate decision. Reported (paper Table 3, LongMemEval, gpt-4o): temporal-reasoning 45.1% full-context vs 62.4% Zep; multi-session 44.3% vs 57.9%. Abstract: 94.8% vs 93.4% (MemGPT) on DMR.
+  - Mem0: LOCOMO results, ~26% relative LLM-judge gain over OpenAI's memory, graph variant ~2% above base, ~91% lower p95 latency and >90% fewer tokens than full context. No per-category scores in the abstract.
+  - LangMem: profile (overwrite) vs collection (invalidate/consolidate) memories; docs state over-extraction hurts precision, under-extraction hurts recall; no contradiction detection described.
+  - GraphRAG: community summaries for corpus-wide questions; not a fact-update design (our inference), so limited relevance to supersession. Cognee: ontology grounding plus an "Improve" enrichment step; no entity-resolution detail seen. MemGPT/Letta abstract says nothing on retrieval quality, extraction noise or staleness.
+  - Not found: independent head-to-head measurements of extraction noise. Treat vendor numbers as directional.
+- **Q3 — gap analysis against #208/#222/#230** (Zora side checked in `src/memory/graph/` and `src/tools/memory-tools.ts` on origin/main and the #230 branch):
+  1. *No production read path*: #230 leaves graph expansion inert (no `GraphExpansionPolicy` supplied); needs Richard's source-visibility decision. Until then the ontology is write-only. Answer-side citation enforcement also open.
+  2. *No supersession/validity for assertions*: `Assertion` has `memId` and `ts` only; `SUPERSEDES` exists for `Decision` nodes only (`graph-types.ts`). A changed fact leaves both assertions live. Stale-evidence guard in #230 re-checks that entity names still appear in the memory text, which does not detect a contradicted value.
+  3. *Entity resolution is exact name+kind, first classification wins*: no aliases or case/nickname merging, so "Zora" and "the Zora agent" are two nodes. Relation predicates are matched exactly (`uses` ≠ `built on`).
+  4. *Forgotten memories leave graph rows behind*: reads drop them via `peekItem`, but no cleanup/orphan sweep was verified (unverified whether one exists; check before filing).
+  5. *No inspection tooling*: nothing to list entities/assertions or show what extraction produced; validation today is unit tests only.
+  6. *No recall evaluation*: nobody can currently say whether the ontology improves recall.
+  7. *No abstention signal* (shortlisted earlier from #185).
+- **Q4 — eval design** (ours; borrows LongMemEval's ability taxonomy and NVIDIA's arms/confound rules). Arms: A = plain `memory_search`; B = plain + ontology expansion, same model and prompts. Fixture of ~60-100 hand-written dated memories; ~40 hand-written questions with gold answers and supporting memory IDs, no LLM-generated gold: single-hop 8, multi-hop 8, alias/entity-resolution 4, temporal/supersession 8, abstention 8, provenance 4. Deterministic scoring: normalized exact match plus synonym list; multi-hop needs all gold tokens; supersession passes only if the current value is present and the stale one absent or labelled past; abstention passes on a fixed refusal pattern and any fabricated value fails; provenance is a set match of cited IDs. Metrics: accuracy per type, abstention precision/recall, stale-fact rate, citation recall, items fixed/broken between arms. Three runs per item; with ~40 items a difference of a few items is noise, so report counts, not percentages alone.
+- Relevance: **adopt** the shortlist below. Everything stays default-off and none of it changes authorization.
+- Ranked shortlist (WSJF on the follow-up issues):
+  1. Recall benchmark fixture + deterministic harness, offline, EchoProvider-free retrieval-only first — BV7 TC6 RR5 / size3 = 6.0. Gates the rest: measure before building.
+  2. Read-only ontology inspect command (entities, assertions, provenance for a memory ID) — BV5 TC4 RR3 / size3 = 4.0.
+  3. Advisory low-relevance / abstain signal from recall scores (from #185) — BV5 TC3 RR3 / size3 = 3.7.
+  4. Assertion supersession/validity (a changed fact retires the older assertion; correction = supersession event) — BV7 TC3 RR3 / size5 = 2.6. Design first against benchmark results.
+  5. Alias-aware entity resolution — BV6 TC3 RR2 / size5 = 2.2. Only if the benchmark's alias items show a loss.
+  - Richard decision (already open in #194, not re-filed): the trusted per-job source-visibility check that turns on retrieval.
+- Deliverable: `docs/advanced/auto-ontology.md` (enable steps, worked example, queries, when it helps, how to validate), written against #230 and flagged where it depends on that PR.
+- Critique (reviewer): pending.
+- Decision issue: none; shortlist filed as `agent:todo`.
