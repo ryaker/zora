@@ -4,8 +4,7 @@ All API keys for the NanoClaw agents live only in the OneCLI vault on the M2 Air
 (dashboard http://127.0.0.1:10254, gateway :10255, bound to localhost; OneCLI 1.45.0).
 Agent containers never see a key: they send the placeholder `onecli-managed` and the
 gateway swaps the real key in on the way out, matched by host (and path).
-Zora Referee (Hermes Agent, see referee.md) is outside this rule: a separate, repo-scoped token for it is planned but
-pending operator confirmation (not provisioned), and would be passed only into its Docker sandbox.
+Zora Referee (Hermes Agent, see referee.md) is outside this rule: it uses a separate, repo-scoped token passed only into its Docker sandbox.
 
 The M4's OneCLI (v1.42.0) is left untouched; NanoClaw v2026.11.0 needs gateway 1.45 for
 per-agent grants, and pointing the Air at the M4 would mean re-binding the M4 gateway.
