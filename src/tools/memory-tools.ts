@@ -134,6 +134,14 @@ const MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
  */
 const GRAPH_BOOST = 1.25;
 
+/**
+ * Relevance an ontology-validated match contributes when its text shares no query
+ * words, so a positive `min_score` does not discard exactly the matches the graph
+ * exists to find. Still scaled by recency/frequency/source trust; hits stay
+ * provisional, not verified facts (#194c).
+ */
+const GRAPH_RELEVANCE_FLOOR = 0.5;
+
 /** Case-insensitive mention check: re-validates against CURRENT item content. */
 function mentions(item: MemoryItem, name: string): boolean {
   return item.summary.toLowerCase().includes(name.toLowerCase());
@@ -244,12 +252,12 @@ function createMemorySearchTool(
         try {
           let budget = MAX_GRAPH_CANDIDATES;
           if (entity) {
-            const ids = await graph.sourcesOf(entity.name, entity.kind, budget);
+            const ids = await graph.sourcesOfChecked(entity.name, entity.kind, budget);
             for (const id of ids.slice(0, budget)) cands.push({ id, names: [entity.name] });
             budget -= Math.min(ids.length, budget);
           }
           if (from && to && predicate && budget > 0) {
-            const ids = await graph.relationSources(from, to, predicate, budget);
+            const ids = await graph.relationSourcesChecked(from, to, predicate, budget);
             for (const id of ids.slice(0, budget)) cands.push({ id, names: [from.name, to.name] });
           }
         } catch {
@@ -266,7 +274,7 @@ function createMemorySearchTool(
           graphIds.add(id);
           if (!lexicalIds.has(id)) {
             itemMap.set(id, item);
-            graphScored.push({ itemId: id, score: memoryManager.scoreMemoryItem(item, query).score });
+            graphScored.push({ itemId: id, score: memoryManager.scoreMemoryItem(item, query, GRAPH_RELEVANCE_FLOOR).score });
           }
         }
       }
