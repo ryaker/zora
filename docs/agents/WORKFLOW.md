@@ -16,7 +16,9 @@ is only a nudge.
 ```
 agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ until converged)
            → agent:approved → CI green → reviewer squash-merges → progress note on #184
-same disagreement twice → Zora Referee → REFEREE RULING: (binding only from the designated Referee identity) → back to the loop
+same disagreement twice in a row → Zora Referee → REFEREE RULING:
+   ├─ author verified as designated Referee identity → binding on technical points → back to the loop
+   └─ unverified, advisory, no ruling in 2 wakes, or GitHub auth missing → NOT binding; keep all gates → needs-richard
 any state → needs-richard   (protected path, product/security call, no convergence after a ruling, CI fails twice for the same reason, budget ≥90%)
 ```
 
@@ -33,8 +35,8 @@ any state → needs-richard   (protected path, product/security call, no converg
 
 1. Never push to `main`. Never force-push. Only the reviewer merges, and only an `agent:approved` PR with green CI that is not `needs-richard`.
 2. At most 3 open PRs for the architect (the reviewer reviews every PR waiting on each wake); at most 4 implement tasks per day. A PR is exempt from the cap only while it is parked awaiting Richard's decision (`needs-richard` and no agent work pending on it), not merely because the label is present; once Richard unparks it, it counts again. Parked PRs stay unmerged. The daily implement limit and merge rules are unchanged.
-3. No fixed review-round cap (Richard, 2026-11-23). Round count is not a stop condition. When the same disagreement
-   repeats with no new argument or change, escalate to Zora Referee (see below) instead of `needs-richard`.
+3. No fixed review-round cap. Standing decision by Richard in #zora-agents, 2026-11-23 21:07 PT ("I don't want a single digit number of turns as a boundary. Count of rounds is not a good proxy for stopping an endless argument loop"); it applies repo-wide, not only to #222/#216/#227. Round count is not a stop condition. When the same disagreement
+   repeats twice in a row with no new argument or change, escalate to Zora Referee (see below) instead of `needs-richard`.
 4. Changes to `policy.toml`, `.github/`, `src/security/`, or anything touching secrets → `needs-richard`.
 5. Before every action, check the pinned **Agent control** issue (#189, canonical even when it has no labels). If it has `agents:paused`, do nothing.
 6. Before every action, read `ops/spend.md`. Obey the budget thresholds below. "Not yet measured" there is expected
