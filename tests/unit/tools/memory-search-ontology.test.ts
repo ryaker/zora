@@ -1,9 +1,9 @@
 /**
  * memory_search ontology expansion (#194c).
  *
- * The graph only proposes memory IDs. These tests pin the policy boundary: a
- * proposed ID is returned only if it resolves through the normal read path and
- * passes the caller's filters; flag off / client absent / client throwing all
+ * The graph only proposes memory IDs. A proposed ID is returned only if it
+ * resolves through the normal read path and passes the caller's filters; there
+ * is no visibility policy (retrieval is not an authorization point, #184 c); flag off / client absent / client throwing all
  * degrade to plain lexical search.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -31,14 +31,14 @@ function setup(opts: {
     sourcesOf: ReturnType<typeof vi.fn>;
     relationSources: ReturnType<typeof vi.fn>;
   }> | null;
-  policy?: { isSourceEligible(i: MemoryItem): boolean } | null;
+  graphScore?: number;
 }) {
   const mm = {
     structuredMemory: { peekItem: async (id: string) => opts.store[id] ?? null },
+    scoreMemoryItem: () => ({ score: opts.graphScore ?? 0.4 }),
     searchMemory: async () => (opts.lexical ?? []).map(itemId => ({ itemId, score: 0.9, components: {} })),
   };
-  const tools = createMemoryTools(mm as never, {} as never, (opts.graph ?? null) as never,
-    opts.policy === null ? undefined : (opts.policy ?? { isSourceEligible: () => true }));
+  const tools = createMemoryTools(mm as never, {} as never, (opts.graph ?? null) as never);
   const search = tools.find(t => t.name === 'memory_search')!;
   return (input: Record<string, unknown>) =>
     search.handler(input) as Promise<{ results: Array<Record<string, unknown>> }>;
@@ -56,7 +56,7 @@ describe('memory_search ontology expansion', () => {
     const r = await run({ query: 'q', entity: ENTITY });
     expect(r.results.map(x => x.id)).toEqual(['m1', 'm2']);
     expect(r.results[1]!.via).toBe('graph');
-    expect(sourcesOf).toHaveBeenCalledWith('Zora', 'project', 4);
+    expect(sourcesOf).toHaveBeenCalledWith('Zora', 'project', 20);
   });
 
   it('adds relation-evidenced memories', async () => {
@@ -67,7 +67,7 @@ describe('memory_search ontology expansion', () => {
     const rel = { from: ENTITY, to: { name: 'SparrowDB', kind: 'tool' }, predicate: 'uses' };
     const r = await run({ query: 'q', relation: rel });
     expect(r.results.map(x => x.id)).toEqual(['m3']);
-    expect(relationSources).toHaveBeenCalledWith(rel.from, rel.to, 'uses', 5);
+    expect(relationSources).toHaveBeenCalledWith(rel.from, rel.to, 'uses', 20);
   });
 
   it('never cites an ID that does not resolve (forgotten/archived/invented)', async () => {
@@ -130,20 +130,15 @@ describe('memory_search ontology expansion', () => {
     expect((await run({ query: 'q', entity: ENTITY })).results.map(x => x.id)).toEqual(['m1']);
   });
 
-  it('is inert without a source-eligibility policy', async () => {
-    const sourcesOf = vi.fn(async () => ['m2']);
-    const run = setup({ store: { m2: item('m2') }, graph: { ontologyEnabled: true, sourcesOf }, policy: null });
-    expect((await run({ query: 'q', entity: ENTITY })).results).toEqual([]);
-    expect(sourcesOf).not.toHaveBeenCalled();
-  });
-
-  it('drops candidates the policy deems ineligible', async () => {
+  it('labels tool_output graph hits as data instead of excluding them', async () => {
     const run = setup({
-      store: { a: item('a'), b: { ...item('b'), source_type: 'tool_output' } },
-      graph: { ontologyEnabled: true, sourcesOf: vi.fn(async () => ['a', 'b']) },
-      policy: { isSourceEligible: i => i.source_type !== 'tool_output' },
+      store: { b: { ...item('b'), source_type: 'tool_output' } },
+      graph: { ontologyEnabled: true, sourcesOf: vi.fn(async () => ['b']) },
     });
-    expect((await run({ query: 'q', entity: ENTITY })).results.map(x => x.id)).toEqual(['a']);
+    const r = (await run({ query: 'q', entity: ENTITY })).results[0]!;
+    expect(r.id).toBe('b');
+    expect(r.source_type).toBe('tool_output');
+    expect(r.via).toBe('graph');
   });
 
   it('drops stale candidates whose current content no longer mentions the entity', async () => {
@@ -172,12 +167,30 @@ describe('memory_search ontology expansion', () => {
     expect((await run({ query: 'q', entity: ENTITY, limit: 2 })).results.map(x => x.id)).toEqual(['l1', 'g1']);
   });
 
-  it('excludes unscored graph candidates when min_score is set', async () => {
+  it('scores graph hits so min_score applies to them', async () => {
     const run = setup({
-      store: { m1: item('m1'), m2: item('m2') }, lexical: ['m1'],
+      store: { m1: item('m1'), m2: item('m2') }, lexical: ['m1'], graphScore: 0.2,
       graph: { ontologyEnabled: true, sourcesOf: vi.fn(async () => ['m2']) },
     });
     expect((await run({ query: 'q', entity: ENTITY, min_score: 0.5 })).results.map(x => x.id)).toEqual(['m1']);
+    const strong = setup({
+      store: { m1: item('m1'), m2: item('m2') }, lexical: ['m1'], graphScore: 0.6,
+      graph: { ontologyEnabled: true, sourcesOf: vi.fn(async () => ['m2']) },
+    });
+    const r = await strong({ query: 'q', entity: ENTITY, min_score: 0.5 });
+    expect(r.results.map(x => x.id)).toEqual(['m1', 'm2']);
+    expect(typeof r.results[1]!.score).toBe('number');
+  });
+
+  it('boosts lexical hits connected to the entity above unconnected ones', async () => {
+    const run = setup({
+      store: { a: item('a'), b: item('b') }, lexical: ['a', 'b'],
+      graph: { ontologyEnabled: true, sourcesOf: vi.fn(async () => ['b']) },
+    });
+    const r = (await run({ query: 'q', entity: ENTITY })).results;
+    expect(r.map(x => x.id)).toEqual(['b', 'a']);
+    expect(r[0]!.via).toBe('graph');
+    expect(r[1]!.via).toBeUndefined();
   });
 
   it('shares one budget across entity and relation lookups', async () => {

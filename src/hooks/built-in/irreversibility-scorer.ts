@@ -70,6 +70,9 @@ const TOOL_ACTION_MAP: Record<string, string> = {
   read_file: 'read_file',
   glob: 'read_file',
   grep: 'read_file',
+  // Memory retrieval is a read (~5), not an unscored unknown action (#194c, #184 c).
+  memory_search: 'read_file',
+  recall_context: 'read_file',
   // ── git ──
   git_commit: 'git_commit',
   git_push: 'git_push',

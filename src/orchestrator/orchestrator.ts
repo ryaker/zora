@@ -2472,10 +2472,6 @@ export class Orchestrator {
       this._memoryManager,
       this._validationPipeline,
       this._graphClient,
-      // #194c: no GraphExpansionPolicy is supplied, so graph expansion in memory_search
-      // stays INERT in production. Enabling it needs a trusted per-job source-visibility
-      // check, a Richard decision (see PR #230).
-      undefined,
     );
 
     // Add recall_context tool for daily notes retrieval

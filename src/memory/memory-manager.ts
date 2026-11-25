@@ -376,6 +376,11 @@ export class MemoryManager {
    * Searches structured memory items by query, ranked by salience.
    * Uses MiniSearch BM25+ scores composed with salience factors.
    */
+  /** Score one already-resolved item the same way searchMemory does (no BM25 term). */
+  scoreMemoryItem(item: MemoryItem, query: string): SalienceScore {
+    return this._scorer.scoreItem(item, query);
+  }
+
   async searchMemory(query: string, limit?: number): Promise<SalienceScore[]> {
     const results = await this._structuredMemory.searchItemsWithScores(query);
     const scored = results.map(({ item, bm25Score }) =>
