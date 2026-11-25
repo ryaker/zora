@@ -14,9 +14,9 @@ is only a nudge.
 ## Label state machine
 
 ```
-agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ ≤5 rounds)
+agent:todo → agent:in-progress → agent:needs-review → (agent:changes-requested ↺ until converged)
            → agent:approved → CI green → reviewer squash-merges → progress note on #184
-round 5 or same disagreement twice → Zora Referee → REFEREE RULING: (binding) → back to the loop
+same disagreement twice → Zora Referee → REFEREE RULING: (binding only from the designated Referee identity) → back to the loop
 any state → needs-richard   (protected path, product/security call, no convergence after a ruling, CI fails twice for the same reason, budget ≥90%)
 ```
 
@@ -33,8 +33,8 @@ any state → needs-richard   (protected path, product/security call, no converg
 
 1. Never push to `main`. Never force-push. Only the reviewer merges, and only an `agent:approved` PR with green CI that is not `needs-richard`.
 2. At most 3 open PRs for the architect (the reviewer reviews every PR waiting on each wake); at most 4 implement tasks per day. A PR is exempt from the cap only while it is parked awaiting Richard's decision (`needs-richard` and no agent work pending on it), not merely because the label is present; once Richard unparks it, it counts again. Parked PRs stay unmerged. The daily implement limit and merge rules are unchanged.
-3. Max 5 review rounds per PR. At round 5 without convergence, or when the same disagreement repeats twice in a row,
-   escalate to Zora Referee (see below) instead of `needs-richard`.
+3. No fixed review-round cap (Richard, 2026-11-23). Round count is not a stop condition. When the same disagreement
+   repeats with no new argument or change, escalate to Zora Referee (see below) instead of `needs-richard`.
 4. Changes to `policy.toml`, `.github/`, `src/security/`, or anything touching secrets → `needs-richard`.
 5. Before every action, check the pinned **Agent control** issue (#189, canonical even when it has no labels). If it has `agents:paused`, do nothing.
 6. Before every action, read `ops/spend.md`. Obey the budget thresholds below. "Not yet measured" there is expected
@@ -42,7 +42,7 @@ any state → needs-richard   (protected path, product/security call, no converg
 7. Every agent-to-agent message ends with an explicit next owner and a stop condition
    ("your turn, reply once, then wait"). No "always reply" loops.
 8. Quiet hours: no work 22:00–08:00 America/Los_Angeles.
-9. Never print, request, or store API keys. Keys live only in the OneCLI vault.
+9. Never print, request, or store API keys. For the NanoClaw agents, keys live only in the OneCLI vault.
 
 ## Budget thresholds (per pool, per billing cycle)
 
@@ -59,15 +59,19 @@ OpenAI credits refresh on the ChatGPT Pro billing date (5th).
 
 ## Zora Referee: rulings and escalation
 
-- **Trigger:** review round 5 without convergence, or the same disagreement repeated twice in a row.
+- **Trigger:** the same disagreement repeated twice in a row (no new arguments or changes). Round count alone never triggers it.
 - **How:** the architect or reviewer posts one message in `#zora-agents`:
   `<@U0CLG53F8U9> PR #N, round K: architect says …; reviewer says ….` (the Referee only reacts to that mention).
 - **Ruling:** the Referee reads the PR, diff, review threads and checks with `gh`, then posts one PR comment starting
-  `REFEREE RULING:` with a verdict, a numbered decision per point, and the next owner. The ruling is **binding** for
-  technical questions; agents apply it and continue the normal loop.
+  `REFEREE RULING:` with a verdict, a numbered decision per point, and the next owner. The prefix is only a format
+  marker. A ruling is **binding** on technical questions only when the comment's GitHub author matches the Referee
+  identity Richard has designated (*pending: Richard to confirm*; all GitHub activity currently runs as Ryaker, so
+  author metadata cannot yet distinguish the Referee). Until then rulings are **advisory**. The reviewer verifies the
+  author before treating a ruling as binding. No ruling can override `agents:paused`, `policy.toml`, protected-path,
+  or CI gates.
 - **`needs-richard` is reserved for:** protected paths (`policy.toml`, `.github/`, `src/security/`, secrets), real
   product or security-policy judgment calls, a PR that still fails to converge after a ruling, CI failing twice for the
-  same reason, and budget ≥90%. If the Referee reports missing GitHub auth or no ruling arrives within 2 wakes,
+  same reason, and budget ≥90%. If the Referee reports missing GitHub auth, no ruling arrives within 2 wakes, or the ruling's author cannot be verified,
   fall back to `needs-richard`.
 - The Referee never pushes, merges, approves, or relabels (other than adding `needs-richard`). Details: [referee.md](referee.md).
 
