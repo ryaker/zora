@@ -194,6 +194,55 @@ describe('Dashboard API Endpoints', () => {
     });
   });
 
+  describe('GET /api/task/:jobId (#167 job-scoped recovery)', () => {
+    it('tracks running → completed/failed from task-promise settlement, unknown otherwise', async () => {
+      const d = new DashboardServer({
+        providers: [provider], sessionManager, steeringManager, authMonitor,
+        submitTask: vi.fn().mockResolvedValue('job-r'),
+      });
+      const app = (d as any)._app;
+      expect((await request(app).get('/api/task/never-seen')).body.status).toBe('unknown');
+
+      await request(app).post('/api/task').send({ prompt: 'p' });
+      expect((await request(app).get('/api/task/job-r')).body).toMatchObject({ ok: true, jobId: 'job-r', status: 'running' });
+
+      d.broadcastEvent({ type: 'job_completed', jobId: 'job-r', data: { jobId: 'job-r', text: 'done!' } });
+      expect((await request(app).get('/api/task/job-r')).body).toMatchObject({ status: 'completed', text: 'done!' });
+
+      d.broadcastEvent({ type: 'job_failed', jobId: 'job-f', data: { jobId: 'job-f', error: 'boom' } });
+      expect((await request(app).get('/api/task/job-f')).body).toMatchObject({ status: 'failed', error: 'boom' });
+    });
+
+    it('the retention cap never evicts a running job, only finished ones', async () => {
+      const d = new DashboardServer({
+        providers: [provider], sessionManager, steeringManager, authMonitor,
+        submitTask: vi.fn().mockResolvedValue('job-live'),
+      });
+      const app = (d as any)._app;
+      await request(app).post('/api/task').send({ prompt: 'p' }); // job-live: running
+      for (let i = 0; i < 250; i++) {
+        d.broadcastEvent({ type: 'job_completed', jobId: `done-${i}`, data: { jobId: `done-${i}`, text: 't' } });
+      }
+      expect((await request(app).get('/api/task/job-live')).body.status).toBe('running');
+      expect((await request(app).get('/api/task/done-0')).body.status).toBe('unknown'); // oldest finished evicted
+      expect((await request(app).get('/api/task/done-249')).body.status).toBe('completed');
+    });
+
+    it('a settlement that lands before POST returns is not overwritten by running', async () => {
+      let d!: DashboardServer;
+      d = new DashboardServer({
+        providers: [provider], sessionManager, steeringManager, authMonitor,
+        submitTask: vi.fn(async () => {
+          d.broadcastEvent({ type: 'job_failed', jobId: 'job-fast', data: { jobId: 'job-fast', error: 'early' } });
+          return 'job-fast';
+        }),
+      });
+      const app = (d as any)._app;
+      await request(app).post('/api/task').send({ prompt: 'p' });
+      expect((await request(app).get('/api/task/job-fast')).body.status).toBe('failed');
+    });
+  });
+
   describe('POST /api/steer', () => {
     it('rejects missing jobId', async () => {
       const res = await request(getApp())
