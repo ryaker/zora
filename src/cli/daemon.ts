@@ -40,6 +40,7 @@ import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { runSecurityAuditSilent } from './security-commands.js';
+import { resolveDashboardToken } from "../config/dashboard-token.js";
 import { TelegramGateway, type TelegramConfig } from '../steering/telegram-gateway.js';
 
 // Allow claude CLI to run as a subprocess even when launched from a Claude Code session.
@@ -245,7 +246,11 @@ async function main() {
   }
 
   // Start dashboard server
+  // #174: [steering].dashboard_token was parsed but never passed, so a configured
+  // token silently left the dashboard unauthenticated. Unset still falls back to
+  // ZORA_DASHBOARD_TOKEN; the operator env var wins over project config (resolveDashboardToken).
   const dashboard = new DashboardServer({
+    dashboardToken: resolveDashboardToken(config.steering.dashboard_token),
     providers,
     sessionManager: orchestrator.sessionManager,
     steeringManager: orchestrator.steeringManager,
@@ -255,11 +260,16 @@ async function main() {
     submitTask: async (prompt: string) => {
       // Generate jobId immediately and kick off task in background (don't await)
       const jobId = `job_${crypto.randomUUID()}`;
+      // #167: the SSE stream is shared by every dashboard tab, so each event is
+      // stamped with its jobId, and settlement of the task promise (not the
+      // provider's `done`/`task.end`) is the authoritative terminal signal.
       orchestrator.submitTask({ prompt, jobId, onEvent: (event) => {
-        dashboard.broadcastEvent({ type: event.type, data: event.content });
-      } }).catch(err => {
+        dashboard.broadcastEvent({ type: event.type, jobId, data: event.content });
+      } }).then(result => {
+        dashboard.broadcastEvent({ type: 'job_completed', jobId, data: { jobId, text: typeof result === 'string' ? result : undefined } });
+      }).catch(err => {
         log.error({ jobId, err }, 'Task failed');
-        dashboard.broadcastEvent({ type: 'job_failed', data: { jobId, error: err instanceof Error ? err.message : String(err) } });
+        dashboard.broadcastEvent({ type: 'job_failed', jobId, data: { jobId, error: err instanceof Error ? err.message : String(err) } });
       });
       return jobId;
     },

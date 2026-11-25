@@ -26,7 +26,7 @@ import os from 'node:os';
 import readline from 'node:readline';
 import type { LLMProvider, AgentEvent, TaskContext } from '../types.js';
 import type { ApprovalQueue } from '../core/approval-queue.js';
-import { SkillsLock } from './SkillsLock.js';
+import { SkillsLock, hashContent } from './SkillsLock.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('skill-synthesizer');
@@ -36,6 +36,55 @@ const log = createLogger('skill-synthesizer');
 export const SKILL_THRESHOLD = { toolCalls: 8, turns: 8 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────
+
+/**
+ * Remove characters that can forge or hide terminal output: C0/C1 controls
+ * (ESC included, newline and tab kept) and bidi/zero-width format characters.
+ * Applied to every piece of generated text shown locally.
+ */
+export function sanitizeDisplay(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2069\ufeff]/g, '\uFFFD');
+}
+
+function oneLine(text: string, max: number): string {
+  const cleaned = sanitizeDisplay(text).replace(/\s+/g, ' ').trim();
+  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+}
+
+export interface SkillReviewInput {
+  name: string;
+  content: string;
+  session: SessionSummary;
+}
+
+/**
+ * #201: LOCAL review text (TTY). Shows the entire proposed file so the person
+ * can actually read what they approve, plus provenance and the SHA-256 that
+ * will be recorded in skills.lock.json. Everything generated is sanitized.
+ */
+export function buildLocalReviewText(input: SkillReviewInput & { destPath: string }): string {
+  const { name, content, session, destPath } = input;
+  const { frontmatter } = parseFrontmatterSafe(content);
+  return [
+    `Proposed skill: ${oneLine(name, 64)}`,
+    `Description: ${oneLine(frontmatter.description ?? '(none)', 300)}`,
+    `Source task: ${oneLine(session.taskDescription, 200)}`,
+    `Session: ${session.toolCalls} tool calls, ${session.turns} turns`,
+    `Will write: ${sanitizeDisplay(destPath)}`,
+    `SHA-256: ${hashContent(content)} (${content.length} chars, full text below)`,
+    '',
+    sanitizeDisplay(content),
+  ].join('\n');
+}
+
+function parseFrontmatterSafe(content: string): { frontmatter: { description?: string } } {
+  try {
+    return { frontmatter: parseFrontmatter(content) as { description?: string } };
+  } catch {
+    return { frontmatter: {} };
+  }
+}
 
 export interface SessionSummary {
   /** First user message or session title — becomes the task_summary in the prompt. */
@@ -279,7 +328,7 @@ export class SkillSynthesizer {
       return;
     }
 
-    const confirmed = await this._confirmWithUser(name, content);
+    const confirmed = await this._confirmWithUser(name, content, session);
     if (!confirmed) {
       log.info({ skill: name }, 'User declined skill save');
       return;
@@ -308,7 +357,7 @@ export class SkillSynthesizer {
     return this._skipConfirmation || Boolean(process.stdin.isTTY) || Boolean(this._approvalQueue?.canDecide({ score: SYNTH_APPROVAL_SCORE }));
   }
 
-  private async _confirmWithUser(name: string, content: string): Promise<boolean> {
+  private async _confirmWithUser(name: string, content: string, session: SessionSummary): Promise<boolean> {
     if (this._skipConfirmation) {
       return true;
     }
@@ -337,9 +386,9 @@ export class SkillSynthesizer {
     }
 
     console.log('\n─────────────────────────────────────────');
-    console.log(`[SKILL] Proposed skill: ${name}`);
-    console.log('─────────────────────────────────────────');
-    console.log(content);
+    console.log(buildLocalReviewText({
+      name, content, session, destPath: path.join(this._skillsDir, name, 'SKILL.md'),
+    }));
     console.log('─────────────────────────────────────────');
 
     return new Promise<boolean>((resolve) => {

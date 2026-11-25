@@ -4,6 +4,7 @@ import type { RoutineDefinition } from '../../../src/types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import cron from 'node-cron';
 
 const { mockWarn } = vi.hoisted(() => {
   const mockWarn = vi.fn();
@@ -110,6 +111,124 @@ prompt = "say hello"
     expect(manager.scheduledCount).toBe(1);
     manager.stopAll();
     expect(manager.scheduledCount).toBe(0);
+  });
+
+  describe('until (#202)', () => {
+    const def = (until: unknown): RoutineDefinition => ({
+      routine: { name: 'r-until', schedule: '* * * * *', until } as RoutineDefinition['routine'],
+      task: { prompt: 'poll' },
+    });
+
+    it('unloads after a run whose result contains the marker', async () => {
+      manager.scheduleRoutine(def({ contains: 'DONE' }));
+      submitTaskMock.mockResolvedValueOnce('still working');
+      await manager.runRoutine(def({ contains: 'DONE' }));
+      expect(manager.scheduledCount).toBe(1);
+      submitTaskMock.mockResolvedValueOnce('all DONE here');
+      await manager.runRoutine(def({ contains: 'DONE' }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('unloads after max_runs successful runs', async () => {
+      manager.scheduleRoutine(def({ max_runs: 2 }));
+      await manager.runRoutine(def({ max_runs: 2 }));
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 2 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('failed runs do not count toward max_runs', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      submitTaskMock.mockRejectedValueOnce(new Error('boom'));
+      await expect(manager.runRoutine(def({ max_runs: 1 }))).rejects.toThrow('boom');
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('a stale run settling after a same-name reload does not affect the replacement', async () => {
+      manager.scheduleRoutine(def({ contains: 'DONE' }));
+      let resolveOld!: (v: string) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
+      const old = manager.runRoutine(def({ contains: 'DONE' }));
+      manager.scheduleRoutine(def(undefined)); // replacement, no until
+      expect(manager.scheduledCount).toBe(1);
+      resolveOld('DONE');
+      await old;
+      expect(manager.scheduledCount).toBe(1);
+    });
+
+    it('a stale run does not consume the replacement max_runs count', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      let resolveOld!: (v: string) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((r) => { resolveOld = r; }));
+      const old = manager.runRoutine(def({ max_runs: 1 }));
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      resolveOld('x');
+      await old;
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 }));
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('overlapping triggers cannot exceed max_runs; failures release capacity', async () => {
+      manager.scheduleRoutine(def({ max_runs: 1 }));
+      submitTaskMock.mockClear();
+      let rejectFirst!: (e: Error) => void;
+      submitTaskMock.mockImplementationOnce(() => new Promise<string>((_r, j) => { rejectFirst = j; }));
+      const first = manager.runRoutine(def({ max_runs: 1 }));
+      await manager.runRoutine(def({ max_runs: 1 })); // overlapping: skipped
+      expect(submitTaskMock).toHaveBeenCalledTimes(1);
+      rejectFirst(new Error('boom'));
+      await expect(first).rejects.toThrow('boom');
+      expect(manager.scheduledCount).toBe(1);
+      await manager.runRoutine(def({ max_runs: 1 })); // capacity released
+      expect(submitTaskMock).toHaveBeenCalledTimes(2);
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('ignores cron callbacks delivered after replacement or stopAll', async () => {
+      const schedule = vi.spyOn(cron, 'schedule');
+      try {
+        manager.scheduleRoutine(def({ max_runs: 5 }));
+        manager.scheduleRoutine(def({ max_runs: 5 }));
+        const [old, current] = schedule.mock.calls.map(([, callback]) => callback);
+        expect(old).toBeTypeOf('function');
+        expect(current).toBeTypeOf('function');
+        if (typeof old !== 'function' || typeof current !== 'function') throw new Error('Expected cron callbacks');
+        await old({} as Parameters<typeof old>[0]);
+        expect(submitTaskMock).not.toHaveBeenCalled();
+        await current({} as Parameters<typeof current>[0]);
+        expect(submitTaskMock).toHaveBeenCalledTimes(1);
+
+        manager.stopAll();
+        await current({} as Parameters<typeof current>[0]);
+        expect(submitTaskMock).toHaveBeenCalledTimes(1);
+      } finally {
+        schedule.mockRestore();
+      }
+    });
+
+    it('routines without until are never unloaded', async () => {
+      manager.scheduleRoutine(def(undefined));
+      for (let i = 0; i < 3; i++) await manager.runRoutine(def(undefined));
+      expect(manager.scheduledCount).toBe(1);
+    });
+
+    it.each([
+      ['empty object', '{}'],
+      ['empty contains', '{ contains = "" }'],
+      ['non-string contains', '{ contains = 5 }'],
+      ['zero max_runs', '{ max_runs = 0 }'],
+      ['fractional max_runs', '{ max_runs = 1.5 }'],
+      ['non-table', '"DONE"'],
+    ])('rejects invalid until (%s) at load', async (_n, until) => {
+      await fs.mkdir(path.join(testDir, 'routines'), { recursive: true });
+      const toml = `[routine]\nname = "bad"\nschedule = "* * * * *"\nuntil = ${until}\n[task]\nprompt = "x"\n`;
+      await fs.writeFile(path.join(testDir, 'routines', 'bad.toml'), toml, 'utf8');
+      await manager.init();
+      expect(manager.scheduledCount).toBe(0);
+    });
   });
 
   it('passes model_preference to submitTask via runRoutine', async () => {

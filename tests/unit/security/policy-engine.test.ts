@@ -57,9 +57,17 @@ describe('PolicyEngine', () => {
     });
 
     it('denies access to paths outside allowlist', () => {
-      const result = engine.validatePath('/etc/passwd');
+      // Synthetic root with no system alias on any platform (macOS /etc -> /private/etc
+      // would take the canonical-boundary branch and change the reason).
+      const result = engine.validatePath('/zora-test-outside-root/data.txt');
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('not permitted');
+    });
+
+    it('denies a system-aliased path outside the allowlist (either denial category)', () => {
+      const result = engine.validatePath('/etc/passwd');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/not permitted|outside allowed boundaries/);
     });
 
     it('denies access to paths in denylist (even if under allowlist)', () => {
