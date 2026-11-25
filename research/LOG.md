@@ -85,3 +85,19 @@
 - Proposal: (1) one S-size `agent:todo`: bump `@anthropic-ai/claude-agent-sdk` to 0.3.330 with the checks above. (2) Richard-facing note: upgrade NanoClaw to v2026.11.0 stable. No decision issues this week.
 - Critique (reviewer): pending.
 - Decision issue: none.
+
+## 2026-11-24 — Palantir Foundry/AIP Ontology: how agents use it (requested by Richard)
+- Source: Palantir's own docs, read Nov 24, 2026: [Ontology overview](https://palantir.com/docs/foundry/ontology/overview/), [Action types](https://palantir.com/docs/foundry/action-types/overview/), [AIP architecture](https://palantir.com/docs/foundry/architecture-center/aip-architecture), [Ontology system](https://palantir.com/docs/foundry/architecture-center/ontology-system/). Pages were summarized by a fetch tool, so quotes are as reported, not byte-verified. The action-type page's sections on parameters, submission criteria, permissions and function-backed actions were **not** read; they are separate pages. 0 Nimble requests (MCP 401). Third-party blogs and one community post were seen in search results and are not relied on.
+- What Palantir documents:
+  1. **Semantic layer ("nouns")**: object types, properties, link types, mapped from existing data sources.
+  2. **Kinetic layer ("verbs")**: action types (a transaction that edits objects/properties/links per user-defined logic, with side effects such as notifications and webhooks, written back to a writeback dataset) and functions (code logic usable inside actions and apps).
+  3. **Security above both**: role-, marking- and purpose-based controls, checked at interaction time, applied to humans and agents alike; permissions can be per action (the docs contrast triggering a purchase order with running a what-if scenario).
+  4. **Agents run on the same primitives as humans.** Agent security scopes inherit from a human user or from a project's permissions. Logic and actions carry their own scopes. Every action by a human or agent is logged, with tracing across chained executions; AIP Evals tests agent definitions.
+  5. **Human-in-the-loop is a design option, not a fixed rule**: the docs say agents can mix human-in-the-loop with fully autonomous steps. The pages read did not say how an approval pause is configured.
+- Relevance to Zora: **watch, adopt one idea as a proposal**.
+  - Already matches (verified in `CLAUDE.md` security model): agent requests, policy decides, outside the conversation; audit log of every call; per-job scoped grants (#233) resemble "scopes inherit from a project".
+  - Gap: Zora authorizes *tool calls*. Palantir authorizes *named business actions* with typed inputs, validation and declared side effects. Matters only once Zora acts in external systems (refund-style operations), not for local file/shell work.
+  - Does not apply: Palantir's object graph over enterprise data is a modeling effort Zora's single-user scope does not need; #230's rule stands (ontology ranks, never gates).
+- Proposal (one S-size design issue, no code): **typed actions as a thin declarative layer over the existing policy chain** — an action definition names inputs, validation, reversibility class and systems touched, and compiles to existing `policy.toml` / `canUseTool` checks. It may only narrow permissions; any loosening goes to Richard in plain words. Open questions: where definitions live, who reviews them for staleness, and how reversibility (IrreversibilityScorer) maps to autonomy per action.
+- Critique (reviewer): pending.
+- Decision issue: none; filing one `agent:todo` design issue after merge.
