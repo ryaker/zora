@@ -41,17 +41,18 @@ const longCase = lines => {
 
 const results = [];
 for (const model of models) {
-  const row = { model, tool_ok: 0, tool_total: 0, long_ok: {}, ms: [], out_tokens: 0, errors: 0 };
+  const row = { model, tool_ok: 0, tool_total: 0, long_ok: {}, ms: [], out_tokens: 0, errors: 0, tool_misses: [] };
   for (let rep = 0; rep < REPEATS; rep++) {
     for (const [prompt, want, check] of toolCases) {
-      row.tool_total++;
       try {
         const { j, ms } = await chat(model, { messages: [{ role: 'user', content: prompt }], tools });
+        row.tool_total++; // only answered calls count; errors are tallied separately
         row.ms.push(ms); row.out_tokens += j.eval_count ?? 0;
         const call = j.message?.tool_calls?.[0]?.function;
         const ok = want === null ? !call : call?.name === want && check(call.arguments ?? {});
         if (ok) row.tool_ok++;
-      } catch { row.errors++; }
+        else row.tool_misses.push({ prompt, called: call ? { name: call.name, arguments: call.arguments } : null });
+      } catch { row.errors++; } // errors are reported separately; a failed call is NOT counted as a tool miss
     }
   }
   for (const lines of [200, 1500]) {
