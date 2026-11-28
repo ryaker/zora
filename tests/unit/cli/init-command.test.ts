@@ -150,13 +150,41 @@ describe('generateConfigToml', () => {
     node: { found: true, version: 'v22.0.0' },
     claude: { found: true, path: '/usr/local/bin/claude' },
     gemini: { found: true, path: '/usr/local/bin/gemini' },
+    ollama: { found: false, endpoint: 'http://localhost:11434', models: [] },
   };
 
   const doctorNone: DoctorResult = {
     node: { found: true, version: 'v20.0.0' },
     claude: { found: false, path: null },
     gemini: { found: false, path: null },
+    ollama: { found: false, endpoint: 'http://localhost:11434', models: [] },
   };
+
+  const doctorOllamaOnly: DoctorResult = {
+    node: { found: true, version: 'v22.0.0' },
+    claude: { found: false, path: null },
+    gemini: { found: false, path: null },
+    ollama: { found: true, endpoint: 'http://localhost:11434', models: ['qwen3:14b', 'llama3.2'] },
+  };
+
+  it('configures Ollama as the only/primary provider when no CLIs exist (#249)', () => {
+    const config = loadConfigFromString(generateConfigToml(doctorOllamaOnly));
+    expect(config.providers).toHaveLength(1);
+    expect(config.providers[0]!.name).toBe('ollama');
+    expect(config.providers[0]!.type).toBe('ollama');
+    expect(config.providers[0]!.model).toBe('qwen3:14b');
+    expect(config.providers[0]!.rank).toBe(1);
+  });
+
+  it('--primary ollama ranks Ollama first and honors --ollama-model (#249)', () => {
+    const doctor: DoctorResult = { ...doctorBoth, ollama: doctorOllamaOnly.ollama };
+    const config = loadConfigFromString(
+      generateConfigToml(doctor, { primary: 'ollama', ollamaModel: 'llama3.2' }),
+    );
+    expect(config.providers.map(p => p.name)).toEqual(['ollama', 'claude', 'gemini']);
+    expect(config.providers.map(p => p.rank)).toEqual([1, 2, 3]);
+    expect(config.providers[0]!.model).toBe('llama3.2');
+  });
 
   it('produces valid TOML', () => {
     const toml = generateConfigToml(doctorBoth);
@@ -192,6 +220,7 @@ describe('generateConfigToml', () => {
       node: { found: true, version: 'v22.0.0' },
       claude: { found: true, path: '/bin/claude' },
       gemini: { found: false, path: null },
+    ollama: { found: false, endpoint: 'http://localhost:11434', models: [] },
     };
     const toml = generateConfigToml(doctor);
     const config = loadConfigFromString(toml);

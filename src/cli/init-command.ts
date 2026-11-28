@@ -90,12 +90,18 @@ function policyToToml(policy: ZoraPolicy): string {
 /**
  * Generate config.toml content based on doctor results.
  */
-export function generateConfigToml(doctor: DoctorResult): string {
-  const providers: string[] = [];
-  let rank = 1;
+export interface GenerateConfigOptions {
+  /** Provider to rank first: 'claude' | 'gemini' | 'ollama'. Default: detection order. */
+  primary?: string;
+  /** Ollama model when ollama is configured. Default: first installed model. */
+  ollamaModel?: string;
+}
+
+export function generateConfigToml(doctor: DoctorResult, opts: GenerateConfigOptions = {}): string {
+  const blocks: Array<{ key: string; render: (rank: number) => string }> = [];
 
   if (doctor.claude.found) {
-    providers.push(`[[providers]]
+    blocks.push({ key: 'claude', render: (rank) => `[[providers]]
 name = "claude"
 type = "claude-sdk"
 rank = ${rank}
@@ -107,12 +113,11 @@ model = "claude-opus-5"
 # Reasoning effort: low | medium | high | xhigh | max.
 # The main intelligence/latency/cost dial — omit to use the model's default.
 # effort = "high"
-max_turns = 200`);
-    rank++;
+max_turns = 200` });
   }
 
   if (doctor.gemini.found) {
-    providers.push(`[[providers]]
+    blocks.push({ key: 'gemini', render: (rank) => `[[providers]]
 name = "gemini"
 type = "gemini-cli"
 rank = ${rank}
@@ -122,8 +127,27 @@ enabled = true
 auth_method = "workspace_sso"
 cli_path = "gemini"
 model = "gemini-2.5-pro"
-max_turns = 100`);
+max_turns = 100` });
   }
+
+  // #249: Ollama is a first-class provider; it needs no CLI or subscription.
+  if (doctor.ollama?.found) {
+    const model = opts.ollamaModel ?? doctor.ollama.models[0] ?? 'llama3.2';
+    blocks.push({ key: 'ollama', render: (rank) => `[[providers]]
+name = "ollama"
+type = "ollama"
+rank = ${rank}
+capabilities = ["reasoning", "coding", "creative"]
+cost_tier = "free"
+enabled = true
+endpoint = "${doctor.ollama.endpoint}"
+model = "${model}"` });
+  }
+
+  const ordered = opts.primary
+    ? [...blocks.filter(b => b.key === opts.primary), ...blocks.filter(b => b.key !== opts.primary)]
+    : blocks;
+  const providers = ordered.map((b, i) => b.render(i + 1));
 
   const providerBlock = providers.length > 0
     ? providers.join('\n\n')
@@ -270,6 +294,8 @@ async function runWizard(opts: {
   devPath?: string;
   yes?: boolean;
   force?: boolean;
+  primary?: string;
+  ollamaModel?: string;
 }): Promise<void> {
   const configPath = path.join(ZORA_DIR, 'config.toml');
   const policyPath = path.join(ZORA_DIR, 'policy.toml');
@@ -315,6 +341,9 @@ async function runWizard(opts: {
   spin.stop('Environment checked');
 
   const nodeStatus = doctor.node.found ? `Node.js ${doctor.node.version}` : 'Node.js < 20 (upgrade recommended)';
+  const ollamaStatus = doctor.ollama.found
+    ? `Ollama found at ${doctor.ollama.endpoint} (${doctor.ollama.models.length} model(s))`
+    : 'Ollama (not running)';
   const claudeStatus = doctor.claude.found
     ? `Claude CLI found — Zora will use your existing subscription`
     : 'Claude CLI (not found)';
@@ -322,7 +351,7 @@ async function runWizard(opts: {
     ? `Gemini CLI found — Zora will use your existing subscription`
     : 'Gemini CLI (not found)';
   clack.note(
-    [nodeStatus, claudeStatus, geminiStatus].join('\n'),
+    [nodeStatus, claudeStatus, geminiStatus, ollamaStatus].join('\n'),
     'Detected tools',
   );
 
@@ -426,7 +455,7 @@ async function runWizard(opts: {
 
   // ── Step 6: Summary + confirm ────────────────────────────────────
   if (!nonInteractive) {
-    const providerList = [doctor.claude.found ? 'Claude' : null, doctor.gemini.found ? 'Gemini' : null].filter(Boolean).join(', ') || 'none detected';
+    const providerList = [doctor.claude.found ? 'Claude' : null, doctor.gemini.found ? 'Gemini' : null, doctor.ollama.found ? 'Ollama' : null].filter(Boolean).join(', ') || 'none detected';
     const summary = [
       `Preset:      ${preset}`,
       `Workspace:   ${devPath}`,
@@ -447,7 +476,7 @@ async function runWizard(opts: {
 
   // ── Generate and write files ─────────────────────────────────────
   const policyToml = generatePolicyToml(preset, devPath, deniedPaths, toolStacks);
-  const configToml = generateConfigToml(doctor);
+  const configToml = generateConfigToml(doctor, { primary: opts.primary, ollamaModel: opts.ollamaModel });
 
   // Validate generated TOML parses cleanly
   try {
@@ -596,6 +625,8 @@ export function registerInitCommand(program: Command): void {
     .option('--project', 'Initialize project-level .zora/ in the current directory')
     .option('--preset <preset>', 'Security preset: locked, safe, balanced, or power')
     .option('--dev-path <path>', 'Path to your code directory')
+    .option('--primary <provider>', 'Primary provider: claude, gemini, or ollama')
+    .option('--ollama-model <model>', 'Ollama model (default: first installed)')
     .option('-y, --yes', 'Accept all defaults (non-interactive)')
     .option('--force', 'Overwrite existing config files')
     .action(async (opts) => {
