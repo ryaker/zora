@@ -536,6 +536,20 @@ describe('PERF-06 — custom tools built once at boot', () => {
     }
   }, 30_000);
 
+  it('#202: an expired token with no tool allowlist does not deny tools (expiry is not a tool gate)', async () => {
+    const o = orchestrator as unknown as {
+      _activeTokens: Map<string, { expiresAt: Date }>;
+      _policy: ZoraPolicy;
+      _buildTokenAwareCanUseTool(id: string): (t: string, i: Record<string, unknown>, o: { signal: AbortSignal }) => Promise<{ behavior: string; message?: string }>;
+    };
+    const token = createCapabilityToken('job-long', o._policy);
+    token.expiresAt = new Date(Date.now() - 60_000);
+    o._activeTokens.set('job-long', token);
+    const canUse = o._buildTokenAwareCanUseTool('job-long');
+    const r = await canUse('Read', {}, { signal: new AbortController().signal });
+    expect(r.message ?? '').not.toMatch(/expired/);
+  }, 30_000);
+
   it('exposes the same tool names as a fresh build', () => {
     const cached = tools(orchestrator)._getCustomTools().map(t => t.name).sort();
     const rebuilt = tools(orchestrator)._buildCustomTools().map(t => t.name).sort();

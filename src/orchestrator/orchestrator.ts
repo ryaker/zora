@@ -2556,8 +2556,13 @@ export class Orchestrator {
       if (token) {
         // #202: the token's tool allowlist was never consulted on this path.
         // Empty allowlist = allow all, so this only bites scoped jobs (notify routines).
-        const toolResult = enforceCapability(token, { type: 'tool', target: tool });
-        if (!toolResult.allowed) return { behavior: 'deny' as const, message: toolResult.reason ?? 'Tool denied by capability token' };
+        // Skip the call entirely when empty: enforceCapability also runs the token's
+        // 30-minute expiry, and applying that to every tool would strip all tools
+        // from any ordinary task that runs past 30 minutes.
+        if (token.allowedTools.length > 0) {
+          const toolResult = enforceCapability(token, { type: 'tool', target: tool });
+          if (!toolResult.allowed) return { behavior: 'deny' as const, message: toolResult.reason ?? 'Tool denied by capability token' };
+        }
         const pathArg = input['path'] as string | undefined;
         if (pathArg) {
           const capResult = enforceCapability(token, { type: 'path', target: pathArg });
