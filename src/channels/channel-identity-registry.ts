@@ -12,6 +12,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { CapabilitySet } from "../types/channel.js";
+import { DEFAULT_QUARANTINE_MODEL } from "../providers/model-defaults.js";
 
 // Using smol-toml or @iarna/toml if available, fallback to manual parse
 // Try dynamic import to handle either package
@@ -188,7 +189,7 @@ export class ChannelIdentityRegistry {
 
   /** Get quarantine model name */
   getQuarantineModel(): string {
-    return this.config.channels?.quarantine?.model ?? "claude-haiku-4-5-20251001";
+    return this.config.channels?.quarantine?.model ?? DEFAULT_QUARANTINE_MODEL;
   }
 
   /** #250: explicit quarantine backend settings (all optional). */

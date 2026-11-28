@@ -18,6 +18,7 @@ import type { DoctorResult } from './doctor.js';
 import type { PresetName } from './presets.js';
 import type { ZoraPolicy } from '../types.js';
 import { createLogger } from '../utils/logger.js';
+import { DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL } from '../providers/model-defaults.js';
 
 const log = createLogger('init');
 const ZORA_DIR = path.join(os.homedir(), '.zora');
@@ -108,8 +109,8 @@ rank = ${rank}
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
-auth_method = "mac_session"
-model = "claude-opus-5"
+# Auth: whatever the Claude SDK finds (claude login session or ANTHROPIC_API_KEY).
+model = "${DEFAULT_CLAUDE_MODEL}"
 # Reasoning effort: low | medium | high | xhigh | max.
 # The main intelligence/latency/cost dial — omit to use the model's default.
 # effort = "high"
@@ -126,7 +127,7 @@ cost_tier = "included"
 enabled = true
 auth_method = "workspace_sso"
 cli_path = "gemini"
-model = "gemini-2.5-pro"
+model = "${DEFAULT_GEMINI_MODEL}"
 max_turns = 100` });
   }
 
