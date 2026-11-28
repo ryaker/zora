@@ -101,7 +101,7 @@ export class ChannelManager {
   }
 
   /**
-   * #265: route approval replies (`/approve ZORA-XXXX allow`) to the
+   * #265: route approval replies (`approve ZORA-XXXX allow`, slash optional) to the
    * ApprovalQueue. Checked after the policy gate, before quarantine: the
    * command is parsed by a fixed regex and never reaches an LLM.
    */

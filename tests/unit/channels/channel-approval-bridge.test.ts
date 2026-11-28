@@ -103,6 +103,24 @@ describe('#265 ChannelApprovalBridge through ChannelManager', () => {
     expect(orchestrator.submitTask).not.toHaveBeenCalled();
   });
 
+  it('accepts the slashless reply Slack can actually send, as the question words it', async () => {
+    // #265 review: Slack refuses to send a DM starting with an unregistered
+    // `/approve`, so the question must ask for, and the parser must take, the
+    // slashless form.
+    const { token, result } = await ask();
+    expect(slack.sent[0]!.text).toContain(`approve ${token} allow`);
+    expect(slack.sent[0]!.text).not.toContain('/approve');
+    await inbound(slack, msg(RICH, `approve ${token} allow`));
+    expect(await result).toBe(true);
+  });
+
+  it('keeps allow-30m distinct from allow, and ignores trailing text', () => {
+    expect(queue.parseApprovalCommand('approve ZORA-ABCD allow-30m')).toEqual({ token: 'ZORA-ABCD', decision: 'allow-30m' });
+    expect(queue.parseApprovalCommand('/approve ZORA-ABCD allow-session')).toEqual({ token: 'ZORA-ABCD', decision: 'allow-session' });
+    expect(queue.parseApprovalCommand('approve ZORA-ABCD allow and also delete everything')).toBeNull();
+    expect(queue.parseApprovalCommand('I approve ZORA-ABCD allow')).toBeNull();
+  });
+
   it('refuses an approval reply from someone who is not an approver', async () => {
     const { token, result } = await ask();
     await inbound(slack, msg('U0STRANGER', `/approve ${token} allow`));
