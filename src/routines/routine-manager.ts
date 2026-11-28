@@ -20,6 +20,7 @@ import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
 import * as smol from 'smol-toml';
 import type { RoutineDefinition, CostTier } from '../types.js';
+import { NOTIFY_ROUTINE_TOOLS } from '../security/tool-names.js';
 import { EventTriggerManager } from './event-triggers.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -33,6 +34,8 @@ export type RoutineTaskSubmitter = (options: {
   prompt: string;
   model?: string;
   maxCostTier?: CostTier;
+  /** #202: restrict the job to this tool allowlist (notify routines). */
+  toolAllowlist?: string[];
 }) => Promise<string>;
 
 /** Default poll interval for EventTriggerManager (1 second). */
@@ -243,6 +246,7 @@ export class RoutineManager {
         prompt: task.prompt,
         model: routine.model_preference,
         maxCostTier: routine.max_cost_tier,
+        toolAllowlist: routine.does === 'notify' ? [...NOTIFY_ROUTINE_TOOLS] : undefined,
       });
     } finally {
       if (tracked) tracked.inFlight--;
@@ -390,6 +394,12 @@ export class RoutineManager {
         log.error({ routine: r['name'] }, 'Invalid until (need contains: 1-200 chars and/or max_runs: positive integer) — rejecting');
         return false;
       }
+    }
+
+    // #202: `does` must be "act" or "notify"; anything else rejects (fail closed, not silently "act").
+    if (r['does'] !== undefined && r['does'] !== 'act' && r['does'] !== 'notify') {
+      log.error({ routine: r['name'] }, 'Invalid does (must be "act" or "notify") — rejecting');
+      return false;
     }
 
     // Validate optional max_cost_tier if present

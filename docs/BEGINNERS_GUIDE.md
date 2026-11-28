@@ -319,6 +319,10 @@ End-of-day summary:
 """
 ```
 
+#### Watch-only routines: `does = "notify"`
+
+Add `does = "notify"` to `[routine]` for a routine that only observes and reports. It can read files and search memory, but it cannot run shell commands, write or edit files, fetch from the network, save memory, or spawn subagents. The restriction is enforced by the job's capability token before the policy engine runs, so the prompt cannot talk its way around it. `does = "act"` (the default) is unchanged. Any other value rejects the routine at load, so a typo never silently gives it full access.
+
 Save this file and Zora will pick it up when running as a daemon (`node dist/cli/index.js start`).
 
 ![LCARS Divider](archive/v5-spec/assets/lcars_divider.svg)

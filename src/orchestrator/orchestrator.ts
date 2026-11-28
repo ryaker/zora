@@ -129,6 +129,8 @@ export interface SubmitTaskOptions {
   model?: string;
   maxCostTier?: CostTier;
   maxTurns?: number;
+  /** #202: restrict this job to these tools via its capability token (empty/absent = unrestricted). */
+  toolAllowlist?: string[];
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
   /** ORCH-14: Optional context transform callback applied to history before follow-ups */
@@ -746,6 +748,7 @@ export class Orchestrator {
           prompt: opts.prompt,
           model: opts.model,
           maxCostTier: opts.maxCostTier,
+          toolAllowlist: opts.toolAllowlist,
         }),
         this._baseDir,
       );
@@ -1255,7 +1258,7 @@ export class Orchestrator {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
     // SEC-10: Create a scoped capability token for this job
-    const capToken = createCapabilityToken(jobId, this._policy);
+    const capToken = createCapabilityToken(jobId, this._policy, options.toolAllowlist?.length ? { allowedTools: options.toolAllowlist } : undefined);
     this._activeTokens.set(jobId, capToken);
 
     // Reset per-task state: ValidationPipeline rate limit is per-session, not per-orchestrator-lifetime.
@@ -1375,6 +1378,7 @@ export class Orchestrator {
       modelPreference: options.model,
       maxCostTier: options.maxCostTier,
       maxTurns: options.maxTurns,
+      toolAllowlist: options.toolAllowlist,
       errorBudget,
       customTools,
       canUseTool: this._buildTokenAwareCanUseTool(jobId),
@@ -2197,7 +2201,7 @@ export class Orchestrator {
     // Refresh canUseTool — the original closure may be stale after a restart
     // SEC-10: Re-issue a capability token for the resumed job and apply token-aware enforcement
     const resumeJobId = context.jobId;
-    const resumeCapToken = createCapabilityToken(resumeJobId, this._policy);
+    const resumeCapToken = createCapabilityToken(resumeJobId, this._policy, context.toolAllowlist?.length ? { allowedTools: context.toolAllowlist } : undefined);
     this._activeTokens.set(resumeJobId, resumeCapToken);
 
     const resumeContext: TaskContext = {
@@ -2573,6 +2577,15 @@ export class Orchestrator {
     return async (tool: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => {
       const token = this._activeTokens.get(jobId);
       if (token) {
+        // #202: the token's tool allowlist was never consulted on this path.
+        // Empty allowlist = allow all, so this only bites scoped jobs (notify routines).
+        // Skip the call entirely when empty: enforceCapability also runs the token's
+        // 30-minute expiry, and applying that to every tool would strip all tools
+        // from any ordinary task that runs past 30 minutes.
+        if (token.allowedTools.length > 0) {
+          const toolResult = enforceCapability(token, { type: 'tool', target: tool });
+          if (!toolResult.allowed) return { behavior: 'deny' as const, message: toolResult.reason ?? 'Tool denied by capability token' };
+        }
         const pathArg = input['path'] as string | undefined;
         if (pathArg) {
           const capResult = enforceCapability(token, { type: 'path', target: pathArg });
