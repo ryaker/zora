@@ -98,8 +98,9 @@ The same list is in `.claude/approvals.yml` in machine-readable form; keep the t
 
 **Budget and spend rules** (decided by Richard, 2026-11-28)
 - `src/dashboard/cost-tracker.ts`, `src/hooks/built-in/rate-limit.ts`
-- The action and token budget in `src/security/policy-engine.ts` (the `budget` section and
-  `BudgetPolicy` in `src/types.ts`)
+- The action and token budget in `src/security/policy-engine.ts` (the budget methods and
+  `BudgetPolicy` in `src/types.ts`). This is a review rule, not a path gate: the rest of
+  `policy-engine.ts` is routine enforcement code that many PRs touch.
 - `scripts/agents/usage-check.sh`
 - The budget table in `ops/spend.md` and the "Budget thresholds" section of
   `docs/agents/WORKFLOW.md`. The reviewer's daily usage rows in `ops/spend.md` are routine.
@@ -110,8 +111,8 @@ The same list is in `.claude/approvals.yml` in machine-readable form; keep the t
   go through normal review.
 
 **The rules themselves**
-- `REVIEW.md`, everything under `.claude/` (the approvals policy, skills, agent definitions
-  and `settings.json` permissions), and `docs/agents/WORKFLOW.md`, `reviewer.md` and
+- `REVIEW.md`; under `.claude/`, the approvals policy and any classifiers, `settings*.json`
+  permissions, agent definitions in `.claude/agents/`, and the steward skill; and `docs/agents/WORKFLOW.md`, `reviewer.md` and
   `architect.md`, which hold the merge and `needs-richard` rules. An agent must not be able
   to rewrite its own gate. This narrows WORKFLOW.md's "docs-only PRs never get
   `needs-richard`" for these files only.

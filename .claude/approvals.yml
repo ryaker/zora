@@ -51,7 +51,8 @@ rules:
     paths:
       - "src/dashboard/cost-tracker.ts"
       - "src/hooks/built-in/rate-limit.ts"
-      - "src/security/policy-engine.ts"   # whole file; REVIEW.md scopes the human-only part to its budget section
+      # src/security/policy-engine.ts is deliberately not listed: only its budget section is
+      # human-only, and routine PRs touch the rest. REVIEW.md gates that section by review rule.
       - "scripts/agents/usage-check.sh"
     nested: inherit
     verdict: { claude: comments, seats: [{ count: 1, from: [ryaker] }] }
@@ -61,7 +62,11 @@ rules:
       - ".github/**"
       - "**/policy.toml"
       - "src/templates/security-policy.toml.template"
-      - "**/.claude/**"
+      - ".claude/approvals.yml"
+      - ".claude/classifiers/**"
+      - ".claude/settings*.json"
+      - ".claude/agents/**"
+      - ".claude/skills/steward/**"
       - "**/REVIEW.md"
       - "docs/agents/WORKFLOW.md"
       - "docs/agents/reviewer.md"
