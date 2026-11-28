@@ -4,7 +4,7 @@ Updated daily (18:00 PT) by zora-reviewer from `scripts/agents/usage-check.sh`.
 Nimble usage is read from the Nimble dashboard (no usage API wired yet); the architect logs its request count per research round in research/LOG.md.
 Agents must read this before starting work and obey the thresholds in docs/agents/WORKFLOW.md.
 "Not yet measured: admin keys not entered" below is expected (OneCLI keys have no admin usage scopes; provider-side
-monthly caps enforce spend). Treat it as under budget and keep working; it is never a blocker.
+monthly caps enforce spend (assuming each provider cap is a hard limit, not just an alert; Richard to confirm)). Treat it as under budget and keep working; it is never a blocker.
 
 | Pool | Cycle | Budget | Line | Monthly target |
 |---|---|---|---|---|
