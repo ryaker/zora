@@ -27,7 +27,7 @@ Run: `npx vitest run tests/benchmarks/ontology-retrieval` (prints the table; no 
 
 With 20 questions, a difference of one or two items is noise; report counts, not a headline. Observations that hold regardless:
 
-- **Graph expansion helps single-hop only when the result budget has room.** Graph-only candidates score with a relevance floor of 0.5 and compete with lexical hits for the same k = 5 slots. In 8 of the 12 questions where the graph supplied a gold memory the lexical hits were already filling the budget, and the gold memory was lost (e.g. q7, `Zora uses SparrowDB`: the graph returns it, the result list drops it). Candidate follow-ups: reserve a few slots for graph hits, or raise the floor. Not changed here.
+- **Graph expansion helps single-hop only when the result budget has room.** Graph-only candidates score with a relevance floor of 0.5 and compete with lexical hits for the same k = 5 slots. In several questions the lexical hits already fill the budget and a gold memory the graph supplies is dropped (e.g. q1, q4, q6, q7: for q7 the graph returns the `Zora uses SparrowDB` memory, yet the result list omits it). Candidate follow-ups: reserve a few slots for graph hits, or raise the floor. Not changed here.
 - **Alias**: the real tool's stale-evidence check (the entity name must still appear in the memory text) drops a memory that says "Sparrow" for entity `SparrowDB`. Alias resolution (#245) will not help until that check is alias-aware; the benchmark's alias items show a loss on both arms.
 - **Temporal**: the graph has no validity/supersession (#244), so it cannot prefer the current fact; both arms score 0 on the two temporal items.
 - No question got worse with the graph (broken = 0).
