@@ -300,7 +300,17 @@ async function main() {
       await gate.init();
 
       const resolver = new CapabilityResolver(registry, gate);
-      const quarantine = new QuarantineProcessor(registry.getQuarantineModel());
+      // #250: quarantine follows channel-policy.toml if set, else the highest-ranked
+      // enabled provider, so Ollama-only installs need no Claude auth for channels.
+      const qs = registry.getQuarantineSettings();
+      const primary = [...config.providers].filter(p => p.enabled).sort((a, b) => a.rank - b.rank)[0];
+      const backend = qs.provider ?? (primary?.type === 'ollama' ? 'ollama' : 'claude-sdk');
+      const quarantine = backend === 'ollama'
+        ? new QuarantineProcessor(
+            qs.model ?? (primary?.type === 'ollama' ? primary.model : undefined) ?? 'llama3.2',
+            { backend, endpoint: qs.endpoint ?? (primary?.type === 'ollama' ? primary.endpoint : undefined) },
+          )
+        : new QuarantineProcessor(registry.getQuarantineModel());
       const audit = new ChannelAuditLog(configDir);
 
       channelManager = new ChannelManager(orchestrator, gate, resolver, quarantine, audit);

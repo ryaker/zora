@@ -37,11 +37,29 @@ ALLOWED TOOLS: none
 MEMORY ACCESS: none
 You CANNOT call any tools. You CANNOT access any files. You CANNOT make any network requests.`;
 
+/**
+ * #250: the quarantine LLM backend is pluggable so channels work without
+ * Claude auth. Both backends are tool-less by construction: the Claude path
+ * registers no tools; the Ollama path is a bare /api/chat completion with no
+ * tools parameter, so INVARIANT-4 holds identically.
+ */
+export type QuarantineBackend = "claude-sdk" | "ollama";
+
+export interface QuarantineOptions {
+  backend?: QuarantineBackend;
+  /** Ollama base URL (backend "ollama" only). */
+  endpoint?: string;
+}
+
 export class QuarantineProcessor {
   private model: string;
+  private backend: QuarantineBackend;
+  private endpoint: string;
 
-  constructor(model = "claude-haiku-4-5-20251001") {
+  constructor(model = "claude-haiku-4-5-20251001", opts: QuarantineOptions = {}) {
     this.model = model;
+    this.backend = opts.backend ?? "claude-sdk";
+    this.endpoint = (opts.endpoint ?? "http://localhost:11434").replace(/\/$/, "");
   }
 
   /**
@@ -111,6 +129,7 @@ export class QuarantineProcessor {
    * Returns the raw text output from the LLM.
    */
   private async _runQuarantineLLM(messageContent: string): Promise<string> {
+    if (this.backend === "ollama") return this._runOllama(messageContent);
     const prompt = `Extract the intent from this message:\n\n${messageContent}`;
 
     const sdkQuery = query({
@@ -152,6 +171,28 @@ export class QuarantineProcessor {
     }
 
     return resultText;
+  }
+
+  /** #250: tool-less single-shot completion against a local Ollama daemon. */
+  private async _runOllama(messageContent: string): Promise<string> {
+    const res = await fetch(`${this.endpoint}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        stream: false,
+        format: "json",
+        // No `tools` field: the model has no way to call anything (INVARIANT-4).
+        messages: [
+          { role: "system", content: QUARANTINE_SYSTEM_PROMPT },
+          { role: "user", content: `Extract the intent from this message:\n\n${messageContent}` },
+        ],
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new Error(`Ollama quarantine request failed: HTTP ${res.status}`);
+    const body = (await res.json()) as { message?: { content?: string } };
+    return body.message?.content ?? "";
   }
 
   /**
