@@ -59,8 +59,8 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `auth_method` | string | `"mac_session"` | Authentication: `"mac_session"` (no API key needed) or `"api_key"`. |
-| `api_key_env` | string | -- | Environment variable containing the API key (when `auth_method = "api_key"`). |
+| `auth_method` | string | -- | Informational only; not read at runtime and no longer written by `init`. The Claude SDK uses whatever it finds (a `claude login` session or `ANTHROPIC_API_KEY`). |
+| `api_key_env` | string | -- | Environment variable containing the API key. |
 
 #### Gemini-specific fields (`type = "gemini-cli"`)
 
@@ -97,7 +97,6 @@ capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
 model = "claude-opus-5-5"
-auth_method = "mac_session"
 
 [[providers]]
 name = "gemini"
