@@ -79,6 +79,9 @@ export interface ChannelPolicyConfig {
     quarantine?: {
       enabled?: boolean;
       model?: string;
+      /** #250: LLM backend for quarantine. Unset = derive from the primary provider. */
+      provider?: "claude-sdk" | "ollama";
+      endpoint?: string;
     };
   };
   channel_policy?: {
@@ -186,6 +189,12 @@ export class ChannelIdentityRegistry {
   /** Get quarantine model name */
   getQuarantineModel(): string {
     return this.config.channels?.quarantine?.model ?? "claude-haiku-4-5-20251001";
+  }
+
+  /** #250: explicit quarantine backend settings (all optional). */
+  getQuarantineSettings(): { model?: string; provider?: "claude-sdk" | "ollama"; endpoint?: string } {
+    const q = this.config.channels?.quarantine;
+    return { model: q?.model, provider: q?.provider, endpoint: q?.endpoint };
   }
 
   /** Get prompt injection config */
