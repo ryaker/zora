@@ -50,7 +50,7 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | `capabilities` | string[] | yes | Tags for task routing: `"reasoning"`, `"coding"`, `"creative"`, `"structured-data"`, `"large-context"`, `"search"`, `"fast"`, or any custom string. |
 | `cost_tier` | string | yes | Cost classification: `"free"`, `"included"`, `"metered"`, `"premium"`. |
 | `enabled` | boolean | yes | Whether this provider is active. |
-| `model` | string | no | Model identifier (e.g. `"claude-opus-5"`, `"gemini-2.5-pro"`). Provider-specific default if omitted -- `claude-opus-5` for `claude-sdk`. `zora-agent init` writes `gemini-2.5-pro` for `gemini-cli`. |
+| `model` | string | no | Model identifier (e.g. `"claude-opus-5-5"`, `"gemini-2.5-pro"`). Provider-specific default if omitted -- `claude-opus-5-5` for `claude-sdk`. `zora-agent init` writes `gemini-2.5-pro` for `gemini-cli`. |
 | `effort` | string | no | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. The main intelligence/latency/cost dial. Left unset by default so the SDK's own default applies. `"xhigh"` requires Opus 4.7+ / Sonnet 5; `"max"` requires Opus 4.6+ / Sonnet 4.6+. Claude only. |
 | `max_turns` | integer | no | Maximum conversation turns per task. Default: `200`. |
 | `max_concurrent_jobs` | integer | no | Concurrency limit for this provider. |
@@ -96,7 +96,7 @@ rank = 1
 capabilities = ["reasoning", "coding", "creative"]
 cost_tier = "included"
 enabled = true
-model = "claude-opus-5"
+model = "claude-opus-5-5"
 auth_method = "mac_session"
 
 [[providers]]

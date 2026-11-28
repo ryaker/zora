@@ -159,7 +159,8 @@ export type QueryFn = (params: {
  * fallback cannot drift apart — they did, and a new install got a different
  * model depending on whether `model` was written into config.toml.
  */
-export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
+import { DEFAULT_CLAUDE_MODEL } from './model-defaults.js';
+export { DEFAULT_CLAUDE_MODEL };
 
 // ─── Provider Options ───────────────────────────────────────────────
 

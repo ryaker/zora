@@ -51,8 +51,8 @@ async function sdkOptionsFor(config: ProviderConfig): Promise<Record<string, unk
 
 describe('Claude model default (SDK-04)', () => {
   it('defaults to the current Opus generation', async () => {
-    expect(DEFAULT_CLAUDE_MODEL).toBe('claude-opus-5');
-    expect((await sdkOptionsFor(baseConfig))['model']).toBe('claude-opus-5');
+    expect(DEFAULT_CLAUDE_MODEL).toBe('claude-opus-5-5');
+    expect((await sdkOptionsFor(baseConfig))['model']).toBe('claude-opus-5-5');
   });
 
   it('does not fall back to a previous-generation model', async () => {
@@ -71,7 +71,7 @@ describe('Claude model default (SDK-04)', () => {
       path.join(process.cwd(), 'src/cli/init-command.ts'),
       'utf8',
     );
-    expect(initCommand).toContain(`model = "${DEFAULT_CLAUDE_MODEL}"`);
+    expect(initCommand).toContain('model = "${DEFAULT_CLAUDE_MODEL}"'); // template reference, single-sourced (#255)
     expect(initCommand).not.toContain('model = "claude-sonnet-4-6"');
   });
 });
@@ -88,5 +88,19 @@ describe('effort passthrough (SDK-04)', () => {
 
   it('leaves effort unset when not configured, so the SDK default applies', async () => {
     expect(await sdkOptionsFor(baseConfig)).not.toHaveProperty('effort');
+  });
+});
+
+describe('#255: single-sourced model defaults', () => {
+  it('no model-id literals for defaults outside model-defaults.ts', () => {
+    const files = ['src/cli/init-command.ts', 'src/channels/quarantine-processor.ts', 'src/channels/channel-identity-registry.ts'];
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(process.cwd(), f), 'utf8');
+      expect(src, f).not.toMatch(/claude-(?:opus|sonnet|haiku)-[0-9]|gemini-[0-9]/);
+    }
+  });
+  it('init no longer writes the unread auth_method for claude', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/cli/init-command.ts'), 'utf8');
+    expect(src).not.toContain('mac_session');
   });
 });

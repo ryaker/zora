@@ -14,6 +14,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { ChannelMessage, CapabilitySet, StructuredIntent } from "../types/channel.js";
 import { ALL_CHANNEL_PATTERNS } from "../security/patterns.js";
+import { DEFAULT_QUARANTINE_MODEL } from "../providers/model-defaults.js";
 
 /** Output from the quarantine LLM */
 interface QuarantineOutput {
@@ -56,7 +57,7 @@ export class QuarantineProcessor {
   private backend: QuarantineBackend;
   private endpoint: string;
 
-  constructor(model = "claude-haiku-4-5-20251001", opts: QuarantineOptions = {}) {
+  constructor(model = DEFAULT_QUARANTINE_MODEL, opts: QuarantineOptions = {}) {
     this.model = model;
     this.backend = opts.backend ?? "claude-sdk";
     this.endpoint = (opts.endpoint ?? "http://localhost:11434").replace(/\/$/, "");

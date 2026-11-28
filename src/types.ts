@@ -424,6 +424,7 @@ export interface BaseProviderConfig {
 /** TYPE-04: Claude SDK provider config */
 export interface ClaudeProviderConfig extends BaseProviderConfig {
   type: 'claude-sdk';
+  /** Cosmetic only (#255): never read. Claude auth is whatever the SDK finds (`claude login` or ANTHROPIC_API_KEY). */
   auth_method?: 'mac_session' | 'api_key';
   api_key_env?: string;
 }
