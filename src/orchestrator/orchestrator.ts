@@ -78,6 +78,7 @@ import { LeakDetector } from '../security/leak-detector.js';
 import { sanitizeInput, sanitizeToolOutput } from '../security/prompt-defense.js';
 import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { createCapabilityToken, enforceCapability } from '../security/capability-tokens.js';
+import type { ActionGrant } from '../security/action-grants.js';
 import type { WorkerCapabilityToken } from '../types.js';
 import { IntegrityGuardian } from '../security/integrity-guardian.js';
 import { SecretsManager } from '../security/secrets-manager.js';
@@ -131,6 +132,8 @@ export interface SubmitTaskOptions {
   maxTurns?: number;
   /** #202: restrict this job to these tools via its capability token (empty/absent = unrestricted). */
   toolAllowlist?: string[];
+  /** #233: approval-skipping grants for this job (trusted submitter only; never from model input). */
+  grants?: ActionGrant[];
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
   /** ORCH-14: Optional context transform callback applied to history before follow-ups */
@@ -1258,7 +1261,7 @@ export class Orchestrator {
     const jobId = options.jobId ?? `job_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
     // SEC-10: Create a scoped capability token for this job
-    const capToken = createCapabilityToken(jobId, this._policy, options.toolAllowlist?.length ? { allowedTools: options.toolAllowlist } : undefined);
+    const capToken = createCapabilityToken(jobId, this._policy, (options.toolAllowlist?.length || options.grants?.length) ? { ...(options.toolAllowlist?.length ? { allowedTools: options.toolAllowlist } : {}), ...(options.grants?.length ? { grants: options.grants } : {}) } : undefined);
     this._activeTokens.set(jobId, capToken);
 
     // Reset per-task state: ValidationPipeline rate limit is per-session, not per-orchestrator-lifetime.
@@ -1379,6 +1382,7 @@ export class Orchestrator {
       maxCostTier: options.maxCostTier,
       maxTurns: options.maxTurns,
       toolAllowlist: options.toolAllowlist,
+      grants: options.grants,
       errorBudget,
       customTools,
       canUseTool: this._buildTokenAwareCanUseTool(jobId),
@@ -2201,7 +2205,7 @@ export class Orchestrator {
     // Refresh canUseTool — the original closure may be stale after a restart
     // SEC-10: Re-issue a capability token for the resumed job and apply token-aware enforcement
     const resumeJobId = context.jobId;
-    const resumeCapToken = createCapabilityToken(resumeJobId, this._policy, context.toolAllowlist?.length ? { allowedTools: context.toolAllowlist } : undefined);
+    const resumeCapToken = createCapabilityToken(resumeJobId, this._policy, (context.toolAllowlist?.length || context.grants?.length) ? { ...(context.toolAllowlist?.length ? { allowedTools: context.toolAllowlist } : {}), ...(context.grants?.length ? { grants: context.grants } : {}) } : undefined);
     this._activeTokens.set(resumeJobId, resumeCapToken);
 
     const resumeContext: TaskContext = {
@@ -2573,7 +2577,8 @@ export class Orchestrator {
    * policy engine. Call this once per job to get a closure bound to jobId.
    */
   private _buildTokenAwareCanUseTool(jobId: string): (tool: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<{ behavior: 'allow' | 'deny'; message?: string; updatedInput?: Record<string, unknown> }> {
-    const policyCanUseTool = this._policyEngine.createCanUseTool();
+    // #233: grants are read lazily from the job's token (never from tool input).
+    const policyCanUseTool = this._policyEngine.createCanUseTool(() => this._activeTokens.get(jobId)?.grants);
     return async (tool: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => {
       const token = this._activeTokens.get(jobId);
       if (token) {

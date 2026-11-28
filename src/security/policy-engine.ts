@@ -28,6 +28,7 @@ import type { BudgetStatus, DryRunResult } from './security-types.js';
 import type { IntentCapsuleManager } from './intent-capsule.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { ApprovalQueue } from '../core/approval-queue.js';
+import { findCoveringGrant, type ActionGrant } from './action-grants.js';
 import {
   shellTokenize,
   splitChainedCommands,
@@ -574,7 +575,7 @@ export class PolicyEngine {
    *  4. Intent capsule drift check -- detect if the action diverges from the original task goal.
    *  5. Dry-run interception -- if enabled, deny with a preview message instead of executing.
    */
-  createCanUseTool(): (
+  createCanUseTool(getGrants?: () => readonly ActionGrant[] | undefined): (
     toolName: string,
     input: Record<string, unknown>,
     options: { signal: AbortSignal },
@@ -694,7 +695,13 @@ export class PolicyEngine {
           ? `Command: ${input['command']}`
           : `${toolName}: ${input['file_path'] ?? JSON.stringify(input)}`;
 
-        if (this._flagCallback) {
+        // #233: a per-job grant skips the prompt for exactly the action/scope it names.
+        // Everything above (path/command validation, budget) already ran, and drift
+        // checks below still run, so a grant cannot allow anything policy forbids.
+        const grant = findCoveringGrant(getGrants?.(), action, input);
+        if (grant) {
+          log.info({ action, grantId: grant.id, tool: toolName }, 'always_flag action covered by job grant — approval skipped');
+        } else if (this._flagCallback) {
           const approved = await this._flagCallback(action, detail);
           if (!approved) {
             return {

@@ -4,6 +4,7 @@
  * All types defined in the spec §4.2. This file is the single source of truth
  * for shared interfaces across the codebase.
  */
+import type { ActionGrant } from './security/action-grants.js';
 
 // ─── Provider Capabilities & Cost ────────────────────────────────────
 
@@ -315,6 +316,8 @@ export interface TaskContext {
   maxTurns?: number;
   /** #202: tool allowlist for this job (from a `does = "notify"` routine). Persisted so a resumed job keeps it. */
   toolAllowlist?: string[];
+  /** #233: per-job action grants (trusted, set by the submitter). Persisted so a resumed job keeps them. */
+  grants?: ActionGrant[];
   timeout?: number;
   /** ERR-09: Hard recovery budget — tracks retry and turn limits */
   errorBudget?: ErrorBudget;
@@ -829,6 +832,8 @@ export interface WorkerCapabilityToken {
   deniedPaths: string[];
   allowedCommands: string[];
   allowedTools: string[];
+  /** #233: approval-skipping grants for named actions; narrow-only, see action-grants.ts. */
+  grants?: ActionGrant[];
   maxExecutionTime: number;
   createdAt: Date;
   expiresAt: Date;
