@@ -23,6 +23,7 @@ import type { ZoraPolicy, ZoraConfig, LLMProvider } from '../types.js';
 import { createLogger, initLogger } from '../utils/logger.js';
 import { expandHome } from '../utils/fs.js';
 import { ChannelIdentityRegistry } from '../channels/channel-identity-registry.js';
+import { ChannelApprovalBridge, parseApprovers } from '../channels/channel-approval-bridge.js';
 import { ChannelPolicyGate } from '../channels/channel-policy-gate.js';
 import { CapabilityResolver } from '../channels/capability-resolver.js';
 import { QuarantineProcessor } from '../channels/quarantine-processor.js';
@@ -288,6 +289,7 @@ async function main() {
   let webhookServer: WebhookServer | undefined;
   // ERR-21: one per team mailbox channel, stopped on shutdown.
   const teamWatchdogs: BridgeWatchdog[] = [];
+  let approvalBridge: ChannelApprovalBridge | undefined;
 
   const channelPolicyPath = path.join(configDir, 'config', 'channel-policy.toml');
   if (fs.existsSync(channelPolicyPath)) {
@@ -439,17 +441,24 @@ async function main() {
       activeAdapters.push(...teamAdapterNames);
       log.info({ adapters: activeAdapters.join(', ') }, 'Multi-channel architecture online');
 
-      // ApprovalQueue is wired into PolicyEngine via orchestrator.setApprovalQueue() above.
-      // The send-handler transport (ChannelManager → ApprovalQueue) is not yet implemented.
-      // IMPORTANT: Until a send-handler is registered, ApprovalQueue.request() operates in
-      // deny-by-default mode — all always_flag actions will be auto-denied immediately.
-      // Wire the ChannelManager send-handler before deploying to production to enable
-      // interactive approval. Operators who need the previous warn+allow behavior can
-      // temporarily remove the always_flag entries from channel-policy.toml.
+      // #265: carry approval questions and answers over these adapters. The
+      // Telegram steering gateway is skipped whenever channel-policy.toml
+      // exists, so without this nothing could deliver a question and every
+      // flagged action was denied at once.
       if (approvalQueue.isEnabled()) {
-        log.warn(
-          'ApprovalQueue enabled (deny-by-default) — always_flag actions will be auto-denied until ChannelManager send-handler is registered',
-        );
+        const explicit = parseApprovers(config.approval?.approvers);
+        const approvers = explicit.length > 0
+          ? explicit
+          : registry.getUsers()
+              .filter((u) => u.role === 'trusted_admin')
+              .flatMap((u) => channelManager!.getAdapters().map((a) => ({ adapter: a.name, id: u.phone })));
+        approvalBridge = new ChannelApprovalBridge(approvalQueue, approvers, () => channelManager!.getAdapters());
+        channelManager.setApprovalBridge(approvalBridge);
+        if (approvalBridge.approverCount > 0) {
+          approvalBridge.attach();
+        } else {
+          log.warn('ApprovalQueue enabled but no approvers configured — flagged actions will be denied');
+        }
       }
     } catch (err) {
       log.error({ err }, 'Failed to initialize multi-channel architecture');
@@ -487,6 +496,8 @@ async function main() {
         if (webhookServer) {
           await webhookServer.stop();
         }
+        // #265: pending approvals cannot be answered once the adapters stop.
+        approvalBridge?.detach();
         if (channelManager) {
           await channelManager.stop();
         }

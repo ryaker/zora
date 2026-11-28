@@ -370,6 +370,7 @@ The human-in-the-loop gate for actions scored at or above `[actions.thresholds] 
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Ask a human before a flagged action. Only `false` turns it off, and then a flagged action is denied outright with no way to approve it. With the gate on but no approval channel connected, a flagged action is still denied at once. |
 | `timeout_s` | number | `300` | Seconds to wait for an answer before denying. |
+| `approvers` | string[] | every `trusted_admin` | Who may answer, as `"<adapter>:<id>"`, e.g. `["slack:U0123", "signal:+14155551234"]`. Questions go to them by direct message on Slack, Signal or Telegram, and they answer with `/approve ZORA-XXXX allow\|deny\|allow-30m\|allow-session`. Unset means every `trusted_admin` in `channel-policy.toml`. Team mailboxes never carry approvals. |
 
 Connector tools are scored by what they do, not by name: a tool whose name
 carries a send verb (`send`, `post`, `reply`, `share`, …) scores as
