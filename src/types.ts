@@ -741,6 +741,12 @@ export interface RoutineConfig {
    * allowedTools, not a prompt hint. Invalid values reject the routine.
    */
   does?: RoutineDoes;
+  /**
+   * #233: actions each run may take without asking, e.g. `["git_push:agent/*"]`.
+   * Approving the routine file is the one approval. Human-only kinds, auto-deny
+   * and policy rules still apply inside it.
+   */
+  pre_approved?: string[];
 }
 
 export type RoutineDoes = 'act' | 'notify';

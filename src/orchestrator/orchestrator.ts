@@ -131,6 +131,13 @@ export interface SubmitTaskOptions {
   maxTurns?: number;
   /** #202: restrict this job to these tools via its capability token (empty/absent = unrestricted). */
   toolAllowlist?: string[];
+  /**
+   * #233: approve this job once. Actions named here (`git_push`,
+   * `git_push:agent/*`, `send_message`, …) run without asking for the life of
+   * the job. Inside the grant, human-only kinds, auto-deny and policy rules
+   * still apply; it only skips questions.
+   */
+  grant?: string[];
   jobId?: string;
   onEvent?: (event: AgentEvent) => void;
   /** ORCH-14: Optional context transform callback applied to history before follow-ups */
@@ -749,6 +756,7 @@ export class Orchestrator {
           model: opts.model,
           maxCostTier: opts.maxCostTier,
           toolAllowlist: opts.toolAllowlist,
+          ...(opts.grant ? { grant: opts.grant } : {}),
         }),
         this._baseDir,
       );
@@ -1261,6 +1269,8 @@ export class Orchestrator {
     // SEC-10: Create a scoped capability token for this job
     const capToken = createCapabilityToken(jobId, this._policy, options.toolAllowlist?.length ? { allowedTools: options.toolAllowlist } : undefined);
     this._activeTokens.set(jobId, capToken);
+    // #233: the job's one-time approval, if it came with one.
+    if (options.grant?.length) this._approvalQueue?.grantJob(jobId, options.grant);
 
     // Reset per-task state: ValidationPipeline rate limit is per-session, not per-orchestrator-lifetime.
     // Without this, after MAX_SAVES_PER_SESSION saves across all tasks, memory_save permanently blocks.
@@ -1442,6 +1452,7 @@ export class Orchestrator {
     } catch (err) {
       this._activeTokens.delete(jobId);
       this._hookBridges.delete(jobId);
+      this._approvalQueue?.revokeJob(jobId); // #233
       // on_all_providers_down notification — gated by notifications.on_all_providers_down
       this._notifications.notifyAllProvidersDown().catch(e => {
         log.debug({ e }, 'notifyAllProvidersDown failed (non-critical)');
@@ -1475,6 +1486,7 @@ export class Orchestrator {
       this._activeTokens.delete(jobId);
       this._hookBridges.delete(jobId);
       this._activeJobProviders.delete(jobId);
+      this._approvalQueue?.revokeJob(jobId); // #233
     }
 
     // Post-session: await skill synthesis so CLI mode doesn't exit before confirmation/write
@@ -2574,7 +2586,8 @@ export class Orchestrator {
    * policy engine. Call this once per job to get a closure bound to jobId.
    */
   private _buildTokenAwareCanUseTool(jobId: string): (tool: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<{ behavior: 'allow' | 'deny'; message?: string; updatedInput?: Record<string, unknown> }> {
-    const policyCanUseTool = this._policyEngine.createCanUseTool();
+    // #233: bind the trusted job id so job grants are looked up by it.
+    const policyCanUseTool = this._policyEngine.createCanUseTool({ jobId });
     return async (tool: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => {
       const token = this._activeTokens.get(jobId);
       if (token) {

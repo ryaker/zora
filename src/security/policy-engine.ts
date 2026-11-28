@@ -574,7 +574,14 @@ export class PolicyEngine {
    *  4. Intent capsule drift check -- detect if the action diverges from the original task goal.
    *  5. Dry-run interception -- if enabled, deny with a preview message instead of executing.
    */
-  createCanUseTool(): (
+  createCanUseTool(opts: {
+    /**
+     * #233: the trusted job id this callback serves, set by the orchestrator
+     * per job. Job grants are looked up by it. Never read from tool input,
+     * which the model controls.
+     */
+    jobId?: string;
+  } = {}): (
     toolName: string,
     input: Record<string, unknown>,
     options: { signal: AbortSignal },
@@ -707,11 +714,16 @@ export class PolicyEngine {
           // Use score=85 (above the default blanketMaxScore of 80) so blanket-allow
           // windows never auto-approve always_flag actions. Use trusted _sessionId,
           // not the user-controlled __jobId from tool input, to prevent audit spoofing.
+          // #233: keyed by the orchestrator-assigned job id when there is
+          // one, so a job grant (e.g. `git_push:agent/*`) can cover it.
           const approved = await this._approvalQueue.request({
             action,
             score: 85,
-            jobId: this._sessionId ?? 'unknown',
+            jobId: opts.jobId ?? this._sessionId ?? 'unknown',
             tool: toolName,
+            ...(action === 'git_push' && tool === 'bash'
+              ? { target: gitPushBranch(String(input['command'] ?? '')) }
+              : {}),
           });
           if (!approved) {
             return {
@@ -976,4 +988,24 @@ export class PolicyEngine {
     return policy.denied_paths.some(denied =>
       this._rootForms(denied, canonical, true).some(r => isWithinRoot(p, r)));
   }
+}
+
+/**
+ * #233: the branch a `git push` names, for targeted job grants such as
+ * `git_push:agent/*`. Takes the last non-flag argument after `push` and the
+ * destination side of a `src:dst` refspec. Returns undefined when it cannot
+ * tell (a bare `git push`, a chained command), and a targeted grant never
+ * covers an undefined target, so that case still asks.
+ */
+export function gitPushBranch(command: string): string | undefined {
+  if (/[;&|`$]/.test(command)) return undefined;
+  const args = command.trim().split(/\s+/);
+  const pushAt = args.indexOf('push');
+  if (pushAt === -1) return undefined;
+  const positional = args.slice(pushAt + 1).filter((a) => !a.startsWith('-'));
+  // `git push origin branch` → [origin, branch]; a lone remote names no branch.
+  if (positional.length < 2) return undefined;
+  const ref = positional[positional.length - 1]!;
+  const dst = ref.includes(':') ? ref.slice(ref.indexOf(':') + 1) : ref;
+  return dst.replace(/^\+/, '').replace(/^refs\/heads\//, '') || undefined;
 }

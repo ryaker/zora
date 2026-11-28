@@ -36,6 +36,8 @@ export type RoutineTaskSubmitter = (options: {
   maxCostTier?: CostTier;
   /** #202: restrict the job to this tool allowlist (notify routines). */
   toolAllowlist?: string[];
+  /** #233: the routine's pre-approved actions, granted to each run's job. */
+  grant?: string[];
 }) => Promise<string>;
 
 /** Default poll interval for EventTriggerManager (1 second). */
@@ -247,6 +249,7 @@ export class RoutineManager {
         model: routine.model_preference,
         maxCostTier: routine.max_cost_tier,
         toolAllowlist: routine.does === 'notify' ? [...NOTIFY_ROUTINE_TOOLS] : undefined,
+        ...(routine.pre_approved?.length ? { grant: [...routine.pre_approved] } : {}),
       });
     } finally {
       if (tracked) tracked.inFlight--;
@@ -399,6 +402,14 @@ export class RoutineManager {
     // #202: `does` must be "act" or "notify"; anything else rejects (fail closed, not silently "act").
     if (r['does'] !== undefined && r['does'] !== 'act' && r['does'] !== 'notify') {
       log.error({ routine: r['name'] }, 'Invalid does (must be "act" or "notify") — rejecting');
+      return false;
+    }
+
+    // #233: pre_approved must be a list of strings; anything else rejects,
+    // since guessing at a malformed grant could widen it.
+    if (r['pre_approved'] !== undefined
+      && !(Array.isArray(r['pre_approved']) && r['pre_approved'].every((g) => typeof g === 'string'))) {
+      log.error({ routine: r['name'] }, 'Invalid pre_approved (must be a list of strings) — rejecting');
       return false;
     }
 

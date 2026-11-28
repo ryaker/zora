@@ -377,6 +377,17 @@ The human-in-the-loop gate for actions scored at or above `[actions.thresholds] 
 | `timeout_s` | number | `300` | Seconds to wait for an answer before denying. |
 | `approvers` | string[] | every `trusted_admin` | Who may answer, as `"<adapter>:<id>"`, e.g. `["slack:U0123", "signal:+14155551234"]`. Questions go to them by direct message on Slack, Signal or Telegram, and they answer with `/approve ZORA-XXXX allow\|deny\|allow-30m\|allow-session`. Unset means every `trusted_admin` in `channel-policy.toml`. Team mailboxes never carry approvals. |
 
+**Approve a job once (#233).** You can reply `allow-job` to an approval question.
+That approves the action and stops Zora asking again for the same kind of action in
+that job. A routine can pre-approve actions for every run with
+`pre_approved = ["git_push:agent/*"]` in its `[routine]` block. Each entry is an
+action key, or `action:glob` to limit it to a target. For `git_push` the target is
+the branch, and a targeted grant still asks when the branch can't be worked out.
+A grant only skips questions. Human-only kinds, auto-deny scores and policy rules
+still apply inside it.
+`allow-30m` and `allow-session` now cover every action that asks, up to the
+auto-deny threshold.
+
 Connector tools are scored by what they do, not by name: a tool whose name
 carries a send verb (`send`, `post`, `reply`, `share`, …) scores as
 `send_message` (80, asks) unless its server has `acts_as = "zora"`, in which case
