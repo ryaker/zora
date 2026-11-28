@@ -32,10 +32,10 @@ describe('findCoveringGrant', () => {
     expect(findCoveringGrant([grant], 'git_push', push('git push upstream agent/feat'))).toBeNull();
     expect(findCoveringGrant([grant], 'git_push', push('git push origin agent/a main'))).toBeNull();
   });
-  it('a URL remote is not covered even by an unconstrained-remote grant', () => {
-    const g: ActionGrant = { id: 'g2', action: 'git_push', branches: ['agent/*'] };
-    expect(findCoveringGrant([g], 'git_push', push('git push https://attacker.example/x.git agent/foo'))).toBeNull();
-    expect(findCoveringGrant([g], 'git_push', push('git push origin agent/foo'))?.id).toBe('g2');
+  it('a URL remote is never covered; a grant without remotes covers nothing', () => {
+    expect(findCoveringGrant([grant], 'git_push', push('git push https://attacker.example/x.git agent/foo'))).toBeNull();
+    const noRemotes: ActionGrant = { id: 'g2', action: 'git_push', branches: ['agent/*'] };
+    expect(findCoveringGrant([noRemotes], 'git_push', push('git push origin agent/foo'))).toBeNull();
   });
   it('never honours a git_push grant without branches', () => {
     expect(findCoveringGrant([{ id: 'x', action: 'git_push' }], 'git_push', push('git push origin agent/a'))).toBeNull();
