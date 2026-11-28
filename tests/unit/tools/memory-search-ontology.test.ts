@@ -299,4 +299,45 @@ describe('memory_search ontology expansion', () => {
     const run = setup({ store: { g1: item('g1') }, graph: client as never });
     expect((await run({ query: 'q', entity: ENTITY, relation: REL })).results.map(x => x.id)).toEqual(['g1']);
   });
+
+  describe('aliases (#245)', () => {
+    const aliasItem: MemoryItem = { ...item('m9'), summary: 'Sparrow stores edges as typed relationships.' };
+
+    it('drops a memory that never uses the canonical name (stale-evidence guard, no alias)', async () => {
+      const run = setup({
+        store: { m9: aliasItem }, lexical: [],
+        graph: { ontologyEnabled: true, sourcesOfChecked: vi.fn(async () => ['m9']) },
+      });
+      const r = await run({ query: 'q', entity: { name: 'SparrowDB', kind: 'tool' } });
+      expect(r.results).toEqual([]);
+    });
+
+    it('keeps it when the caller names an alias the text uses', async () => {
+      const run = setup({
+        store: { m9: aliasItem }, lexical: [],
+        graph: { ontologyEnabled: true, sourcesOfChecked: vi.fn(async () => ['m9']) },
+      });
+      const r = await run({ query: 'q', entity: { name: 'SparrowDB', kind: 'tool', aliases: ['Sparrow'] } });
+      expect(r.results.map(x => x.id)).toEqual(['m9']);
+      expect(r.results[0]!.via).toBe('graph');
+    });
+
+    it('ignores too-short, non-string and over-long aliases', async () => {
+      const run = setup({
+        store: { m9: { ...aliasItem, summary: 'an unrelated note about db' } }, lexical: [],
+        graph: { ontologyEnabled: true, sourcesOfChecked: vi.fn(async () => ['m9']) },
+      });
+      const r = await run({ query: 'q', entity: { name: 'SparrowDB', kind: 'tool', aliases: ['db', 7, 'x'.repeat(101)] } });
+      expect(r.results).toEqual([]);
+    });
+
+    it('does not add candidates the graph did not return', async () => {
+      const run = setup({
+        store: { m9: aliasItem }, lexical: [],
+        graph: { ontologyEnabled: true, sourcesOfChecked: vi.fn(async () => []) },
+      });
+      const r = await run({ query: 'q', entity: { name: 'SparrowDB', kind: 'tool', aliases: ['Sparrow'] } });
+      expect(r.results).toEqual([]);
+    });
+  });
 });

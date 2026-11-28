@@ -93,7 +93,11 @@ and `EVIDENCED_BY` edges to `Memory(mem_a1)`.
 {"query": "what does Zora use", "relation": {
   "from": {"name": "Zora", "kind": "project"},
   "to":   {"name": "SparrowDB", "kind": "tool"}, "predicate": "uses"}}
+// the memory text may use another name: pass aliases (#245)
+{"query": "how are links stored", "entity": {"name": "SparrowDB", "kind": "tool", "aliases": ["Sparrow"]}}
 ```
+
+`aliases` (up to 5, 3–100 chars each, optional on `entity` and on `relation.from`/`to`) only widens the "entity name still appears in the memory" check. The graph still looks candidates up by the exact canonical `(kind, name)`, so an alias cannot pull in a memory the graph did not already link to that entity. Automatic alias discovery is not built; the caller supplies them.
 
 ## When it helps vs plain `memory_search`
 
