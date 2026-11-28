@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import type { Command } from 'commander';
 import type { MemoryManager } from '../memory/memory-manager.js';
 import type { MemoryItem } from '../memory/memory-types.js';
+import { registerGraphInspectCommands } from './graph-commands.js';
 
 const MS_PER_DAY = 86_400_000;
 const DEDUP_THRESHOLD = 0.8;
@@ -18,6 +19,7 @@ export function registerMemoryCommands(
   setupContext: () => Promise<{ memoryManager: MemoryManager }>,
 ): void {
   const memory = program.command('memory').description('Manage agent memory');
+  registerGraphInspectCommands(memory);
 
   memory
     .command('search <query>')

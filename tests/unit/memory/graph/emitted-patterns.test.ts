@@ -80,6 +80,9 @@ function exerciseAll(store: GraphStore): void {
   store.relatedTasks(hostile);
   store.decisionChain(hostile);
   store.failuresForTool(hostile);
+  store.ontologyEntities(hostile as unknown as number);
+  store.ontologyAssertions(5, hostile);
+  store.memoryProvenance(hostile);
   store.stats();
 }
 

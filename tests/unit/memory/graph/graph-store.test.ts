@@ -542,4 +542,33 @@ describe('GraphStore', NATIVE_TIMEOUT, () => {
       expect(store.stats().entities).toBe(1);
     });
   });
+
+  describeIfNative()('ontology inspection (#242)', () => {
+    const ent = (name: string, kind: 'person' | 'project' = 'project') => ({ name, kind });
+
+    it('lists entities and assertions and traces one memory back to what it produced', () => {
+      store.recordFacts({ memId: 'm1', ts: 1, entities: [ent('Zora'), ent('Ann', 'person')],
+        relations: [{ from: ent('Ann', 'person'), to: ent('Zora'), kind: 'owns' }] });
+      store.recordFacts({ memId: 'm2', ts: 2, entities: [ent('Other')] });
+
+      expect(store.ontologyEntities().map(e => e.name).sort()).toEqual(['Ann', 'Other', 'Zora']);
+      const all = store.ontologyAssertions();
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({ from: ent('Ann', 'person'), predicate: 'owns', to: ent('Zora'), memId: 'm1' });
+
+      const p = store.memoryProvenance('m1');
+      expect(p.entities.map(e => e.name).sort()).toEqual(['Ann', 'Zora']);
+      expect(p.assertions).toHaveLength(1);
+      expect(store.memoryProvenance('m2').assertions).toEqual([]);
+      expect(store.memoryProvenance('nope')).toMatchObject({ entities: [], assertions: [] });
+    });
+
+    it('does not write: counts are unchanged after inspecting', () => {
+      store.recordFacts({ memId: 'm1', ts: 1, entities: [ent('Zora')] });
+      const before = store.stats();
+      store.ontologyEntities(); store.ontologyAssertions(); store.memoryProvenance('m1');
+      expect(store.stats()).toEqual(before);
+      expect(store.ontologyEntities()).toHaveLength(1);
+    });
+  });
 });
