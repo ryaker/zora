@@ -21,7 +21,7 @@ export interface ActionGrant {
   action: string;
   /** git_push only: branch globs (`*` wildcard) the push may target. Required for git_push. */
   branches?: string[];
-  /** git_push only: remotes the push may target; absent = any remote name. */
+  /** git_push only: remote names the push may target. Required for git_push (URLs never match). */
   remotes?: string[];
 }
 
@@ -73,7 +73,8 @@ export function findCoveringGrant(
       if (!g.branches?.length) continue; // an unconstrained push grant is never valid
       const parsed = parseGitPush(typeof toolInput['command'] === 'string' ? toolInput['command'] : '');
       if (!parsed) continue;
-      if (g.remotes?.length && !g.remotes.includes(parsed.remote)) continue;
+      // Required: without it the grant would also cover `git push https://any-host/x.git`.
+      if (!g.remotes?.length || !g.remotes.includes(parsed.remote)) continue;
       const res = g.branches.map(globToRegExp);
       if (parsed.branches.every(b => res.some(r => r.test(b)))) return g;
       continue;
