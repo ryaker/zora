@@ -696,6 +696,9 @@ export class Orchestrator {
     // `startupTimeoutMs`: a disabled flag, a missing native module, an
     // unopenable database or a failed spawn all yield an inert client.
     this._graphClient = await GraphMemoryClient.create(graphConfigFromEnv());
+    // #246: forgetting a memory also erases the graph data derived from it.
+    const graphForForget = this._graphClient;
+    this._memoryManager.setForgetHook(id => graphForForget.forgetMemory(id));
     if (this._graphClient.available) {
       log.info('Graph memory tier live — graph_recall registered');
     } else {

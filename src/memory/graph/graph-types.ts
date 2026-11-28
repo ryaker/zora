@@ -100,7 +100,8 @@ export type GraphWrite =
   | { op: 'recordDecision'; decision: DecisionRecord; jobId?: string; supersedes?: string }
   | { op: 'recordFailure'; failure: FailureRecord; jobId?: string }
   | { op: 'relateEntities'; from: EntityRecord; to: EntityRecord; kind: string }
-  | { op: 'recordFacts'; facts: MemoryFacts };
+  | { op: 'recordFacts'; facts: MemoryFacts }
+  | { op: 'forgetMemory'; memId: string };
 
 // ─── Query results ───────────────────────────────────────────────────
 
