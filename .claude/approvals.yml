@@ -1,0 +1,75 @@
+# Claude Approvals policy for ryaker/zora.
+# Schema: https://code.claude.com/docs/en/approvals-policy
+#
+# The human-only list mirrors REVIEW.md "Human-only areas"; change both together.
+#
+# Status: OBSERVE ONLY, and not live yet.
+# - Claude Approvals runs only for a Claude Team or Enterprise organization with the Claude
+#   GitHub App linked (https://code.claude.com/docs/en/approvals-setup). Until that is set up
+#   this file does nothing; the gate in force is the `needs-richard` rule in REVIEW.md and
+#   docs/agents/WORKFLOW.md.
+# - Every PR here is opened under Richard's account (`ryaker`), including the agents' PRs, so
+#   GitHub cannot tell Richard from an agent and an author cannot approve their own PR. Do not
+#   remove `mode: observe` until the agents push from their own GitHub identity.
+# - No `advisory: [claude/code_review]` line: naming Code Review can start billed reviews even
+#   where Code Review is off. Overrides that read `claude/code_review` are billed too, even in
+#   observe mode.
+version: 1
+mode: observe
+
+rules:
+  - purpose: "Routine change: one approval, or Claude's alone when its Code Review passes."
+    paths: ["**"]
+    verdict: { claude: comments, seats: 1 }
+    override:
+      - { if: "claude/code_review = pass", verdict: { claude: approves, seats: 0 } }
+
+  - purpose: "Auth and credentials take Richard."
+    paths:
+      - "src/security/secrets-manager.ts"
+      - "src/security/capability-tokens.ts"
+      - "src/hooks/built-in/secret-redact.ts"
+      - "src/cli/secret-commands.ts"
+      - "src/config/env-resolver.ts"
+      - "src/config/dashboard-token.ts"
+      - "src/dashboard/auth-middleware.ts"
+      - "src/orchestrator/auth-monitor.ts"
+      - "src/channels/webhook-signatures.ts"
+      - "src/channels/channel-identity-registry.ts"
+    nested: inherit
+    verdict: { claude: comments, seats: [{ count: 1, from: [ryaker] }] }
+
+  - purpose: "The quarantine screening step takes Richard."
+    paths:
+      - "src/channels/quarantine-processor.ts"
+      - "src/security/patterns.ts"
+      - "tests/**/quarantine*"
+    nested: inherit
+    verdict: { claude: comments, seats: [{ count: 1, from: [ryaker] }] }
+
+  - purpose: "Budget and spend rules take Richard."
+    paths:
+      - "src/dashboard/cost-tracker.ts"
+      - "src/hooks/built-in/rate-limit.ts"
+      # src/security/policy-engine.ts is deliberately not listed: only its budget section is
+      # human-only, and routine PRs touch the rest. REVIEW.md gates that section by review rule.
+      - "scripts/agents/usage-check.sh"
+    nested: inherit
+    verdict: { claude: comments, seats: [{ count: 1, from: [ryaker] }] }
+
+  - purpose: "CI, policy files and the review rules themselves take Richard."
+    paths:
+      - ".github/**"
+      - "**/policy.toml"
+      - "src/templates/security-policy.toml.template"
+      - ".claude/approvals.yml"
+      - ".claude/classifiers/**"
+      - ".claude/settings*.json"
+      - ".claude/agents/**"
+      - ".claude/skills/steward/**"
+      - "**/REVIEW.md"
+      - "docs/agents/WORKFLOW.md"
+      - "docs/agents/reviewer.md"
+      - "docs/agents/architect.md"
+    nested: inherit
+    verdict: { claude: comments, seats: [{ count: 1, from: [ryaker] }] }

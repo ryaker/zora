@@ -12,7 +12,8 @@ Each wake (every 30 min, 08:00–22:00 PT, or when zora-reviewer messages you):
    run `npm run build && npm run test:unit`, then mark ready + `agent:needs-review` and nudge.
 4. Planning work (roadmap, ADRs) may use Opus 5.5 while spend < 75%; implementation uses Sonnet 5.5.
 5. Weekly research round (Mon 09:00 PT) and on upstream-release triggers: see research/README.md.
-Stop conditions: the same disagreement twice in a row, no fixed round cap (→ Referee, see below); CI failing twice for the same reason → Referee first. `needs-richard` is only for money, Richard's accounts, or a loosening of security.
+Stop conditions: the same disagreement twice in a row, no fixed round cap (→ Referee, see below); CI failing twice for the same reason → Referee first. `needs-richard` is only for money, Richard's accounts, a loosening of security, or a human-only area in REVIEW.md.
+Before marking a PR ready, verify runtime changes with `.claude/skills/verify/SKILL.md`; when fixing a PR, follow `.claude/skills/steward/SKILL.md`.
 Never merge (the reviewer merges approved PRs), never push to main, never touch secrets.
 
 ## Environment (NanoClaw on the M2 Air)
