@@ -29,7 +29,7 @@ export interface EnforcementResult {
 export function createCapabilityToken(
   jobId: string,
   policy: ZoraPolicy,
-  overrides?: Partial<Pick<WorkerCapabilityToken, 'allowedPaths' | 'deniedPaths' | 'allowedCommands' | 'allowedTools' | 'maxExecutionTime'>>,
+  overrides?: Partial<Pick<WorkerCapabilityToken, 'allowedPaths' | 'deniedPaths' | 'allowedCommands' | 'allowedTools' | 'grants' | 'maxExecutionTime'>>,
 ): WorkerCapabilityToken {
   const now = new Date();
   const maxExecTime = overrides?.maxExecutionTime ?? parseTimeToMs(policy.shell.max_execution_time);
@@ -40,6 +40,7 @@ export function createCapabilityToken(
     deniedPaths: overrides?.deniedPaths ?? [...policy.filesystem.denied_paths],
     allowedCommands: overrides?.allowedCommands ?? [...policy.shell.allowed_commands],
     allowedTools: overrides?.allowedTools ?? [],
+    ...(overrides?.grants?.length ? { grants: overrides.grants.map(g => ({ ...g })) } : {}),
     maxExecutionTime: maxExecTime,
     createdAt: now,
     expiresAt: new Date(now.getTime() + DEFAULT_EXPIRATION_MS),
