@@ -123,6 +123,25 @@ describe('MemoryManager', () => {
     expect(results[0]!.score).toBeGreaterThan(0);
   });
 
+  it('forgetItem runs the forget hook only when an item was deleted, and survives a throwing hook (#246)', async () => {
+    await manager.init();
+    const seen: string[] = [];
+    manager.setForgetHook(id => { seen.push(id); });
+    const item = await manager.structuredMemory.createItem({
+      type: 'event', summary: 'Hooked', source: 's', source_type: 'tool_output', tags: [], category: 'events/tmp',
+    });
+    expect(await manager.forgetItem(item.id)).toBe(true);
+    expect(seen).toEqual([item.id]);
+    expect(await manager.forgetItem('missing-id')).toBe(false);
+    expect(seen).toEqual([item.id]);
+
+    manager.setForgetHook(() => { throw new Error('boom'); });
+    const again = await manager.structuredMemory.createItem({
+      type: 'event', summary: 'Hooked 2', source: 's', source_type: 'tool_output', tags: [], category: 'events/tmp',
+    });
+    expect(await manager.forgetItem(again.id)).toBe(true);
+  });
+
   it('forgetItem removes a structured memory item', async () => {
     await manager.init();
     const sm = manager.structuredMemory;

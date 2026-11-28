@@ -328,6 +328,15 @@ export class GraphMemoryClient {
     this._write({ op: 'recordFacts', facts });
   }
 
+  /**
+   * Erase graph data derived from a forgotten memory (#246). Not gated on the
+   * ontology flag: facts written while it was on must still be erasable after
+   * it is turned off. Inert client: no-op.
+   */
+  forgetMemory(memId: string): void {
+    this._write({ op: 'forgetMemory', memId });
+  }
+
   // ── Reads ─────────────────────────────────────────────────────────
 
   /** Memory IDs evidencing an entity. Empty unless the ontology flag is on. */

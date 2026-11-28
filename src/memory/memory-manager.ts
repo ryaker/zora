@@ -100,6 +100,7 @@ export class MemoryManager {
 
   /** Cached memory index — invalidated on writes. */
   private _indexCache: MemoryIndex | null = null;
+  private _onForget: ((id: string) => void) | null = null;
 
   /**
    * Returns a lightweight index of memory contents — no item reads.
@@ -393,6 +394,11 @@ export class MemoryManager {
     return limit !== undefined ? scored.slice(0, limit) : scored;
   }
 
+  /** Register a callback run after an item is deleted (#246: erase derived graph data). */
+  setForgetHook(hook: ((id: string) => void) | null): void {
+    this._onForget = hook;
+  }
+
   /**
    * Soft-deletes a structured memory item by ID.
    * Moves the item to an archive directory before removing.
@@ -421,7 +427,15 @@ export class MemoryManager {
     }
 
     this._indexCache = null; // Invalidate index on delete
-    return this._structuredMemory.deleteItem(id);
+    const deleted = await this._structuredMemory.deleteItem(id);
+    if (deleted && this._onForget) {
+      try {
+        this._onForget(id);
+      } catch {
+        // Derived-data erasure must never fail the user's forget.
+      }
+    }
+    return deleted;
   }
 
   /**

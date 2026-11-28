@@ -457,6 +457,54 @@ export class GraphStore {
     }
   }
 
+  /**
+   * Erase everything derived from one memory (#246): its Assertion nodes, its
+   * Memory node (with the EVIDENCED_BY edges, via DETACH DELETE) and any
+   * OntEntity left with no remaining evidence. Entities still evidenced by
+   * another memory are kept. Idempotent; an unknown memId is a no-op.
+   *
+   * Edges cannot be edited in place (note 10), so erasure goes through node
+   * deletion only. Deletion tightens retention, it never loosens access.
+   * Returns false if any delete statement failed, so a caller can tell a
+   * partial erase from a complete one.
+   */
+  forgetMemory(memId: string): boolean {
+    const id = exactId(memId, MAX_MEM_ID);
+    if (!id) return true;
+    const memory = identity('Memory', 'memId', id);
+
+    // Candidates must be collected BEFORE the edges disappear.
+    const candidates = this._queryChecked(
+      'MATCH (a:OntEntity)-[r:EVIDENCED_BY]->(m:Memory {zid: $zid}) RETURN a.zid',
+      { zid: memory.zid },
+    );
+    let ok = candidates !== null;
+
+    ok = this._tryExec('MATCH (a:Assertion {memId: $m}) DELETE a', { m: id }) && ok;
+    if (!this._tryExec('MATCH (m:Memory {zid: $zid}) DETACH DELETE m', { zid: memory.zid })) {
+      // Engines without DETACH: fall back to plain DELETE.
+      ok = this._tryExec('MATCH (m:Memory {zid: $zid}) DELETE m', { zid: memory.zid }) && ok;
+    }
+
+    // Orphan sweep: an entity with no remaining EVIDENCED_BY edge has no source.
+    for (const row of candidates ?? []) {
+      const zid = typeof row['a.zid'] === 'string' ? (row['a.zid'] as string) : null;
+      if (!zid) continue;
+      const left = this._queryChecked(
+        'MATCH (a:OntEntity {zid: $zid})-[r:EVIDENCED_BY]->(m:Memory) RETURN count(m) AS c',
+        { zid },
+      );
+      if (left === null) {
+        ok = false;
+        continue;
+      }
+      if ((num(left[0]?.['c']) ?? 0) === 0) {
+        ok = this._tryExec('MATCH (a:OntEntity {zid: $zid}) DELETE a', { zid }) && ok;
+      }
+    }
+    return ok;
+  }
+
   /** Memory IDs that mention an entity of this exact kind and name. */
   sourcesOf(name: string, kind: EntityKind, limit = 20): string[] {
     return this.sourcesOfChecked(name, kind, limit).ids;
@@ -539,6 +587,11 @@ export class GraphStore {
             break;
           case 'recordFacts':
             this.recordFacts(write.facts);
+            break;
+          case 'forgetMemory':
+            if (!this.forgetMemory(write.memId)) {
+              log.warn({ memId: write.memId }, 'Graph erase incomplete for forgotten memory');
+            }
             break;
         }
       } catch (err) {
@@ -960,6 +1013,16 @@ export class GraphStore {
    */
   private _query(cypher: string, params?: CypherParams): Array<Record<string, unknown>> {
     return this._queryChecked(cypher, params) ?? [];
+  }
+
+  private _tryExec(cypher: string, params?: CypherParams): boolean {
+    try {
+      this._exec(cypher, params);
+      return true;
+    } catch (err) {
+      log.debug({ err, cypher: cypher.slice(0, 120) }, 'Graph delete failed');
+      return false;
+    }
   }
 
   /** Rows, or null when the query threw (so callers can tell failure from empty). */

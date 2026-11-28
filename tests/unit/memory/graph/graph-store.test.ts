@@ -504,4 +504,42 @@ describe('GraphStore', NATIVE_TIMEOUT, () => {
       expect(store.stats()).toMatchObject({ tasks: 0, entities: 1 });
     });
   });
+
+  describeIfNative()('forgetMemory (#246)', () => {
+    const ent = (name: string) => ({ name, kind: 'concept' as const });
+    const count = (label: string): number => (store as unknown as { _count(l: string): number })._count(label);
+
+    it('erases the memory, its assertions and entities no other memory evidences', () => {
+      store.recordFacts({ memId: 'm1', ts: 1, entities: [ent('Alpha'), ent('Beta')],
+        relations: [{ from: ent('Alpha'), to: ent('Beta'), kind: 'uses' }] });
+      store.recordFacts({ memId: 'm2', ts: 2, entities: [ent('Beta')] });
+
+      expect(store.forgetMemory('m1')).toBe(true);
+
+      expect(store.sourcesOf('Alpha', 'concept')).toEqual([]);
+      expect(store.sourcesOf('Beta', 'concept')).toEqual(['m2']);
+      expect(store.relationSources(ent('Alpha'), ent('Beta'), 'uses')).toEqual([]);
+      expect(count('Assertion')).toBe(0);
+      expect(count('OntEntity')).toBe(1); // Alpha swept, Beta kept
+      expect(count('Memory')).toBe(1);
+    });
+
+    it('is idempotent and a no-op for unknown or invalid ids', () => {
+      store.recordFacts({ memId: 'm1', ts: 1, entities: [ent('Alpha')] });
+      expect(store.forgetMemory('nope')).toBe(true);
+      expect(store.forgetMemory('')).toBe(true);
+      expect(store.sourcesOf('Alpha', 'concept')).toEqual(['m1']);
+      expect(store.forgetMemory('m1')).toBe(true);
+      expect(store.forgetMemory('m1')).toBe(true);
+      expect(count('OntEntity')).toBe(0);
+    });
+
+    it('leaves legacy graph data untouched and works through applyWrites', () => {
+      store.upsertEntity({ name: 'Legacy', kind: 'concept' });
+      store.recordFacts({ memId: 'm1', ts: 1, entities: [ent('Alpha')] });
+      store.applyWrites([{ op: 'forgetMemory', memId: 'm1' }]);
+      expect(store.sourcesOf('Alpha', 'concept')).toEqual([]);
+      expect(store.stats().entities).toBe(1);
+    });
+  });
 });
