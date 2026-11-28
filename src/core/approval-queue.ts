@@ -12,15 +12,51 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('approval-queue');
 
-export type ApprovalDecision = 'allow' | 'deny' | 'allow-30m' | 'allow-session';
+export type ApprovalDecision = 'allow' | 'deny' | 'allow-job' | 'allow-30m' | 'allow-session';
+
+/**
+ * #233: what a job may do without asking, granted once — at job start, in a
+ * routine's definition, or by an `allow-job` reply. Each entry is an action
+ * key (`git_push`, `send_message`, `file_delete`, `shell_exec_destructive`, …)
+ * or `action:glob` to narrow it to a target, e.g. `git_push:agent/*` for
+ * pushes to agent branches only. A grant can only skip a question; it cannot
+ * lift a denial. Human-only kinds (#200), auto-deny scores, policy path and
+ * command rules and the capability token all still apply inside it.
+ */
+export type JobGrant = readonly string[];
+
+/** `*` matches any run of characters except `/`; `**` matches anything. */
+function globMatches(glob: string, target: string): boolean {
+  const re = glob
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '\u0000')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\u0000/g, '.*');
+  return new RegExp(`^${re}$`).test(target);
+}
+
+/** Does `grant` cover `action` on `target`? Exported for tests. */
+export function grantCovers(grant: JobGrant, action: string, target?: string): boolean {
+  return grant.some((entry) => {
+    const idx = entry.indexOf(':');
+    const grantedAction = idx === -1 ? entry : entry.slice(0, idx);
+    if (grantedAction !== action) return false;
+    if (idx === -1) return true;
+    // A targeted grant never covers a call whose target is unknown.
+    return target !== undefined && globMatches(entry.slice(idx + 1), target);
+  });
+}
 
 export interface ApprovalConfig {
   enabled: boolean;
   timeoutMs: number;          // default 300_000 (5 min)
   retryAsApproval: boolean;   // reserved for future implementation
   retryWindowMs: number;      // reserved for future implementation
-  /** Score ceiling for blanket-allow scopes (allow-30m / allow-session). Defaults to policy flag threshold. */
-  flagThreshold?: number;
+  /**
+   * #233: score ceiling (exclusive) for allow-30m / allow-session. Defaults to
+   * the auto-deny threshold (95) so a blanket covers every askable action.
+   */
+  blanketCeiling?: number;
 }
 
 export interface PendingApproval {
@@ -49,6 +85,8 @@ export class ApprovalQueue {
   private _blanketAllowUntil = 0;         // epoch ms; 0 = no blanket; Number.MAX_SAFE_INTEGER = session
   private _blanketMaxScore = 0;           // max score covered by blanket
   private _blanketSessionScoped = false;  // true when allow-session set
+  /** #233: per-job grants, keyed by the trusted job id the orchestrator assigns. */
+  private readonly _grants = new Map<string, string[]>();
 
   constructor(private readonly _config: ApprovalConfig) {}
 
@@ -67,6 +105,28 @@ export class ApprovalQueue {
     for (const entry of [...this._pending.values()]) {
       this._denyUnanswerable(entry, 'approver transport unavailable');
     }
+  }
+
+  /**
+   * #233: let `jobId` do what `grant` names without asking. Merges with any
+   * grant the job already has. Call `revokeJob()` when the job ends.
+   */
+  grantJob(jobId: string, grant: JobGrant): void {
+    const entries = grant.filter((g) => typeof g === 'string' && g.trim().length > 0).map((g) => g.trim());
+    if (entries.length === 0) return;
+    const existing = this._grants.get(jobId) ?? [];
+    this._grants.set(jobId, [...new Set([...existing, ...entries])]);
+    log.info({ jobId, grant: this._grants.get(jobId) }, 'Job grant set');
+  }
+
+  /** #233: the job has ended; its grant goes with it. */
+  revokeJob(jobId: string): void {
+    this._grants.delete(jobId);
+  }
+
+  /** #233: the current grant for a job (for status display and tests). */
+  getJobGrant(jobId: string): readonly string[] {
+    return this._grants.get(jobId) ?? [];
   }
 
   /** Is the approval queue enabled? */
@@ -103,7 +163,18 @@ export class ApprovalQueue {
      * Such a request always asks a human.
      */
     bypassBlanketAllow?: boolean;
+    /** #233: what the action touches (a branch for git_push), for targeted grants. */
+    target?: string;
   }): Promise<boolean> {
+    // #233: a job grant covers its actions with no question. A session-risk
+    // intercept (bypassBlanketAllow) is never covered: the composite score
+    // says the job as a whole has drifted, which is what a grant trusts.
+    const grant = this._grants.get(opts.jobId);
+    if (grant && !opts.bypassBlanketAllow && grantCovers(grant, opts.action, opts.target)) {
+      log.info({ jobId: opts.jobId, action: opts.action, target: opts.target }, 'Action covered by job grant');
+      return true;
+    }
+
     // Check blanket allow window (session-scoped uses boolean to avoid Date(Infinity) crash)
     const blanketActive = this._blanketSessionScoped || Date.now() < this._blanketAllowUntil;
     if (blanketActive && !opts.bypassBlanketAllow && opts.score < this._blanketMaxScore) {
@@ -174,9 +245,19 @@ export class ApprovalQueue {
     clearTimeout(entry.timer);
     this._pending.delete(token);
 
-    // Blanket threshold: score must be below the configured flag threshold to qualify
-    const blanketMaxScore = this._config.flagThreshold ?? 80;
+    // #233: the blanket ceiling used to default to 80 and be configured from
+    // the *flag* threshold, while only actions at or above the flag threshold
+    // ever ask. So allow-30m / allow-session covered almost nothing that could
+    // be asked about, and always_flag actions (asked at 85) never. The ceiling
+    // is now the auto-deny threshold: a blanket covers every askable action,
+    // and nothing that is auto-denied or human-only, which never reaches here.
+    const blanketMaxScore = this._config.blanketCeiling ?? DEFAULT_BLANKET_CEILING;
     switch (decision) {
+      case 'allow-job': {
+        // #233: "yes, and don't ask this job again for this kind of action".
+        this.grantJob(entry.jobId, [entry.action]);
+        break;
+      }
       case 'allow-30m': {
         this._blanketAllowUntil = Date.now() + 30 * 60 * 1000;
         this._blanketMaxScore = blanketMaxScore;
@@ -227,7 +308,7 @@ export class ApprovalQueue {
    * because the alternation tried `allow` first.
    */
   parseApprovalCommand(text: string): { token: string; decision: ApprovalDecision } | null {
-    const match = /^\/?approve\s+(ZORA-[A-Z0-9]{4})\s+(allow-30m|allow-session|allow|deny)\s*$/i.exec(text.trim());
+    const match = /^\/?approve\s+(ZORA-[A-Z0-9]{4})\s+(allow-job|allow-30m|allow-session|allow|deny)\s*$/i.exec(text.trim());
     if (!match) return null;
     return {
       token: match[1]!.toUpperCase(),
@@ -248,6 +329,7 @@ export class ApprovalQueue {
       // accepts it with or without.
       `Reply with:\n` +
       `  approve ${entry.id} allow — approve once\n` +
+      `  approve ${entry.id} allow-job — approve, and don't ask again for this kind of action in this job\n` +
       `  approve ${entry.id} allow-30m — approve all similar (30 min)\n` +
       `  approve ${entry.id} allow-session — approve all this session\n` +
       `  approve ${entry.id} deny — block this action\n\n` +
@@ -280,6 +362,9 @@ export class ApprovalQueue {
     throw new Error('Failed to generate unique approval token after 10 attempts');
   }
 }
+
+/** #233: matches DEFAULT_IRREVERSIBILITY_THRESHOLDS.auto_deny. */
+export const DEFAULT_BLANKET_CEILING = 95;
 
 export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
   // #265: on by default. Off meant every action at or above the flag threshold

@@ -260,6 +260,23 @@ prompt = "say hello"
     });
   });
 
+  describe('pre_approved (#233)', () => {
+    it('grants each run the routine\'s pre-approved actions; absent grants nothing', async () => {
+      await manager.runRoutine({ routine: { name: 'g', schedule: '* * * * *', pre_approved: ['git_push:agent/*'] }, task: { prompt: 'p' } });
+      expect(submitTaskMock.mock.calls.at(-1)![0].grant).toEqual(['git_push:agent/*']);
+      await manager.runRoutine({ routine: { name: 'n', schedule: '* * * * *' }, task: { prompt: 'p' } });
+      expect(submitTaskMock.mock.calls.at(-1)![0].grant).toBeUndefined();
+    });
+
+    it.each(['"git_push"', '[1, 2]'])('rejects a malformed pre_approved (%s) at load', async (value) => {
+      await fs.mkdir(path.join(testDir, 'routines'), { recursive: true });
+      const toml = `[routine]\nname = "bad"\nschedule = "* * * * *"\npre_approved = ${value}\n[task]\nprompt = "x"\n`;
+      await fs.writeFile(path.join(testDir, 'routines', 'bad.toml'), toml, 'utf8');
+      await manager.init();
+      expect(manager.scheduledCount).toBe(0);
+    });
+  });
+
   it('passes model_preference to submitTask via runRoutine', async () => {
     const definition: RoutineDefinition = {
       routine: { name: 'r-model', schedule: '* * * * *', model_preference: 'claude-haiku' },
