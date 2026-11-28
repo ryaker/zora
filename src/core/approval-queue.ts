@@ -272,7 +272,13 @@ export class ApprovalQueue {
 }
 
 export const DEFAULT_APPROVAL_CONFIG: ApprovalConfig = {
-  enabled: false,  // disabled by default; opt-in
+  // #265: on by default. Off meant every action at or above the flag threshold
+  // was a flat deny with no way for anyone to say yes, which is stricter than
+  // asking, not safer. Turning it on loosens nothing by itself: with no
+  // approver transport connected, request() still denies at once (#218), and
+  // a timeout or a `deny` reply still denies. `[approval] enabled = false`
+  // restores the old flat deny.
+  enabled: true,
   timeoutMs: 300_000,     // 5 minutes
   retryAsApproval: true,
   retryWindowMs: 60_000,
@@ -310,7 +316,8 @@ export function approvalConfigFrom(raw: unknown): ApprovalConfig {
 
   return {
     ...DEFAULT_APPROVAL_CONFIG,
-    enabled: block['enabled'] === true,
+    // #265: only an explicit `false` turns the gate off.
+    enabled: block['enabled'] !== false,
     timeoutMs: seconds * 1000,
   };
 }

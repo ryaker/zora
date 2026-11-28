@@ -927,9 +927,16 @@ export class Orchestrator {
 
     // IrreversibilityScorerHook — registered after audit/rate-limit so those always run first.
     // Uses scores/thresholds from policy.toml [actions.scores|thresholds] if present, else defaults.
+    // #265: policy scores are layered over the defaults rather than replacing
+    // them. A policy.toml written before an action key existed (send_as_zora,
+    // remote_delete) would otherwise score that key at the 50-point unknown
+    // default, so a connector delete would run without asking.
     const irreversibilityScorer = new IrreversibilityScorerHook({
-      scores: this._policy.actions.scores ?? DEFAULT_IRREVERSIBILITY_SCORES,
+      scores: { ...DEFAULT_IRREVERSIBILITY_SCORES, ...(this._policy.actions.scores ?? {}) },
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
+      selfIdentityServers: Object.entries(this._config.mcp?.servers ?? {})
+        .filter(([, entry]) => entry.acts_as === 'zora')
+        .map(([name]) => name),
     });
     // SEC-27: give the hook the queue its `approval_required:{score}` reason has
     // always named. Without this the flag threshold was a second auto-deny

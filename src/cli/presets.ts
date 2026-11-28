@@ -93,15 +93,18 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
     },
     shell: {
       mode: 'allowlist',
-      allowed_commands: ['ls', 'pwd', 'rg', 'git', 'node', 'pnpm', 'npm'],
-      denied_commands: ['sudo', 'rm', 'chmod', 'chown', 'curl', 'wget'],
+      // #265: `rm` moved from denied to allowed, and shell_exec_destructive is
+      // in always_flag below, so a delete asks instead of being refused.
+      // ShellSafety still blocks recursive deletes of absolute non-/tmp paths.
+      allowed_commands: ['ls', 'pwd', 'rg', 'git', 'node', 'pnpm', 'npm', 'rm'],
+      denied_commands: ['sudo', 'chmod', 'chown', 'curl', 'wget'],
       split_chained_commands: true,
       max_execution_time: '5m',
     },
     actions: {
       reversible: ['write_file', 'edit_file', 'git_commit', 'mkdir', 'cp', 'mv'],
       irreversible: ['git_push', 'shell_exec_destructive'],
-      always_flag: ['git_push'],
+      always_flag: ['git_push', 'shell_exec_destructive'],
     },
     network: {
       allowed_domains: ['https://*'],
@@ -132,16 +135,16 @@ export const PRESETS: Record<PresetName, ZoraPolicy> = {
       mode: 'allowlist',
       allowed_commands: [
         'ls', 'pwd', 'rg', 'git', 'node', 'pnpm', 'npm',
-        'python3', 'pip', 'jq', 'yq', 'find', 'sed', 'awk', 'mcp-cli',
+        'python3', 'pip', 'jq', 'yq', 'find', 'sed', 'awk', 'mcp-cli', 'rm',
       ],
-      denied_commands: ['sudo', 'rm', 'chmod', 'chown'],
+      denied_commands: ['sudo', 'chmod', 'chown'],
       split_chained_commands: true,
       max_execution_time: '10m',
     },
     actions: {
       reversible: ['write_file', 'edit_file', 'git_commit', 'mkdir', 'cp', 'mv'],
       irreversible: ['git_push', 'shell_exec_destructive'],
-      always_flag: ['git_push'],
+      always_flag: ['git_push', 'shell_exec_destructive'],
     },
     network: {
       allowed_domains: ['https://*'],

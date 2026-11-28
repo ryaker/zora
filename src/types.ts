@@ -634,10 +634,26 @@ export interface ZoraConfig {
   steering: SteeringConfig;
   notifications: NotificationsConfig;
   mcp?: McpConfig;
+  /** SEC-27/#265: human-in-the-loop gate; see ApprovalTomlConfig. */
+  approval?: ApprovalTomlConfig;
   /** ORCH-12: Lifecycle hook definitions from [[hooks]] config sections */
   hooks?: HookConfigEntry[];
   /** Per-project identity config — name, color, icon for multi-instance differentiation */
   project?: ProjectConfig;
+}
+
+// ─── Approval Configuration ─────────────────────────────────────────
+
+/**
+ * The `[approval]` block as written in config.toml. Parsed by
+ * `approvalConfigFrom()` in src/core/approval-queue.ts, which validates every
+ * field and falls back to defaults; this type only names what may be set.
+ */
+export interface ApprovalTomlConfig {
+  /** #265: defaults to true. Only `false` turns the gate off. */
+  enabled?: boolean;
+  /** Seconds to wait for an answer before denying. Default 300. */
+  timeout_s?: number;
 }
 
 // ─── MCP Configuration ──────────────────────────────────────────────
@@ -649,6 +665,13 @@ export interface McpServerEntry {
   args?: string[];
   env?: Record<string, string>;
   headers?: Record<string, string>;
+  /**
+   * #265: whose voice this server's sends are in. `"zora"` means its own bot
+   * identity (Zora's Slack app, its Telegram bot): sends through it are Zora
+   * conversing and do not ask. Anything else, including unset, is treated as
+   * acting as the user, so a send asks first.
+   */
+  acts_as?: 'zora' | 'user';
 }
 
 export interface McpConfig {

@@ -173,8 +173,17 @@ describe('SEC-24: IrreversibilityScorerHook scores the SDK tool name', () => {
     expect(result.allow).toBe(true);
   });
 
-  it('auto-denies an SDK-named delete at the auto_deny threshold', async () => {
+  it('flags a delete for approval instead of auto-denying it (#265)', async () => {
+    // #265: file_delete was 95 = auto_deny, so no human could ever approve a
+    // delete. It now asks; with no queue registered here, asking denies.
     const result = await hook(DEFAULT_IRREVERSIBILITY_SCORES).run(ctx('delete_file', { path: '/tmp/a' }));
+    expect(result.allow).toBe(false);
+    expect(result.reason).toMatch(/^approval_required:85/);
+  });
+
+  it('still auto-denies at the auto_deny threshold when policy scores a delete there', async () => {
+    const result = await hook({ ...DEFAULT_IRREVERSIBILITY_SCORES, file_delete: 95 })
+      .run(ctx('delete_file', { path: '/tmp/a' }));
     expect(result.allow).toBe(false);
     expect(result.reason).toMatch(/^auto_denied:95/);
   });

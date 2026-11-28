@@ -360,6 +360,24 @@ Each key under `mcp.servers` defines an MCP server connection.
 | `args` | string[] | Command arguments (for `stdio` transport). |
 | `env` | object | Environment variables to pass to the server. |
 | `headers` | object | HTTP headers for server connections. |
+| `acts_as` | string | Whose voice this server's sends are in. `"zora"` means Zora's own bot identity (its Slack app, its Telegram bot): a send through it is Zora conversing and does not ask. Unset or `"user"` means it acts as you, so a send through it asks first. |
+
+### `[approval]`
+
+The human-in-the-loop gate for actions scored at or above `[actions.thresholds] flag`
+(git push, sends that act as you, deletes).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Ask a human before a flagged action. Only `false` turns it off, and then a flagged action is denied outright with no way to approve it. With the gate on but no approval channel connected, a flagged action is still denied at once. |
+| `timeout_s` | number | `300` | Seconds to wait for an answer before denying. |
+
+Connector tools are scored by what they do, not by name: a tool whose name
+carries a send verb (`send`, `post`, `reply`, `share`, …) scores as
+`send_message` (80, asks) unless its server has `acts_as = "zora"`, in which case
+it scores as `send_as_zora` (10). A delete verb (`delete`, `trash`, `purge`, …)
+scores as `remote_delete` (85, asks). Names that start with a read verb (`get`,
+`list`, `read`, `search`, …) are never treated as sends or deletes.
 
 ---
 
