@@ -520,6 +520,19 @@ describe('PERF-06 — custom tools built once at boot', () => {
     expect(a).not.toBe(b);
   }, 30_000);
 
+  it('#202: an unscoped job past token expiry still gets non-path/command tools (expiry must not newly gate every tool)', async () => {
+    const o = orchestrator as unknown as {
+      _activeTokens: Map<string, { expiresAt: Date }>;
+      _policy: ZoraPolicy;
+      _buildTokenAwareCanUseTool(id: string): (t: string, i: Record<string, unknown>, o: { signal: AbortSignal }) => Promise<{ behavior: string; message?: string }>;
+    };
+    const tok = createCapabilityToken('job-old', o._policy);
+    tok.expiresAt = new Date(Date.now() - 1000);
+    o._activeTokens.set('job-old', tok);
+    const r = await o._buildTokenAwareCanUseTool('job-old')('mcp__zora-tools__memory_search', { query: 'x' }, { signal: new AbortController().signal });
+    expect(r.message ?? '').not.toMatch(/expired/i);
+  }, 30_000);
+
   it('#202: a job whose token carries a tool allowlist is denied tools outside it, before the policy engine', async () => {
     const o = orchestrator as unknown as {
       _activeTokens: Map<string, unknown>;
