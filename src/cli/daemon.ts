@@ -37,6 +37,7 @@ import { WebhookValidatorRegistry, createTelegramValidator } from '../channels/w
 import { SignalIntakeAdapter } from '../channels/signal/signal-intake-adapter.js';
 import { SignalAdapter } from '../channels/signal/signal-adapter.js';
 import { TelegramAdapter } from '../channels/telegram/telegram-adapter.js';
+import { SlackAdapter } from '../channels/slack/slack-adapter.js';
 import { AgentBusClient } from '../integrations/agentbus/agentbus-client.js';
 import { ApprovalQueue, approvalConfigFrom } from '../core/approval-queue.js';
 import { runSecurityAuditSilent } from './security-commands.js';
@@ -353,6 +354,15 @@ async function main() {
         } else {
           log.warn('Telegram enabled but no bot_token found. Skipping adapter.');
         }
+      }
+
+      // 2b. Slack (Socket Mode, outbound-only). Both tokens come from the
+      // environment OneCLI provisions; with either missing the adapter is
+      // simply not started. Same pipeline as Signal/Telegram (INVARIANT-9).
+      const slackBotToken = process.env['SLACK_BOT_TOKEN'];
+      const slackAppToken = process.env['SLACK_APP_TOKEN'];
+      if (slackBotToken && slackAppToken) {
+        await channelManager.registerAdapter(new SlackAdapter(slackBotToken, slackAppToken));
       }
 
       // 3. Team mailboxes — INVARIANT-9.
