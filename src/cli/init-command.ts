@@ -476,6 +476,22 @@ async function runWizard(opts: {
 
   // ── Generate and write files ─────────────────────────────────────
   const policyToml = generatePolicyToml(preset, devPath, deniedPaths, toolStacks);
+  // #249 review: an explicit --primary that cannot be honored must fail loudly,
+  // not silently fall back to some other provider.
+  if (opts.primary) {
+    const detected: Record<string, boolean> = {
+      claude: doctor.claude.found, gemini: doctor.gemini.found, ollama: doctor.ollama.found,
+    };
+    if (!(opts.primary in detected)) {
+      log.error(`--primary must be one of: claude, gemini, ollama (got "${opts.primary}")`);
+      process.exit(1);
+    }
+    if (!detected[opts.primary]) {
+      log.error(`--primary ${opts.primary} was requested but ${opts.primary} was not detected. ` +
+        (opts.primary === 'ollama' ? `Is the daemon running at ${doctor.ollama.endpoint}? (set OLLAMA_HOST to override)` : 'Install/login first.'));
+      process.exit(1);
+    }
+  }
   const configToml = generateConfigToml(doctor, { primary: opts.primary, ollamaModel: opts.ollamaModel });
 
   // Validate generated TOML parses cleanly
