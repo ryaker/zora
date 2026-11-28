@@ -14,3 +14,11 @@ export const DEFAULT_QUARANTINE_MODEL = 'claude-haiku-5-5';
 
 /** Default model written by `zora-agent init` for the gemini-cli provider. */
 export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
+
+/**
+ * Default model for the ollama provider (#260). The #236 bake-off's tentative
+ * pick: tied on quality with the other cloud models, lowest latency and fewest
+ * output tokens. Served by ollama.com on Rich's Ollama plan; a local-only
+ * install should set `model` to something it has pulled.
+ */
+export const DEFAULT_OLLAMA_MODEL = 'glm-5.3:cloud';

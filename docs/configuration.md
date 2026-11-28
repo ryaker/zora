@@ -75,6 +75,11 @@ Provider entries are defined as a TOML array of tables. Each entry configures on
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `endpoint` | string | `"http://localhost:11434"` | Ollama API endpoint URL. |
+| `model` | string | `"glm-5.3:cloud"` | Model id. `zora-agent init` writes this default when the daemon has it, otherwise the first installed chat model (embedding models are skipped). |
+
+`zora-agent init` ranks Ollama first whenever the daemon is running, with Claude and Gemini after it as failover (`--primary` overrides). Claude then runs only when Ollama fails or is down, on `ANTHROPIC_API_KEY` credits.
+
+Ollama models can use tools: the provider offers native `Read`, `Write`, `Edit`, `Bash`, `Glob` and `Grep` (absolute paths only) plus Zora's own tools, and runs every call through the same PreToolUse hooks and `canUseTool` gate as the Claude path. Tools banned by policy are not offered. A model that rejects tools falls back to plain chat. When the top-ranked provider is not `claude-sdk`, the heartbeat, memory extraction and compression also run on the ranked providers instead of the Claude SDK.
 
 #### OpenAI-specific fields (`type = "openai"`)
 

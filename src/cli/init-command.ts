@@ -18,7 +18,7 @@ import type { DoctorResult } from './doctor.js';
 import type { PresetName } from './presets.js';
 import type { ZoraPolicy } from '../types.js';
 import { createLogger } from '../utils/logger.js';
-import { DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL } from '../providers/model-defaults.js';
+import { DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_MODEL } from '../providers/model-defaults.js';
 
 const log = createLogger('init');
 const ZORA_DIR = path.join(os.homedir(), '.zora');
@@ -92,10 +92,23 @@ function policyToToml(policy: ZoraPolicy): string {
  * Generate config.toml content based on doctor results.
  */
 export interface GenerateConfigOptions {
-  /** Provider to rank first: 'claude' | 'gemini' | 'ollama'. Default: detection order. */
+  /** Provider to rank first: 'claude' | 'gemini' | 'ollama'. Default: ollama when detected (#260). */
   primary?: string;
   /** Ollama model when ollama is configured. Default: first installed model. */
   ollamaModel?: string;
+}
+
+/**
+ * #260: choose the Ollama model init writes. The bake-off default when the
+ * daemon has it; otherwise the first installed chat model (embedding models
+ * such as nomic-embed-text cannot chat, and were previously picked when they
+ * happened to be listed first); otherwise the default anyway, which a signed-in
+ * Ollama serves from the cloud.
+ */
+export function pickOllamaModel(installed: string[]): string {
+  if (installed.includes(DEFAULT_OLLAMA_MODEL)) return DEFAULT_OLLAMA_MODEL;
+  const chat = installed.find(m => !/embed/i.test(m));
+  return chat ?? DEFAULT_OLLAMA_MODEL;
 }
 
 export function generateConfigToml(doctor: DoctorResult, opts: GenerateConfigOptions = {}): string {
@@ -107,9 +120,11 @@ name = "claude"
 type = "claude-sdk"
 rank = ${rank}
 capabilities = ["reasoning", "coding", "creative"]
-cost_tier = "included"
+cost_tier = "metered"
 enabled = true
-# Auth: whatever the Claude SDK finds (claude login session or ANTHROPIC_API_KEY).
+# Auth: ANTHROPIC_API_KEY (API credits). Claude plan logins are not usable by
+# third-party agents. When Ollama is ranked first this is the frontier backup:
+# it only runs when the Ollama provider fails or is unavailable (#260).
 model = "${DEFAULT_CLAUDE_MODEL}"
 # Reasoning effort: low | medium | high | xhigh | max.
 # The main intelligence/latency/cost dial — omit to use the model's default.
@@ -133,7 +148,7 @@ max_turns = 100` });
 
   // #249: Ollama is a first-class provider; it needs no CLI or subscription.
   if (doctor.ollama?.found) {
-    const model = opts.ollamaModel ?? doctor.ollama.models[0] ?? 'llama3.2';
+    const model = opts.ollamaModel ?? pickOllamaModel(doctor.ollama.models);
     blocks.push({ key: 'ollama', render: (rank) => `[[providers]]
 name = "ollama"
 type = "ollama"
@@ -145,8 +160,12 @@ endpoint = "${doctor.ollama.endpoint}"
 model = "${model}"` });
   }
 
-  const ordered = opts.primary
-    ? [...blocks.filter(b => b.key === opts.primary), ...blocks.filter(b => b.key !== opts.primary)]
+  // #260: Ollama is the default primary when it is running — the plan's open
+  // models cover everyday work, and frontier providers (metered API credits)
+  // become the failover. An explicit --primary still wins.
+  const primary = opts.primary ?? (blocks.some(b => b.key === 'ollama') ? 'ollama' : undefined);
+  const ordered = primary
+    ? [...blocks.filter(b => b.key === primary), ...blocks.filter(b => b.key !== primary)]
     : blocks;
   const providers = ordered.map((b, i) => b.render(i + 1));
 

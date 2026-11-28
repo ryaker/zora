@@ -6,6 +6,7 @@ import os from 'node:os';
 import {
   generatePolicyToml,
   generateConfigToml,
+  pickOllamaModel,
   scaffoldDirectories,
   writeSoulFile,
 } from '../../../src/cli/init-command.js';
@@ -13,6 +14,7 @@ import { PRESETS, TOOL_STACKS } from '../../../src/cli/presets.js';
 import type { DoctorResult } from '../../../src/cli/doctor.js';
 import type { PresetName } from '../../../src/cli/presets.js';
 import { loadConfigFromString } from '../../../src/config/loader.js';
+import { DEFAULT_OLLAMA_MODEL } from '../../../src/providers/model-defaults.js';
 
 let tmpDir: string;
 
@@ -184,6 +186,28 @@ describe('generateConfigToml', () => {
     expect(config.providers.map(p => p.name)).toEqual(['ollama', 'claude', 'gemini']);
     expect(config.providers.map(p => p.rank)).toEqual([1, 2, 3]);
     expect(config.providers[0]!.model).toBe('llama3.2');
+  });
+
+  it('ranks Ollama first by default when it is running, frontier providers as failover (#260)', () => {
+    const doctor: DoctorResult = { ...doctorBoth, ollama: doctorOllamaOnly.ollama };
+    const config = loadConfigFromString(generateConfigToml(doctor));
+    expect(config.providers.map(p => p.name)).toEqual(['ollama', 'claude', 'gemini']);
+    expect(config.providers.map(p => p.rank)).toEqual([1, 2, 3]);
+    // Claude is API-key backup now, not a plan login.
+    expect(config.providers[1]!.cost_tier).toBe('metered');
+  });
+
+  it('an explicit --primary still wins over the Ollama default (#260)', () => {
+    const doctor: DoctorResult = { ...doctorBoth, ollama: doctorOllamaOnly.ollama };
+    const config = loadConfigFromString(generateConfigToml(doctor, { primary: 'claude' }));
+    expect(config.providers.map(p => p.name)).toEqual(['claude', 'gemini', 'ollama']);
+  });
+
+  it('picks the bake-off default model when installed, never an embedding model (#260)', () => {
+    expect(pickOllamaModel(['nomic-embed-text', DEFAULT_OLLAMA_MODEL, 'qwen3:14b'])).toBe(DEFAULT_OLLAMA_MODEL);
+    expect(pickOllamaModel(['nomic-embed-text', 'qwen3:14b'])).toBe('qwen3:14b');
+    expect(pickOllamaModel(['nomic-embed-text'])).toBe(DEFAULT_OLLAMA_MODEL);
+    expect(pickOllamaModel([])).toBe(DEFAULT_OLLAMA_MODEL);
   });
 
   it('produces valid TOML', () => {
