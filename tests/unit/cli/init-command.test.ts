@@ -197,6 +197,15 @@ describe('generateConfigToml', () => {
     expect(config.providers[1]!.cost_tier).toBe('metered');
   });
 
+  it('does not default to Ollama when the daemon has only an embedding model (#260)', () => {
+    const doctor: DoctorResult = {
+      ...doctorBoth,
+      ollama: { found: true, endpoint: 'http://localhost:11434', models: ['nomic-embed-text'] },
+    };
+    const config = loadConfigFromString(generateConfigToml(doctor));
+    expect(config.providers[0]!.name).toBe('claude');
+  });
+
   it('an explicit --primary still wins over the Ollama default (#260)', () => {
     const doctor: DoctorResult = { ...doctorBoth, ollama: doctorOllamaOnly.ollama };
     const config = loadConfigFromString(generateConfigToml(doctor, { primary: 'claude' }));

@@ -339,7 +339,8 @@ export interface TaskContext {
    * #254: no tool surface at all — the provider-side equivalent of SEC-23's
    * `toolSurface: 'none'`. Set by the internal single-shot text paths (memory
    * extraction, compression) when they run on a non-SDK provider. Honoured by
-   * providers that run their own tool loop (ollama).
+   * ollama (sends no tools) and claude-sdk (toolSurface 'none', `tools: []`),
+   * so a fallback to Claude keeps the empty surface.
    */
   disableTools?: boolean;
 }

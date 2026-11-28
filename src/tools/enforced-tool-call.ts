@@ -83,7 +83,7 @@ export async function authorizeToolCall(
   toolUseId: string,
 ): Promise<ToolAuthorization> {
   // [1] Static bans. A banned tool is never offered to the model in the first
-  // place (see `localToolSchemas`), so reaching here means the model invented
+  // place (see `OllamaProvider._buildTools`), so reaching here means the model invented
   // the call — deny it the same way.
   if (chain.disallowedTools && toolFilterMatches(chain.disallowedTools, toolName)) {
     return { allowed: false, layer: 'disallowed', reason: `Tool '${toolName}' is disabled by policy` };

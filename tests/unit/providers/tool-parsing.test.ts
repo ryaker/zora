@@ -4,7 +4,7 @@
  * Validates tool call parsing across all providers against realistic
  * output formats:
  * - Gemini: XML and markdown JSON (via text parsing)
- * - Ollama: native tool_calls since #254 (tested in ollama-tool-loop.test.ts)
+ * - Ollama: native tool_calls since #254 (tested in tests/security/ollama-tool-enforcement.test.ts)
  * - Claude: SDK structured messages (via message mapping)
  *
  * Covers: special characters, escaping, malformed responses,
@@ -138,7 +138,7 @@ And check for tests:
 });
 
 // Ollama: #254 replaced text parsing with native /api/chat tool_calls, which
-// are executed through the enforcement chain. See ollama-tool-loop.test.ts.
+// are executed through the enforcement chain. See tests/security/ollama-tool-enforcement.test.ts.
 
 // ─── Claude SDK Message Mapping ─────────────────────────────────────
 

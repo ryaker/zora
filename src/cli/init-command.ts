@@ -163,7 +163,12 @@ model = "${model}"` });
   // #260: Ollama is the default primary when it is running — the plan's open
   // models cover everyday work, and frontier providers (metered API credits)
   // become the failover. An explicit --primary still wins.
-  const primary = opts.primary ?? (blocks.some(b => b.key === 'ollama') ? 'ollama' : undefined);
+  // #254 review: only when the daemon has a chat model (or --ollama-model was
+  // given). A daemon with nothing but an embedding model pulled would put a
+  // provider that 404s on every task at rank 1.
+  const ollamaUsable = doctor.ollama?.found === true &&
+    (opts.ollamaModel !== undefined || doctor.ollama.models.some(m => !/embed/i.test(m)));
+  const primary = opts.primary ?? (ollamaUsable ? 'ollama' : undefined);
   const ordered = primary
     ? [...blocks.filter(b => b.key === primary), ...blocks.filter(b => b.key !== primary)]
     : blocks;

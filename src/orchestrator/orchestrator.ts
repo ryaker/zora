@@ -2259,6 +2259,7 @@ export class Orchestrator {
       if (!this._primaryIsClaudeSdk()) {
         return new ProviderPromptRunner({
           selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
           systemPrompt,
           jobLabel: `extract-${taskContext.jobId}`,
           disableTools: true,
@@ -2785,8 +2786,11 @@ export class Orchestrator {
     if (!this._primaryIsClaudeSdk()) {
       return new ProviderPromptRunner({
         selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
         systemPrompt: 'You are Zora, a helpful autonomous agent.',
         jobLabel: 'heartbeat',
+        // Same knob the ExecutionLoop branch honours (as `model` there).
+        modelPreference: this._config.agent.heartbeat_provider,
         canUseTool: this._policyEngine.createCanUseTool(),
         hooks: buildSdkHooks(this._toolHookRunner, () => 'heartbeat'),
         customTools: this._getCustomTools(),
@@ -2828,6 +2832,7 @@ export class Orchestrator {
       if (!this._primaryIsClaudeSdk()) {
         return new ProviderPromptRunner({
           selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
           systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
           jobLabel: 'compress',
           disableTools: true,

@@ -9,7 +9,8 @@
  *
  * This runner gives those paths the same `run(prompt) → text` shape as
  * `ExecutionLoop`, but executes on whichever provider the Router picks, so the
- * ranked provider list (and its failover) applies to them too. Enforcement is
+ * ranked provider list applies to them too: a provider that fails before
+ * taking any action is retried on the next available rank. Enforcement is
  * not re-implemented here: the caller hands in the same `canUseTool` and SDK
  * hook bridge it would have handed `ExecutionLoop`, they travel on
  * `TaskContext`, and the provider applies them (`ClaudeProvider` via the SDK,
@@ -28,6 +29,13 @@ export interface PromptRunner {
 
 export interface ProviderPromptRunnerOptions {
   selectProvider: (task: TaskContext) => Promise<LLMProvider>;
+  /**
+   * Ranked providers to fall back to when the selected one fails before taking
+   * any action. Mirrors failover for these paths; omitted = no fallback.
+   */
+  fallbackProviders?: () => LLMProvider[];
+  /** Provider name to prefer (Router `modelPreference`), e.g. agent.heartbeat_provider. */
+  modelPreference?: string;
   systemPrompt: string;
   /** Stable label for audit/rate-limit attribution ('heartbeat', 'compress', …). */
   jobLabel: string;
@@ -64,35 +72,67 @@ export class ProviderPromptRunner implements PromptRunner {
       canUseTool: o.canUseTool,
       sdkHooks: o.hooks,
       disableTools: o.disableTools,
+      modelPreference: o.modelPreference,
     };
 
-    const provider = await o.selectProvider(task);
+    const first = await o.selectProvider(task);
+    const candidates = [first];
+    for (const p of [...(o.fallbackProviders?.() ?? [])].sort((a, b) => a.rank - b.rank)) {
+      if (!candidates.includes(p)) candidates.push(p);
+    }
+
+    let lastError: Error | undefined;
+    for (const provider of candidates) {
+      if (provider !== first && !(await provider.isAvailable().catch(() => false))) continue;
+      const outcome = await this._runOn(provider, task);
+      if (outcome.ok) return outcome.text;
+      lastError = outcome.error;
+      // Only an attempt that did nothing may be retried elsewhere: replaying a
+      // heartbeat that already ran a tool could repeat a side effect.
+      if (outcome.acted || outcome.cancelled) break;
+    }
+    throw lastError ?? new Error('No provider available');
+  }
+
+  private async _runOn(
+    provider: LLMProvider,
+    task: TaskContext,
+  ): Promise<{ ok: true; text: string } | { ok: false; error: Error; acted: boolean; cancelled: boolean }> {
+    const o = this._opts;
 
     let aborted = false;
     const abort = (): void => {
       aborted = true;
       void provider.abort(task.jobId);
     };
-    if (o.signal?.aborted) throw new Error('Execution cancelled');
+    if (o.signal?.aborted) return { ok: false, error: new Error('Execution cancelled'), acted: false, cancelled: true };
     o.signal?.addEventListener('abort', abort, { once: true });
     const timer = o.timeoutMs ? setTimeout(abort, o.timeoutMs) : null;
     timer?.unref?.();
 
     let streamed = '';
+    let acted = false;
+    const cancelled = () => ({ ok: false as const, error: new Error('Execution cancelled'), acted, cancelled: true });
     try {
       for await (const event of provider.execute(task) as AsyncIterable<AgentEvent>) {
         const content = event.content as { text?: unknown; message?: unknown };
+        if (event.type === 'tool_call') acted = true;
         if (event.type === 'text' && typeof content.text === 'string') streamed += content.text;
         if (event.type === 'error') {
-          throw new Error(typeof content.message === 'string' ? content.message : `${provider.name} failed`);
+          if (aborted) return cancelled();
+          const message = typeof content.message === 'string' ? content.message : `${provider.name} failed`;
+          return { ok: false, error: new Error(message), acted, cancelled: false };
         }
         if (event.type === 'done') {
-          if (aborted) throw new Error('Execution cancelled');
-          return typeof content.text === 'string' && content.text.length > 0 ? content.text : streamed;
+          if (aborted) return cancelled();
+          return { ok: true, text: typeof content.text === 'string' && content.text.length > 0 ? content.text : streamed };
         }
       }
-      if (aborted) throw new Error('Execution cancelled');
-      return streamed;
+      if (aborted) return cancelled();
+      return { ok: true, text: streamed };
+    } catch (err) {
+      if (aborted) return cancelled();
+      return { ok: false, error: err instanceof Error ? err : new Error(String(err)), acted, cancelled: false };
     } finally {
       if (timer) clearTimeout(timer);
       o.signal?.removeEventListener('abort', abort);

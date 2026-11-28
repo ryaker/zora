@@ -22,6 +22,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
 import { OllamaProvider } from '../../src/providers/ollama-provider.js';
+import { ClaudeProvider } from '../../src/providers/claude-provider.js';
 import { PolicyEngine } from '../../src/security/policy-engine.js';
 import { ToolHookRunner, type ToolHook } from '../../src/hooks/tool-hook-runner.js';
 import { buildSdkHooks } from '../../src/hooks/sdk-hook-bridge.js';
@@ -243,6 +244,108 @@ describe('#254 — Ollama tool calls execute only through the chain', () => {
 
     expect(names).toEqual(['mcp__zora-tools__memory_save']);
     expect(handler).toHaveBeenCalledWith({ text: 'remember this' });
+  });
+});
+
+describe('#254 review — fixes', () => {
+  it('Grep under an allowed root does not read a denied subtree', async () => {
+    await fsp.mkdir(path.join(dir, 'secret'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'secret', 'key.txt'), 'PRIVATE-KEY-MATERIAL');
+    await fsp.writeFile(path.join(dir, 'open.txt'), 'PRIVATE-KEY-MATERIAL in the open');
+    const { bodies } = scriptOllama([call('Grep', { pattern: 'PRIVATE', path: dir }), { content: 'ok' }]);
+    const policy = makePolicy();
+    const provider = new OllamaProvider({ config, policy, cwd: dir });
+    await collect(provider.execute(makeTask({ canUseTool: new PolicyEngine(policy).createCanUseTool() })));
+    const out = toolMessages(bodies[1]!)[0]!.content;
+    expect(out).toContain('open.txt');
+    expect(out).not.toContain(path.join('secret', 'key.txt'));
+  });
+
+  it('Glob under an allowed root does not list sensitive files', async () => {
+    await fsp.writeFile(path.join(dir, '.env'), 'X=1');
+    await fsp.writeFile(path.join(dir, 'a.ts'), '');
+    const { bodies } = scriptOllama([call('Glob', { pattern: '**/*', path: dir }), { content: 'ok' }]);
+    const policy = makePolicy();
+    const provider = new OllamaProvider({ config, policy, cwd: dir });
+    await collect(provider.execute(makeTask({ canUseTool: new PolicyEngine(policy).createCanUseTool() })));
+    const out = toolMessages(bodies[1]!)[0]!.content;
+    expect(out).toContain('a.ts');
+    expect(out).not.toContain('.env');
+  });
+
+  it('Write without content does not truncate the file', async () => {
+    const file = path.join(dir, 'keep.txt');
+    await fsp.writeFile(file, 'precious');
+    scriptOllama([call('Write', { file_path: file }), { content: 'ok' }]);
+    const provider = new OllamaProvider({ config, cwd: dir });
+    await collect(provider.execute(makeTask({ canUseTool: async () => ({ behavior: 'allow' }) })));
+    expect(await fsp.readFile(file, 'utf8')).toBe('precious');
+  });
+
+  it('the done text is the final answer, not every turn run together', async () => {
+    const file = path.join(dir, 'n.txt');
+    await fsp.writeFile(file, 'x');
+    scriptOllama([{ content: 'Let me check.', ...call('Read', { file_path: file }) }, { content: 'It says x.' }]);
+    const provider = new OllamaProvider({ config, cwd: dir });
+    const events = await collect(provider.execute(makeTask({ canUseTool: async () => ({ behavior: 'allow' }) })));
+    expect((events.find(e => e.type === 'done')!.content as { text: string }).text).toBe('It says x.');
+  });
+
+  it('globToRegExp expands wildcards inside braces', () => {
+    expect(globToRegExp('**/{*.ts,*.tsx}').test('src/a.tsx')).toBe(true);
+    expect(globToRegExp('src/{a?,b}').test('src/ax')).toBe(true);
+  });
+});
+
+describe('#254 review — no-tools prompts keep an empty surface on Claude fallback', () => {
+  it('ClaudeProvider honours disableTools with toolSurface none and tools: []', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const provider = new ClaudeProvider({
+      config: { name: 'claude', type: 'claude-sdk', rank: 2, capabilities: ['reasoning'], cost_tier: 'metered', enabled: true },
+      queryFn: ((args: { options: Record<string, unknown> }) => {
+        captured = args.options;
+        return (async function* () { /* no messages */ })() as unknown;
+      }) as never,
+    });
+    await collect(provider.execute(makeTask({
+      disableTools: true,
+      canUseTool: async () => ({ behavior: 'allow' }),
+      customTools: [{ name: 'memory_save', description: 's', input_schema: { type: 'object' }, handler: async () => ({}) }],
+    })));
+    expect(captured!['allowedTools']).toEqual([]);
+    expect(captured!['tools']).toEqual([]);
+    expect(captured!['strictMcpConfig']).toBe(true);
+    expect(captured!['mcpServers']).toBeUndefined();
+  });
+
+  it('ProviderPromptRunner falls back to the next rank when the first fails before acting', async () => {
+    const failing = new MockProvider({ name: 'ollama', rank: 1 });
+    vi.spyOn(failing, 'execute').mockImplementation(async function* () {
+      yield { type: 'error', timestamp: new Date(), source: 'ollama', content: { message: 'boom' } } as AgentEvent;
+    });
+    const backup = new MockProvider({ name: 'claude', rank: 2, responseText: 'from backup' });
+    const runner = new ProviderPromptRunner({
+      selectProvider: async () => failing,
+      fallbackProviders: () => [failing, backup],
+      systemPrompt: '', jobLabel: 'test', disableTools: true,
+    });
+    await runner.run('x');
+    expect(backup.executeCalls).toHaveLength(1);
+    expect(backup.executeCalls[0]!.disableTools).toBe(true);
+  });
+
+  it('does not retry elsewhere once a tool has run', async () => {
+    const acted = new MockProvider({ name: 'ollama', rank: 1 });
+    vi.spyOn(acted, 'execute').mockImplementation(async function* () {
+      yield { type: 'tool_call', timestamp: new Date(), source: 'ollama', content: { toolCallId: 'c', tool: 'Bash', arguments: {} } } as AgentEvent;
+      yield { type: 'error', timestamp: new Date(), source: 'ollama', content: { message: 'boom' } } as AgentEvent;
+    });
+    const backup = new MockProvider({ name: 'claude', rank: 2 });
+    const runner = new ProviderPromptRunner({
+      selectProvider: async () => acted, fallbackProviders: () => [acted, backup], systemPrompt: '', jobLabel: 'test',
+    });
+    await expect(runner.run('x')).rejects.toThrow('boom');
+    expect(backup.executeCalls).toHaveLength(0);
   });
 });
 

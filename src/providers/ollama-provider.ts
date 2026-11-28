@@ -40,6 +40,8 @@ import { toolFilterMatches } from '../security/tool-names.js';
 import { authorizeToolCall, runPostToolUse, type ToolChain } from '../tools/enforced-tool-call.js';
 import { LOCAL_BUILTIN_TOOLS } from '../tools/local-builtin-tools.js';
 import { qualifyZoraToolName } from '../tools/zora-mcp-server.js';
+import { PolicyEngine } from '../security/policy-engine.js';
+import { matchesSensitivePath } from '../hooks/built-in/sensitive-file-guard.js';
 
 const log = createLogger('ollama-provider');
 
@@ -107,6 +109,7 @@ export class OllamaProvider implements LLMProvider {
   private readonly _model: string;
   private readonly _cwd: string;
   private readonly _policy: ZoraPolicy | undefined;
+  private readonly _allowPath: (absPath: string) => boolean;
 
   /** Track active requests by jobId for abort support */
   private readonly _activeRequests: Map<string, AbortController> = new Map();
@@ -130,6 +133,11 @@ export class OllamaProvider implements LLMProvider {
     this._model = config.model ?? DEFAULT_OLLAMA_MODEL;
     this._cwd = options.cwd ?? process.cwd();
     this._policy = options.policy;
+    // #254 review: Glob/Grep descend below the root the chain judged, so each
+    // entry is re-checked against the same path policy and sensitive-file list.
+    const engine = options.policy ? new PolicyEngine(options.policy) : null;
+    this._allowPath = (p: string) =>
+      matchesSensitivePath(p) === null && (engine ? engine.validatePath(p).allowed : true);
     this._circuitBreaker = new CircuitBreaker();
   }
 
@@ -255,7 +263,9 @@ export class OllamaProvider implements LLMProvider {
 
         if (reply.toolCalls.length === 0) {
           this._circuitBreaker.recordSuccess();
-          yield this._event('done', { text: fullText, model: reply.model, eval_count: reply.evalCount, turns: turn });
+          // The result is the final answer; earlier turns' narration ("let me
+          // check…") already streamed as text events.
+          yield this._event('done', { text: reply.text, model: reply.model, eval_count: reply.evalCount, turns: turn });
           return;
         }
 
@@ -320,7 +330,7 @@ export class OllamaProvider implements LLMProvider {
         chainName: t.name,
         description: t.description,
         parameters: t.input_schema,
-        run: (input, signal) => t.run(input, { cwd: this._cwd, signal }),
+        run: (input, signal) => t.run(input, { cwd: this._cwd, signal, allowPath: this._allowPath }),
       });
     }
     for (const t of task.customTools ?? []) {
@@ -332,7 +342,8 @@ export class OllamaProvider implements LLMProvider {
         parameters: t.input_schema,
         run: async (input) => {
           const out = await t.handler(input);
-          return typeof out === 'string' ? out : JSON.stringify(out);
+          // JSON.stringify(undefined) is undefined; a tool message needs content.
+          return typeof out === 'string' ? out : (JSON.stringify(out) ?? '');
         },
       });
     }

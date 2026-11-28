@@ -33,7 +33,19 @@ export interface LocalToolDefinition {
   description: string;
   /** JSON Schema for the arguments. */
   input_schema: Record<string, unknown>;
-  run: (input: Record<string, unknown>, ctx: { cwd: string; signal: AbortSignal }) => Promise<string>;
+  run: (input: Record<string, unknown>, ctx: LocalToolContext) => Promise<string>;
+}
+
+export interface LocalToolContext {
+  cwd: string;
+  signal: AbortSignal;
+  /**
+   * Per-entry path gate for directory walks. PolicyEngine and
+   * SensitiveFileGuard judge only the `path` argument, i.e. the root; Glob and
+   * Grep then descend. Without this, `Grep {path: "~"}` under an allowed home
+   * would read `~/.ssh` even though `~/.ssh` is denied. Absent = allow (tests).
+   */
+  allowPath?: (absPath: string) => boolean;
 }
 
 const MAX_OUTPUT_CHARS = 30_000;
@@ -53,6 +65,12 @@ function requireString(input: Record<string, unknown>, key: string): string {
   return v;
 }
 
+function requireStringAllowEmpty(input: Record<string, unknown>, key: string): string {
+  const v = input[key];
+  if (typeof v !== 'string') throw new Error(`'${key}' is required and must be a string`);
+  return v;
+}
+
 /** `~` expansion as PolicyEngine does it, then insist on an absolute path. */
 function absolutePath(input: Record<string, unknown>, key: string): string {
   const raw = requireString(input, key);
@@ -63,6 +81,10 @@ function absolutePath(input: Record<string, unknown>, key: string): string {
 
 /** Minimal glob → RegExp: `**` spans directories, `*` and `?` do not, `{a,b}` alternates. */
 export function globToRegExp(pattern: string): RegExp {
+  return new RegExp(`^${globSource(pattern)}$`);
+}
+
+function globSource(pattern: string): string {
   let re = '';
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
@@ -78,16 +100,18 @@ export function globToRegExp(pattern: string): RegExp {
     } else if (c === '{') {
       const end = pattern.indexOf('}', i);
       if (end === -1) { re += '\\{'; continue; }
-      re += `(?:${pattern.slice(i + 1, end).split(',').map(s => s.replace(/[.+^$()|[\]\\]/g, '\\$&')).join('|')})`;
+      // Each alternative is itself a glob (`{*.ts,*.tsx}`), not a literal.
+      re += `(?:${pattern.slice(i + 1, end).split(',').map(alt => globSource(alt)).join('|')})`;
       i = end;
     } else {
       re += c.replace(/[.+^$()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${re}$`);
+  return re;
 }
 
-async function* walk(root: string, signal: AbortSignal): AsyncGenerator<string> {
+async function* walk(root: string, ctx: LocalToolContext): AsyncGenerator<string> {
+  const { signal, allowPath } = ctx;
   const stack = [root];
   while (stack.length > 0) {
     if (signal.aborted) return;
@@ -100,6 +124,8 @@ async function* walk(root: string, signal: AbortSignal): AsyncGenerator<string> 
     }
     for (const e of entries) {
       const full = path.join(dir, e.name);
+      // #254 review: denied and sensitive subtrees are skipped, not just roots.
+      if (allowPath && !allowPath(full)) continue;
       // Symlinks are not followed: the policy check judged `root`, and a link
       // inside it could point anywhere.
       if (e.isDirectory()) {
@@ -146,7 +172,8 @@ const Write: LocalToolDefinition = {
   },
   async run(input) {
     const file = absolutePath(input, 'file_path');
-    const content = typeof input['content'] === 'string' ? input['content'] : '';
+    // A missing `content` must not truncate the file to nothing (#254 review).
+    const content = requireStringAllowEmpty(input, 'content');
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, content, 'utf8');
     return `Wrote ${content.length} chars to ${file}`;
@@ -169,7 +196,7 @@ const Edit: LocalToolDefinition = {
   async run(input) {
     const file = absolutePath(input, 'file_path');
     const oldStr = requireString(input, 'old_string');
-    const newStr = typeof input['new_string'] === 'string' ? input['new_string'] : '';
+    const newStr = requireStringAllowEmpty(input, 'new_string');
     const text = await fs.readFile(file, 'utf8');
     const count = text.split(oldStr).length - 1;
     if (count === 0) throw new Error('old_string not found in file');
@@ -224,7 +251,7 @@ const Glob: LocalToolDefinition = {
     const root = absolutePath(input, 'path');
     const re = globToRegExp(requireString(input, 'pattern'));
     const hits: string[] = [];
-    for await (const file of walk(root, ctx.signal)) {
+    for await (const file of walk(root, ctx)) {
       if (re.test(path.relative(root, file).split(path.sep).join('/'))) hits.push(file);
       if (hits.length >= MAX_MATCHES) break;
     }
@@ -250,7 +277,7 @@ const Grep: LocalToolDefinition = {
     const re = new RegExp(requireString(input, 'pattern'), input['case_insensitive'] === true ? 'i' : '');
     const fileFilter = typeof input['glob'] === 'string' ? globToRegExp(input['glob'].includes('/') ? input['glob'] : `**/${input['glob']}`) : null;
     const stat = await fs.stat(root);
-    const files: AsyncIterable<string> = stat.isFile() ? (async function* () { yield root; })() : walk(root, ctx.signal);
+    const files: AsyncIterable<string> = stat.isFile() ? (async function* () { yield root; })() : walk(root, ctx);
     const hits: string[] = [];
     for await (const file of files) {
       if (fileFilter && !fileFilter.test(path.relative(root, file).split(path.sep).join('/'))) continue;
