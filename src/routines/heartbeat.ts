@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import cron, { type ScheduledTask } from 'node-cron';
-import { ExecutionLoop } from '../orchestrator/execution-loop.js';
+import type { PromptRunner } from '../orchestrator/provider-prompt-runner.js';
 import type { PolicyEngine } from '../security/policy-engine.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -23,7 +23,8 @@ const log = createLogger('heartbeat');
 const MAX_HEARTBEAT_TASKS_PER_CYCLE = 3;
 
 export interface HeartbeatOptions {
-  loop: ExecutionLoop;
+  /** #254: ExecutionLoop on a claude-sdk primary, ProviderPromptRunner otherwise. */
+  loop: PromptRunner;
   policyEngine?: PolicyEngine;
   baseDir?: string;
   intervalMinutes?: number;
@@ -31,7 +32,7 @@ export interface HeartbeatOptions {
 }
 
 export class HeartbeatSystem {
-  private readonly _loop: ExecutionLoop;
+  private readonly _loop: PromptRunner;
   private readonly _policyEngine?: PolicyEngine;
   private readonly _heartbeatFile: string;
   private readonly _intervalMinutes: number;

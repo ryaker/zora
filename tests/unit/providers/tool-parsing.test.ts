@@ -4,7 +4,7 @@
  * Validates tool call parsing across all providers against realistic
  * output formats:
  * - Gemini: XML and markdown JSON (via text parsing)
- * - Ollama: Markdown JSON (via text parsing)
+ * - Ollama: native tool_calls since #254 (tested in ollama-tool-loop.test.ts)
  * - Claude: SDK structured messages (via message mapping)
  *
  * Covers: special characters, escaping, malformed responses,
@@ -13,7 +13,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { GeminiProvider } from '../../../src/providers/gemini-provider.js';
-import { OllamaProvider } from '../../../src/providers/ollama-provider.js';
 import { ClaudeProvider } from '../../../src/providers/claude-provider.js';
 import type { ProviderConfig } from '../../../src/types.js';
 
@@ -32,26 +31,8 @@ function makeGeminiProvider(): GeminiProvider {
   });
 }
 
-function makeOllamaProvider(): OllamaProvider {
-  return new OllamaProvider({
-    config: {
-      name: 'test-ollama',
-      type: 'ollama',
-      rank: 5,
-      capabilities: ['reasoning'],
-      cost_tier: 'free',
-      enabled: true,
-      model: 'llama3.2',
-    },
-  });
-}
-
 function parseGeminiToolCalls(text: string): any[] {
   return (makeGeminiProvider() as any)._parseToolCalls(text);
-}
-
-function parseOllamaToolCalls(text: string): any[] {
-  return (makeOllamaProvider() as any)._parseToolCalls(text);
 }
 
 function mapClaudeSDKMessage(message: any): any[] {
@@ -156,57 +137,8 @@ And check for tests:
   });
 });
 
-// ─── Ollama JSON Parsing ────────────────────────────────────────────
-
-describe('Ollama Tool Parsing', () => {
-  describe('markdown JSON tool calls', () => {
-    it('parses a basic tool call', () => {
-      const text = 'Here is the result:\n```json\n{"tool": "shell_exec", "arguments": {"command": "ls -la"}}\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(1);
-      expect(calls[0].tool).toBe('shell_exec');
-      expect(calls[0].arguments.command).toBe('ls -la');
-    });
-
-    it('parses multiple tool calls', () => {
-      const text = '```json\n{"tool": "Read", "arguments": {"path": "a.ts"}}\n```\nThen:\n```json\n{"tool": "Read", "arguments": {"path": "b.ts"}}\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(2);
-    });
-
-    it('skips JSON without tool/arguments fields', () => {
-      const text = '```json\n{"name": "not a tool call", "value": 42}\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(0);
-    });
-
-    it('handles tool call with complex arguments', () => {
-      const text = '```json\n{"tool": "api_call", "arguments": {"url": "https://api.example.com", "headers": {"Authorization": "Bearer token"}, "body": {"data": [1, 2, 3]}}}\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(1);
-      expect(calls[0].arguments.headers).toEqual({ Authorization: 'Bearer token' });
-    });
-  });
-
-  describe('edge cases', () => {
-    it('returns empty array for plain text', () => {
-      const calls = parseOllamaToolCalls('This is just regular text with no code blocks.');
-      expect(calls).toHaveLength(0);
-    });
-
-    it('skips non-JSON code blocks', () => {
-      const text = '```typescript\nconst x = 42;\n```\n```python\nprint("hello")\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(0);
-    });
-
-    it('handles malformed JSON in code block', () => {
-      const text = '```json\n{broken json\n```';
-      const calls = parseOllamaToolCalls(text);
-      expect(calls).toHaveLength(0);
-    });
-  });
-});
+// Ollama: #254 replaced text parsing with native /api/chat tool_calls, which
+// are executed through the enforcement chain. See ollama-tool-loop.test.ts.
 
 // ─── Claude SDK Message Mapping ─────────────────────────────────────
 
@@ -405,14 +337,6 @@ describe('Cross-Provider Tool Call Format Consistency', () => {
     expect(geminiCalls[0]).toHaveProperty('tool');
     expect(geminiCalls[0]).toHaveProperty('arguments');
 
-    // Ollama JSON
-    const ollamaCalls = parseOllamaToolCalls(
-      '```json\n{"tool": "Read", "arguments": {"file_path": "test.ts"}}\n```'
-    );
-    expect(ollamaCalls[0]).toHaveProperty('toolCallId');
-    expect(ollamaCalls[0]).toHaveProperty('tool');
-    expect(ollamaCalls[0]).toHaveProperty('arguments');
-
     // Claude SDK
     const claudeEvents = mapClaudeSDKMessage({
       type: 'assistant',
@@ -437,10 +361,5 @@ describe('Cross-Provider Tool Call Format Consistency', () => {
       '<tool_call name="Read">{"file_path": "test.ts"}</tool_call>'
     );
     expect(geminiCalls[0].toolCallId).toMatch(/^call_/);
-
-    const ollamaCalls = parseOllamaToolCalls(
-      '```json\n{"tool": "Read", "arguments": {"file_path": "test.ts"}}\n```'
-    );
-    expect(ollamaCalls[0].toolCallId).toMatch(/^call_/);
   });
 });
