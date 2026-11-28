@@ -176,6 +176,8 @@ import {
   type NeighbourResult,
   type NodeLabel,
   type TaskRecord,
+  type AssertionResult,
+  type ProvenanceResult,
   type TaskResult,
 } from './graph-types.js';
 import { createLogger } from '../../utils/logger.js';
@@ -542,6 +544,65 @@ export class GraphStore {
       { f: ontKey(from.kind, f), t: ontKey(to.kind, t), p },
     );
     return rows ? { ids: uniqueIds(rows, 'a.memId', limit), ok: true } : { ids: [], ok: false };
+  }
+
+  // ── Ontology inspection (#242, read-only) ─────────────────────────
+
+  /** Auto-extracted entities (`OntEntity`), for the `memory graph` inspect command. */
+  ontologyEntities(limit = 50): EntityRecord[] {
+    const rows = this._query(
+      `MATCH (a:OntEntity) RETURN a.name, a.kind LIMIT ${this._maxRows}`,
+    );
+    const out: EntityRecord[] = [];
+    for (const row of rows) {
+      const name = str(row['a.name']);
+      const kind = row['a.kind'];
+      if (name && isEntityKind(kind)) out.push({ name, kind });
+    }
+    return out.slice(0, clampLimit(limit));
+  }
+
+  /** Auto-extracted assertions, optionally only those derived from one memory. */
+  ontologyAssertions(limit = 50, memId?: string): AssertionResult[] {
+    const filter = memId === undefined ? undefined : exactId(memId, MAX_MEM_ID);
+    if (memId !== undefined && !filter) return [];
+    const rows = this._query(
+      filter
+        ? `MATCH (a:Assertion {memId: $m}) RETURN a.fromKey, a.toKey, a.predicate, a.memId, a.ts LIMIT ${this._maxRows}`
+        : `MATCH (a:Assertion) RETURN a.fromKey, a.toKey, a.predicate, a.memId, a.ts LIMIT ${this._maxRows}`,
+      filter ? { m: filter } : undefined,
+    );
+    const out: AssertionResult[] = [];
+    for (const row of rows) {
+      const from = parseOntKey(str(row['a.fromKey']));
+      const to = parseOntKey(str(row['a.toKey']));
+      const predicate = str(row['a.predicate']);
+      const source = str(row['a.memId']);
+      if (!from || !to || !predicate || !source) continue;
+      out.push({ from, predicate, to, memId: source, ts: num(row['a.ts']) });
+    }
+    return out.slice(0, clampLimit(limit));
+  }
+
+  /** Everything the ontology derived from one memory: its entities and assertions. */
+  memoryProvenance(memId: string, limit = 50): ProvenanceResult {
+    const id = exactId(memId, MAX_MEM_ID);
+    if (!id) return { memId, entities: [], assertions: [] };
+    const rows = this._query(
+      `MATCH (a:OntEntity)-[r:EVIDENCED_BY]->(m:Memory {memId: $m}) RETURN a.name, a.kind LIMIT ${this._maxRows}`,
+      { m: id },
+    );
+    const entities: EntityRecord[] = [];
+    for (const row of rows) {
+      const name = str(row['a.name']);
+      const kind = row['a.kind'];
+      if (name && isEntityKind(kind)) entities.push({ name, kind });
+    }
+    return {
+      memId: id,
+      entities: entities.slice(0, clampLimit(limit)),
+      assertions: this.ontologyAssertions(limit, id),
+    };
   }
 
   /** Relate two entities, creating either endpoint if needed. */
@@ -1132,4 +1193,14 @@ function dedupeTasks(rows: Array<Record<string, unknown>>): TaskResult[] {
 
 function sortByTsDesc(tasks: TaskResult[]): TaskResult[] {
   return tasks.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+}
+
+/** Inverse of ontKey: `kind:name` → record. Kinds contain no colon, so split at the first one. */
+function parseOntKey(key: string | null): EntityRecord | null {
+  if (!key) return null;
+  const i = key.indexOf(':');
+  if (i < 1) return null;
+  const kind = key.slice(0, i);
+  const name = key.slice(i + 1);
+  return name && isEntityKind(kind) ? { name, kind } : null;
 }

@@ -47,6 +47,8 @@ import {
   type TaskRecord,
   type TaskResult,
   type WorkerRequest,
+  type AssertionResult,
+  type ProvenanceResult,
   type WorkerResponse,
 } from './graph-types.js';
 import { createLogger } from '../../utils/logger.js';
@@ -148,6 +150,12 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
           const r = store.relationSourcesChecked(query.from, query.to, query.predicate, query.limit);
           return { op: 'relationSources', memIds: r.ids, ok: r.ok };
         }
+      case 'ontologyEntities':
+        return { op: 'ontologyEntities', entities: store.ontologyEntities(query.limit) };
+      case 'ontologyAssertions':
+        return { op: 'ontologyAssertions', assertions: store.ontologyAssertions(query.limit) };
+      case 'memoryProvenance':
+        return { op: 'memoryProvenance', provenance: store.memoryProvenance(query.memId, query.limit) };
       case 'stats':
         return { op: 'stats', stats: store.stats() };
     }
@@ -407,6 +415,26 @@ export class GraphMemoryClient {
   async failuresForTool(tool: string, limit = 10): Promise<FailureResult[]> {
     const r = await this._query({ op: 'failuresForTool', tool, limit });
     return r?.op === 'failuresForTool' ? r.failures : [];
+  }
+
+  /** Read-only inspect (#242). Empty unless the ontology flag is on. */
+  async ontologyEntities(limit = 50): Promise<EntityRecord[]> {
+    if (!this._config.ontology) return [];
+    const r = await this._query({ op: 'ontologyEntities', limit });
+    return r?.op === 'ontologyEntities' ? r.entities : [];
+  }
+
+  async ontologyAssertions(limit = 50): Promise<AssertionResult[]> {
+    if (!this._config.ontology) return [];
+    const r = await this._query({ op: 'ontologyAssertions', limit });
+    return r?.op === 'ontologyAssertions' ? r.assertions : [];
+  }
+
+  async memoryProvenance(memId: string, limit = 50): Promise<ProvenanceResult> {
+    const empty = { memId, entities: [], assertions: [] };
+    if (!this._config.ontology) return empty;
+    const r = await this._query({ op: 'memoryProvenance', memId, limit });
+    return r?.op === 'memoryProvenance' ? r.provenance : empty;
   }
 
   async stats(): Promise<GraphStats> {

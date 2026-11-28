@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import type { Command } from 'commander';
 import type { MemoryManager } from '../memory/memory-manager.js';
 import type { MemoryItem } from '../memory/memory-types.js';
+import { registerGraphInspectCommands } from './graph-commands.js';
 
 const MS_PER_DAY = 86_400_000;
 const DEDUP_THRESHOLD = 0.8;
@@ -18,6 +19,13 @@ export function registerMemoryCommands(
   setupContext: () => Promise<{ memoryManager: MemoryManager }>,
 ): void {
   const memory = program.command('memory').description('Manage agent memory');
+  // The `graph` group is created here (not inside the helper) so the DOC-12
+  // static CLI parse sees `memory graph` registered (#242).
+  registerGraphInspectCommands(
+    memory
+      .command('graph')
+      .description('Inspect the auto-ontology (read-only; needs ZORA_GRAPH_MEMORY=1 ZORA_GRAPH_ONTOLOGY=1)'),
+  );
 
   memory
     .command('search <query>')

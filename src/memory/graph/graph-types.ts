@@ -227,6 +227,9 @@ export type GraphQuery =
   | { op: 'failuresForTool'; tool: string; limit: number }
   | { op: 'sourcesOf'; name: string; kind: EntityKind; limit: number }
   | { op: 'relationSources'; from: EntityRecord; to: EntityRecord; predicate: string; limit: number }
+  | { op: 'ontologyEntities'; limit: number }
+  | { op: 'ontologyAssertions'; limit: number }
+  | { op: 'memoryProvenance'; memId: string; limit: number }
   | { op: 'stats' };
 
 export type GraphQueryResult =
@@ -239,6 +242,9 @@ export type GraphQueryResult =
   // set only by the failure-aware path used by retrieval (#194c).
   | { op: 'sourcesOf'; memIds: string[]; ok?: boolean }
   | { op: 'relationSources'; memIds: string[]; ok?: boolean }
+  | { op: 'ontologyEntities'; entities: EntityRecord[] }
+  | { op: 'ontologyAssertions'; assertions: AssertionResult[] }
+  | { op: 'memoryProvenance'; provenance: ProvenanceResult }
   | { op: 'stats'; stats: GraphStats };
 
 /** Main thread → worker. */
@@ -254,3 +260,20 @@ export type WorkerResponse =
   | { kind: 'ready'; available: false; reason: string }
   | { id: number; kind: 'ok'; result?: GraphQueryResult }
   | { id: number; kind: 'error'; message: string };
+
+/** An auto-extracted relation with its source memory (#242, inspect). */
+export interface AssertionResult {
+  from: EntityRecord;
+  predicate: string;
+  to: EntityRecord;
+  /** The memory this assertion was extracted from. */
+  memId: string;
+  ts: number | null;
+}
+
+/** Everything the ontology derived from one memory (#242, inspect). */
+export interface ProvenanceResult {
+  memId: string;
+  entities: EntityRecord[];
+  assertions: AssertionResult[];
+}

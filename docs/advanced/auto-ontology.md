@@ -128,3 +128,17 @@ retained-derived-data gap is a follow-up and should land before retrieval is act
   budgets, source recall/precision), runnable once written; (2) answer, abstention
   and citation scoring, which cannot be validated through production #230 until the
   source-visibility policy and answer-side citation enforcement exist.
+
+## Inspecting the ontology (#242)
+
+Read-only commands show what extraction actually produced:
+
+```bash
+ZORA_GRAPH_MEMORY=1 ZORA_GRAPH_ONTOLOGY=1 zora-agent memory graph entities
+ZORA_GRAPH_MEMORY=1 ZORA_GRAPH_ONTOLOGY=1 zora-agent memory graph assertions
+ZORA_GRAPH_MEMORY=1 ZORA_GRAPH_ONTOLOGY=1 zora-agent memory graph provenance <memId>
+```
+
+`provenance` lists the entities and relations derived from one memory. The graph database allows a single process, so these only work while no Zora daemon is running; otherwise the command prints why it cannot read.
+
+**What this exposes, and to whom:** entity names, relations between them and the IDs of the memories they came from, which is a derived view of your memory contents. It runs as the local user against a file under `~/.zora`, writes nothing, and adds no network or dashboard surface.
