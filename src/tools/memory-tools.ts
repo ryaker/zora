@@ -135,6 +135,14 @@ const MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const GRAPH_BOOST = 1.25;
 
 /**
+ * Advisory abstain signal (#243): when the best returned score is below this, the
+ * response carries `low_confidence: true` so the model can say "I don't know" or ask
+ * instead of guessing. Purely advisory: results are never filtered or blocked by it
+ * (ontology/ranking never gates retrieval, #230).
+ */
+export const LOW_CONFIDENCE_SCORE = 0.15;
+
+/**
  * Relevance an ontology-validated match contributes when its text shares no query
  * words, so a positive `min_score` does not discard exactly the matches the graph
  * exists to find. Still scaled by recency/frequency/source trust; hits stay
@@ -162,7 +170,8 @@ function createMemorySearchTool(
     name: 'memory_search',
     description:
       'Search long-term memory for relevant facts. Returns results ranked by relevance, recency, and trust. ' +
-      'Use this before making assumptions — check if you already know something.',
+      'Use this before making assumptions — check if you already know something. ' +
+      'If the response has low_confidence: true, the match is weak or absent: say you are unsure or ask rather than guessing (advisory; results are still returned).',
     input_schema: {
       type: 'object',
       required: ['query'],
@@ -291,7 +300,12 @@ function createMemorySearchTool(
         .slice(0, limit) as typeof scores;
 
       if (scores.length === 0) {
-        return { results: [], message: 'No matching memories found.' };
+        return {
+          results: [],
+          message: 'No matching memories found.',
+          low_confidence: true,
+          advice: 'Nothing relevant is stored; say you do not know or ask the user rather than guessing.',
+        };
       }
 
       const results = scores.map(s => {
@@ -314,6 +328,15 @@ function createMemorySearchTool(
         return base;
       }).filter(Boolean);
 
+      const top = scores[0]?.score ?? 0;
+      if (top < LOW_CONFIDENCE_SCORE) {
+        return {
+          results,
+          count: results.length,
+          low_confidence: true,
+          advice: 'Best match is weak; treat these as hints, and say you are unsure or ask the user rather than asserting them.',
+        };
+      }
       return { results, count: results.length };
     },
   };
