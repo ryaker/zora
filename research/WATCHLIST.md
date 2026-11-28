@@ -12,3 +12,4 @@
 | Claude Agent SDK | https://github.com/anthropics/claude-agent-sdk-typescript/releases | Zora's Claude provider |
 | OpenAI Agents SDK | https://github.com/openai/openai-agents-js/releases | Candidate for Zora's OpenAI provider |
 | NVIDIA Auto Ontology | https://github.com/NVIDIA/auto-ontology/commits/main | Answerability gate + provenance patterns (#185) |
+| Hermes Agent | https://github.com/NousResearch/hermes-agent/releases | Zora Referee runtime (Slack gateway, Docker sandbox, Ollama provider) |
