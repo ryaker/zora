@@ -115,8 +115,12 @@ function extractPathsFromCommand(cmd: string): string[] {
   return extractFileTokensFromCommand(cmd);
 }
 
-/** Return the label of the first matching sensitive pattern, or null. */
-function matchesSensitivePath(normalizedPath: string): string | null {
+/**
+ * Return the label of the first matching sensitive pattern, or null.
+ * #254: exported so the native Glob/Grep walk can skip sensitive entries
+ * *inside* an allowed root — the hook itself only ever sees the root argument.
+ */
+export function matchesSensitivePath(normalizedPath: string): string | null {
   for (const { pattern, label } of SENSITIVE_FULLPATH_PATTERNS) {
     if (pattern.test(normalizedPath)) return label;
   }

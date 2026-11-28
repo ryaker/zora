@@ -363,7 +363,11 @@ export class ClaudeProvider implements LLMProvider {
     // `sdkOptions['customTools'] = ...` was a no-op — the SDK has no such option,
     // so every Zora tool was dropped before it reached the model (and the .map()
     // stripped `handler`, so even a passthrough could not have executed).
-    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(task.customTools);
+    // #254 review: `disableTools` (set by the internal single-shot text paths
+    // when an Ollama-first router falls back to Claude) means SEC-23's
+    // `toolSurface: 'none'`: no Zora tools, no built-ins, no inherited MCP.
+    const noTools = task.disableTools === true;
+    const { mcpServers, toolNames: zoraToolNames } = buildZoraMcpServer(noTools ? undefined : task.customTools);
 
     // SEC-21: PreToolUse/PostToolUse hooks are the pre-execution layer. They run
     // ahead of canUseTool and a deny there is a real deny — the SDK never
@@ -388,6 +392,7 @@ export class ClaudeProvider implements LLMProvider {
       hooks,
       baseAllowedTools: this._allowedTools.length > 0 ? this._allowedTools : undefined,
       extraAllowedTools: zoraToolNames,
+      ...(noTools ? { toolSurface: 'none' as const } : {}),
     });
 
     // Build SDK options
@@ -405,7 +410,13 @@ export class ClaudeProvider implements LLMProvider {
       disallowedTools: enforced.disallowedTools,
     };
 
-    if (Object.keys(mcpServers).length > 0) {
+    if (noTools) {
+      // `allowedTools: []` only filters permission prompts; `tools: []` removes
+      // the built-ins from the model's context (#194), strictMcpConfig drops
+      // settings-inherited MCP servers.
+      sdkOptions['tools'] = [];
+      sdkOptions['strictMcpConfig'] = true;
+    } else if (Object.keys(mcpServers).length > 0) {
       sdkOptions['mcpServers'] = mcpServers;
     }
     if (enforced.allowedTools) {

@@ -55,6 +55,7 @@ import { RetryQueue } from './retry-queue.js';
 import { AuthMonitor } from './auth-monitor.js';
 import { SessionManager, BufferedSessionWriter } from './session-manager.js';
 import { ExecutionLoop, type CustomToolDefinition, defaultTransformContext, type TransformContextFn } from './execution-loop.js';
+import { ProviderPromptRunner, type PromptRunner } from './provider-prompt-runner.js';
 import { SteeringManager } from '../steering/steering-manager.js';
 import { FlagManager } from '../steering/flag-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
@@ -2260,6 +2261,21 @@ export class Orchestrator {
         if (signal.aborted) abortController.abort();
         else signal.addEventListener('abort', () => abortController.abort(), { once: true });
       }
+      // #254: on a non-SDK primary (Ollama) run on the ranked providers instead
+      // of always calling Claude. Same text-only surface, same gates.
+      if (!this._primaryIsClaudeSdk()) {
+        return new ProviderPromptRunner({
+          selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
+          systemPrompt,
+          jobLabel: `extract-${taskContext.jobId}`,
+          disableTools: true,
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => `extract-${taskContext.jobId}`),
+          maxTurns: 1,
+          signal: abortController.signal,
+        }).run(prompt);
+      }
       const extractLoop = new ExecutionLoop({
         // #219: attribute to the originating job rather than 'system'.
         onSettingsNotice: (n) => this._auditSettingsNotice({ ...n, jobId: taskContext.jobId, source: 'execution-loop:extraction' }),
@@ -2739,6 +2755,22 @@ export class Orchestrator {
   }
 
   /**
+   * #254: is the top-ranked enabled provider the Claude Agent SDK?
+   *
+   * The internal paths (heartbeat, memory extraction, compression) keep their
+   * ExecutionLoop when it is — that path and its SEC-23 coverage tests are
+   * unchanged. Otherwise they run on the ranked providers via
+   * ProviderPromptRunner. No providers in config (library embedding, tests)
+   * keeps the historical ExecutionLoop behaviour.
+   */
+  private _primaryIsClaudeSdk(): boolean {
+    const top = [...(this._config.providers ?? [])]
+      .filter(p => p.enabled)
+      .sort((a, b) => a.rank - b.rank)[0];
+    return !top || top.type === 'claude-sdk';
+  }
+
+  /**
    * SEC-23: build the ExecutionLoop the heartbeat runs on.
    *
    * Extracted from `boot()` for two reasons. The first is that it is the
@@ -2755,7 +2787,23 @@ export class Orchestrator {
    * SensitiveFileGuard-blocked path and a ShellSafety-blocked command are
    * actually denied *on this path*, not only on the main task path.
    */
-  private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): ExecutionLoop {
+  private _buildHeartbeatLoop(cwd: string, streamTimeoutMs: number): PromptRunner {
+    // #254: an Ollama-first install runs its routines on Ollama, through the
+    // same canUseTool + hook bridge, rather than on the Claude SDK regardless.
+    if (!this._primaryIsClaudeSdk()) {
+      return new ProviderPromptRunner({
+        selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
+        systemPrompt: 'You are Zora, a helpful autonomous agent.',
+        jobLabel: 'heartbeat',
+        // Same knob the ExecutionLoop branch honours (as `model` there).
+        modelPreference: this._config.agent.heartbeat_provider,
+        canUseTool: this._policyEngine.createCanUseTool(),
+        hooks: buildSdkHooks(this._toolHookRunner, () => 'heartbeat'),
+        customTools: this._getCustomTools(),
+        timeoutMs: streamTimeoutMs,
+      });
+    }
     return new ExecutionLoop({
         onSettingsNotice: (n) => this._auditSettingsNotice(n),
       systemPrompt: 'You are Zora, a helpful autonomous agent.',
@@ -2787,6 +2835,19 @@ export class Orchestrator {
       ? this._config.agent.workspace.replace(/^~/, os.homedir())
       : process.cwd();
     return async (prompt: string): Promise<string> => {
+      // #254: see the extraction path — no Claude call on an Ollama primary.
+      if (!this._primaryIsClaudeSdk()) {
+        return new ProviderPromptRunner({
+          selectProvider: (t) => this._router.selectProvider(t),
+          fallbackProviders: () => this._providers,
+          systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',
+          jobLabel: 'compress',
+          disableTools: true,
+          canUseTool: this._policyEngine.createCanUseTool(),
+          hooks: buildSdkHooks(this._toolHookRunner, () => 'compress'),
+          maxTurns: 1,
+        }).run(prompt);
+      }
       const compressLoop = new ExecutionLoop({
         onSettingsNotice: (n) => this._auditSettingsNotice(n),
         systemPrompt: 'You are a conversation observer. Compress messages into concise, dated observations. Respond with ONLY the observations.',

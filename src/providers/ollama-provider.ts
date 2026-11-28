@@ -9,6 +9,13 @@
  *
  * Supports any model Ollama can run: Llama, Mistral, Qwen, Gemma,
  * DeepSeek, Phi, CodeLlama, etc.
+ *
+ * #254: tool calling. Ollama-served models get the native built-ins
+ * (src/tools/local-builtin-tools.ts) plus the task's Zora tools, and every call
+ * is authorised by src/tools/enforced-tool-call.ts — the same PreToolUse hooks
+ * and canUseTool the claude-sdk path receives on TaskContext. Before #254 this
+ * provider sent no tools and "parsed" JSON blocks out of the reply text into
+ * tool_call events that nothing ever executed.
  */
 
 import type {
@@ -22,17 +29,73 @@ import type {
   ProviderCapability,
   CostTier,
   ProviderConfig,
+  ZoraPolicy,
 } from '../types.js';
 import { isTextEvent, isSteeringEvent } from '../types.js';
 import { createLogger } from '../utils/logger.js';
 import { CircuitBreaker } from './circuit-breaker.js';
+import { DEFAULT_OLLAMA_MODEL } from './model-defaults.js';
+import { deriveDisallowedTools } from '../security/enforced-sdk-options.js';
+import { toolFilterMatches } from '../security/tool-names.js';
+import { authorizeToolCall, runPostToolUse, type ToolChain } from '../tools/enforced-tool-call.js';
+import { LOCAL_BUILTIN_TOOLS } from '../tools/local-builtin-tools.js';
+import { qualifyZoraToolName } from '../tools/zora-mcp-server.js';
+import { PolicyEngine } from '../security/policy-engine.js';
+import { matchesSensitivePath } from '../hooks/built-in/sensitive-file-guard.js';
 
 const log = createLogger('ollama-provider');
+
+/** Turn budget when neither the task nor config.toml sets max_turns. */
+const DEFAULT_MAX_TURNS = 50;
 
 export interface OllamaProviderOptions {
   config: ProviderConfig;
   /** Base URL for the Ollama API. Defaults to config.endpoint or http://localhost:11434 */
   endpoint?: string;
+  /** #254: working directory for Bash. Defaults to process.cwd(). */
+  cwd?: string;
+  /**
+   * #254: the resolved policy, for layer [1] (static tool bans), as
+   * ClaudeProvider takes it. canUseTool and the hooks are unaffected by it.
+   */
+  policy?: ZoraPolicy;
+}
+
+interface OllamaToolCall {
+  function: { name: string; arguments: unknown };
+}
+
+interface OllamaMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_calls?: OllamaToolCall[];
+  tool_name?: string;
+}
+
+interface OllamaTool {
+  /** The name the enforcement chain sees (SDK spelling; Zora tools qualified). */
+  chainName: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  run: (input: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
+}
+
+type ChatReply =
+  | { kind: 'ok'; text: string; toolCalls: OllamaToolCall[]; model?: string; evalCount?: number }
+  | { kind: 'error'; message: string }
+  | { kind: 'aborted'; text: string }
+  | { kind: 'tools_unsupported' };
+
+/** Ollama documents `arguments` as an object; some models emit a JSON string. */
+function parseArguments(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return { ...(raw as Record<string, unknown>) };
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch { /* fall through */ }
+  }
+  return {};
 }
 
 export class OllamaProvider implements LLMProvider {
@@ -44,6 +107,9 @@ export class OllamaProvider implements LLMProvider {
   private readonly _config: ProviderConfig;
   private readonly _endpoint: string;
   private readonly _model: string;
+  private readonly _cwd: string;
+  private readonly _policy: ZoraPolicy | undefined;
+  private readonly _allowPath: (absPath: string) => boolean;
 
   /** Track active requests by jobId for abort support */
   private readonly _activeRequests: Map<string, AbortController> = new Map();
@@ -64,7 +130,14 @@ export class OllamaProvider implements LLMProvider {
 
     this._config = config;
     this._endpoint = (options.endpoint ?? config.endpoint ?? 'http://localhost:11434').replace(/\/$/, '');
-    this._model = config.model ?? 'llama3.2';
+    this._model = config.model ?? DEFAULT_OLLAMA_MODEL;
+    this._cwd = options.cwd ?? process.cwd();
+    this._policy = options.policy;
+    // #254 review: Glob/Grep descend below the root the chain judged, so each
+    // entry is re-checked against the same path policy and sensitive-file list.
+    const engine = options.policy ? new PolicyEngine(options.policy) : null;
+    this._allowPath = (p: string) =>
+      matchesSensitivePath(p) === null && (engine ? engine.validatePath(p).allowed : true);
     this._circuitBreaker = new CircuitBreaker();
   }
 
@@ -125,18 +198,23 @@ export class OllamaProvider implements LLMProvider {
     };
   }
 
+  /**
+   * #254: run the task as a tool loop.
+   *
+   * Ollama's /api/chat returns tool calls as data; nothing executes them unless
+   * the provider does. Each call goes through `authorizeToolCall()` — the same
+   * PreToolUse hooks and canUseTool the SDK path is given on `TaskContext` — and
+   * only an authorised call is executed, with the (possibly redacted) input the
+   * chain returned. Results go back to the model as `role: "tool"` messages
+   * until it answers without a tool call or the turn budget runs out.
+   */
   async *execute(task: TaskContext): AsyncGenerator<AgentEvent> {
     // PROV-02: Reject immediately if circuit breaker is OPEN
     if (this._circuitBreaker.isOpen()) {
-      yield {
-        type: 'error' as AgentEventType,
-        timestamp: new Date(),
-        source: this.name,
-        content: {
-          message: `Circuit breaker is OPEN for provider ${this.name} — too many recent failures`,
-          isCircuitOpen: true,
-        },
-      };
+      yield this._event('error', {
+        message: `Circuit breaker is OPEN for provider ${this.name} — too many recent failures`,
+        isCircuitOpen: true,
+      });
       return;
     }
 
@@ -145,151 +223,65 @@ export class OllamaProvider implements LLMProvider {
     this._requestCount++;
     this._lastRequestAt = new Date();
 
+    const tools = task.disableTools ? new Map<string, OllamaTool>() : this._buildTools(task);
+    const chain: ToolChain = {
+      disallowedTools: deriveDisallowedTools(this._policy),
+      hooks: task.sdkHooks,
+      canUseTool: task.canUseTool,
+      signal: abortController.signal,
+    };
     const messages = this._buildMessages(task);
-
-    let response: Response;
-    try {
-      response = await fetch(`${this._endpoint}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this._model,
-          messages,
-          stream: true,
-        }),
-        signal: abortController.signal,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this._lastAuthStatus = { valid: false, expiresAt: null, canAutoRefresh: true, requiresInteraction: false };
-      // PROV-02: Record failure on the circuit breaker
-      this._circuitBreaker.recordFailure();
-      yield {
-        type: 'error' as AgentEventType,
-        timestamp: new Date(),
-        source: this.name,
-        content: { message: `Ollama connection failed: ${msg}. Is Ollama running? (ollama serve)` },
-      };
-      this._activeRequests.delete(task.jobId);
-      return;
-    }
-
-    if (!response.ok) {
-      const body = await response.text().catch((readErr) => {
-        log.error({ err: readErr }, 'Failed to read error response body');
-        return '';
-      });
-      // PROV-02: Record failure on the circuit breaker
-      this._circuitBreaker.recordFailure();
-      yield {
-        type: 'error' as AgentEventType,
-        timestamp: new Date(),
-        source: this.name,
-        content: { message: `Ollama API error ${response.status}: ${body}` },
-      };
-      this._activeRequests.delete(task.jobId);
-      return;
-    }
-
-    if (!response.body) {
-      // PROV-02: Record failure on the circuit breaker
-      this._circuitBreaker.recordFailure();
-      yield {
-        type: 'error' as AgentEventType,
-        timestamp: new Date(),
-        source: this.name,
-        content: { message: 'Ollama returned no response body' },
-      };
-      this._activeRequests.delete(task.jobId);
-      return;
-    }
-
-    // Stream the response
+    const maxTurns = task.maxTurns ?? this._config.max_turns ?? DEFAULT_MAX_TURNS;
+    let sendTools = tools.size > 0;
     let fullText = '';
+
     try {
-      for await (const line of this._streamLines(response.body)) {
-        if (!line.trim()) continue;
+      for (let turn = 1; turn <= maxTurns; turn++) {
+        yield this._event('turn.start', { turn });
 
-        let chunk: Record<string, unknown>;
-        try {
-          const parsed = JSON.parse(line);
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new Error('Invalid JSON chunk: expected object');
-          }
-          chunk = parsed as Record<string, unknown>;
-        } catch (parseErr: unknown) {
-          // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
-          const error = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
-          log.error({ err: error, rawContent: line.slice(0, 200) }, 'Failed to parse streaming JSON line');
+        const reply = yield* this._chatOnce(messages, sendTools ? tools : null, abortController.signal);
+        if (reply.kind === 'tools_unsupported') {
+          // Some local models reject `tools` outright. Degrade to chat rather
+          // than fail: the task still gets an answer, just no actions.
+          log.warn({ model: this._model }, 'Model does not support tool calling — continuing without tools');
+          sendTools = false;
+          turn--;
           continue;
         }
-
-        // Null check before accessing chunk properties
-        if (!chunk) {
-          continue;
+        if (reply.kind === 'error') {
+          this._circuitBreaker.recordFailure();
+          yield this._event('error', { message: reply.message });
+          return;
+        }
+        if (reply.kind === 'aborted') {
+          yield this._event('done', { text: fullText + reply.text, aborted: true });
+          return;
         }
 
-        const chunkMessage = chunk.message as Record<string, unknown> | undefined;
-        if (chunkMessage?.content) {
-          const text = String(chunkMessage.content);
-          fullText += text;
-          yield {
-            type: 'text' as AgentEventType,
-            timestamp: new Date(),
-            source: this.name,
-            content: { text },
-          };
-        }
+        fullText += reply.text;
+        yield this._event('turn.end', { turn });
 
-        // Ollama signals completion with done: true
-        if (chunk.done) {
-          // Extract tool calls from the response text (best-effort)
-          const toolCalls = this._parseToolCalls(fullText);
-          for (const toolCall of toolCalls) {
-            yield {
-              type: 'tool_call' as AgentEventType,
-              timestamp: new Date(),
-              source: this.name,
-              content: toolCall,
-            };
-          }
-
-          // PROV-02: Record success on the circuit breaker
+        if (reply.toolCalls.length === 0) {
           this._circuitBreaker.recordSuccess();
+          // The result is the final answer; earlier turns' narration ("let me
+          // check…") already streamed as text events.
+          yield this._event('done', { text: reply.text, model: reply.model, eval_count: reply.evalCount, turns: turn });
+          return;
+        }
 
-          yield {
-            type: 'done' as AgentEventType,
-            timestamp: new Date(),
-            source: this.name,
-            content: {
-              text: fullText,
-              model: chunk.model,
-              total_duration: chunk.total_duration,
-              eval_count: chunk.eval_count,
-            },
-          };
-          break;
+        messages.push({ role: 'assistant', content: reply.text, tool_calls: reply.toolCalls });
+        for (const [i, call] of reply.toolCalls.entries()) {
+          const toolUseId = `call_ollama_${task.jobId}_${turn}_${i}`;
+          const content = yield* this._runToolCall(call, toolUseId, tools, chain, task);
+          messages.push({ role: 'tool', tool_name: call.function.name, content });
         }
       }
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        yield {
-          type: 'done' as AgentEventType,
-          timestamp: new Date(),
-          source: this.name,
-          content: { text: fullText, aborted: true },
-        };
-      } else {
-        // PROV-02: Record failure on the circuit breaker
-        this._circuitBreaker.recordFailure();
-        const msg = err instanceof Error ? err.message : String(err);
-        yield {
-          type: 'error' as AgentEventType,
-          timestamp: new Date(),
-          source: this.name,
-          content: { message: `Ollama streaming error: ${msg}` },
-        };
-      }
+
+      this._circuitBreaker.recordSuccess();
+      yield this._event('error', {
+        message: `Ollama task stopped after ${maxTurns} turns without a final answer`,
+        text: fullText,
+      });
     } finally {
       this._activeRequests.delete(task.jobId);
     }
@@ -315,11 +307,200 @@ export class OllamaProvider implements LLMProvider {
 
   // ─── Internal helpers ─────────────────────────────────────────────
 
+  private _event(type: string, content: unknown): AgentEvent {
+    return { type: type as AgentEventType, timestamp: new Date(), source: this.name, content } as AgentEvent;
+  }
+
+  /**
+   * #254: the tool surface for one task — native built-ins plus the task's
+   * Zora tools. Policy-banned tools (layer [1]) are never offered, so the model
+   * does not waste turns discovering them.
+   *
+   * Zora tools are offered to the model under their bare name but presented to
+   * the enforcement chain fully qualified (`mcp__zora-tools__memory_save`),
+   * which is exactly how the SDK path names them. Hooks, capability tokens and
+   * channel allowlists therefore see the same string on both providers.
+   */
+  private _buildTools(task: TaskContext): Map<string, OllamaTool> {
+    const banned = deriveDisallowedTools(this._policy);
+    const tools = new Map<string, OllamaTool>();
+    for (const t of LOCAL_BUILTIN_TOOLS) {
+      if (toolFilterMatches(banned, t.name)) continue;
+      tools.set(t.name, {
+        chainName: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+        run: (input, signal) => t.run(input, { cwd: this._cwd, signal, allowPath: this._allowPath }),
+      });
+    }
+    for (const t of task.customTools ?? []) {
+      const chainName = qualifyZoraToolName(t.name);
+      if (toolFilterMatches(banned, chainName)) continue;
+      tools.set(t.name, {
+        chainName,
+        description: t.description,
+        parameters: t.input_schema,
+        run: async (input) => {
+          const out = await t.handler(input);
+          // JSON.stringify(undefined) is undefined; a tool message needs content.
+          return typeof out === 'string' ? out : (JSON.stringify(out) ?? '');
+        },
+      });
+    }
+    return tools;
+  }
+
+  /** Authorise, execute and observe one tool call; returns the text for the model. */
+  private async *_runToolCall(
+    call: OllamaToolCall,
+    toolUseId: string,
+    tools: Map<string, OllamaTool>,
+    chain: ToolChain,
+    task: TaskContext,
+  ): AsyncGenerator<AgentEvent, string> {
+    const name = call.function.name;
+    const rawArgs = parseArguments(call.function.arguments);
+    const tool = tools.get(name);
+    const chainName = tool?.chainName ?? name;
+
+    if (!tool) {
+      yield this._event('tool_call', { toolCallId: toolUseId, tool: chainName, arguments: rawArgs });
+      const error = `Unknown tool '${name}'. Available: ${[...tools.keys()].join(', ') || 'none'}`;
+      yield this._event('tool_result', { toolCallId: toolUseId, error });
+      return `Error: ${error}`;
+    }
+
+    const auth = await authorizeToolCall(chain, chainName, rawArgs, toolUseId);
+    const args = auth.allowed ? auth.input : rawArgs;
+    yield this._event('tool.start', { toolCallId: toolUseId, tool: chainName });
+    yield this._event('tool_call', { toolCallId: toolUseId, tool: chainName, arguments: args });
+
+    if (!auth.allowed) {
+      log.warn({ jobId: task.jobId, tool: chainName, layer: auth.layer }, 'Tool call denied');
+      yield this._event('tool_result', { toolCallId: toolUseId, error: auth.reason });
+      yield this._event('tool.end', { toolCallId: toolUseId, tool: chainName, error: auth.reason });
+      return `Denied: ${auth.reason}`;
+    }
+
+    const started = Date.now();
+    let result: string;
+    let error: string | undefined;
+    try {
+      result = await tool.run(args, chain.signal);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      result = `Error: ${error}`;
+    }
+    const durationMs = Date.now() - started;
+    await runPostToolUse(chain, chainName, args, error ? { error } : result, toolUseId, durationMs);
+
+    yield this._event('tool_result', error ? { toolCallId: toolUseId, error } : { toolCallId: toolUseId, result });
+    yield this._event('tool.end', { toolCallId: toolUseId, tool: chainName, duration_ms: durationMs, error });
+    return result;
+  }
+
+  /**
+   * One streamed /api/chat round. Yields text as it arrives and returns the
+   * assembled reply. Ollama sends each tool call whole inside a chunk's
+   * `message.tool_calls`; they are accumulated across chunks.
+   */
+  private async *_chatOnce(
+    messages: OllamaMessage[],
+    tools: Map<string, OllamaTool> | null,
+    signal: AbortSignal,
+  ): AsyncGenerator<AgentEvent, ChatReply> {
+    const body: Record<string, unknown> = { model: this._model, messages, stream: true };
+    if (tools && tools.size > 0) {
+      body['tools'] = [...tools.entries()].map(([name, t]) => ({
+        type: 'function',
+        function: { name, description: t.description, parameters: t.parameters },
+      }));
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this._endpoint}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return { kind: 'aborted', text: '' };
+      const msg = err instanceof Error ? err.message : String(err);
+      this._lastAuthStatus = { valid: false, expiresAt: null, canAutoRefresh: true, requiresInteraction: false };
+      return { kind: 'error', message: `Ollama connection failed: ${msg}. Is Ollama running? (ollama serve)` };
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch((readErr) => {
+        log.error({ err: readErr }, 'Failed to read error response body');
+        return '';
+      });
+      if (tools && response.status === 400 && /does not support tools/i.test(text)) {
+        return { kind: 'tools_unsupported' };
+      }
+      return { kind: 'error', message: `Ollama API error ${response.status}: ${text}` };
+    }
+    if (!response.body) return { kind: 'error', message: 'Ollama returned no response body' };
+
+    let text = '';
+    const toolCalls: OllamaToolCall[] = [];
+    try {
+      for await (const line of this._streamLines(response.body)) {
+        if (!line.trim()) continue;
+        let chunk: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(line);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Invalid JSON chunk: expected object');
+          }
+          chunk = parsed as Record<string, unknown>;
+        } catch (parseErr: unknown) {
+          // TYPE-05: Log malformed NDJSON lines instead of silently dropping them
+          const error = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
+          log.error({ err: error, rawContent: line.slice(0, 200) }, 'Failed to parse streaming JSON line');
+          continue;
+        }
+        if (typeof chunk['error'] === 'string') return { kind: 'error', message: `Ollama error: ${chunk['error']}` };
+
+        const msg = chunk['message'] as Record<string, unknown> | undefined;
+        if (msg?.['content']) {
+          const piece = String(msg['content']);
+          text += piece;
+          yield this._event('text', { text: piece });
+        }
+        if (Array.isArray(msg?.['tool_calls'])) {
+          for (const c of msg['tool_calls'] as unknown[]) {
+            const fn = (c as { function?: { name?: unknown; arguments?: unknown } })?.function;
+            if (fn && typeof fn.name === 'string') {
+              toolCalls.push({ function: { name: fn.name, arguments: fn.arguments } });
+            }
+          }
+        }
+        if (chunk['done']) {
+          return {
+            kind: 'ok',
+            text,
+            toolCalls,
+            model: typeof chunk['model'] === 'string' ? chunk['model'] : undefined,
+            evalCount: typeof chunk['eval_count'] === 'number' ? chunk['eval_count'] : undefined,
+          };
+        }
+      }
+      return { kind: 'error', message: 'Ollama stream ended without a done chunk' };
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return { kind: 'aborted', text };
+      const msg = err instanceof Error ? err.message : String(err);
+      return { kind: 'error', message: `Ollama streaming error: ${msg}` };
+    }
+  }
+
   /**
    * Build Ollama chat messages from TaskContext.
    */
-  private _buildMessages(task: TaskContext): Array<{ role: string; content: string }> {
-    const messages: Array<{ role: string; content: string }> = [];
+  private _buildMessages(task: TaskContext): OllamaMessage[] {
+    const messages: OllamaMessage[] = [];
 
     // System message with context
     const systemParts: string[] = [];
@@ -348,38 +529,6 @@ export class OllamaProvider implements LLMProvider {
     messages.push({ role: 'user', content: task.task });
 
     return messages;
-  }
-
-  /**
-   * Parse tool calls from Ollama response text.
-   * Ollama models may output tool calls in JSON format within the text.
-   */
-  private _parseToolCalls(text: string): Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> {
-    const toolCalls: Array<{ toolCallId: string; tool: string; arguments: Record<string, unknown> }> = [];
-
-    // Look for JSON blocks that resemble tool calls
-    const jsonRegex = /```json\s*(\{.*?\})\s*```/gs;
-    let match;
-    while ((match = jsonRegex.exec(text)) !== null) {
-      try {
-        const data = JSON.parse(match[1]!);
-        if (data && typeof data === 'object' && !Array.isArray(data) &&
-            typeof data.tool === 'string' &&
-            data.arguments && typeof data.arguments === 'object' && !Array.isArray(data.arguments)) {
-          toolCalls.push({
-            toolCallId: `call_${Math.random().toString(36).slice(2, 9)}`,
-            tool: data.tool,
-            arguments: data.arguments as Record<string, unknown>,
-          });
-        }
-      } catch (parseErr: unknown) {
-        // TYPE-05: Log malformed tool call JSON instead of silently dropping
-        const error = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
-        log.error({ err: error, rawContent: match[1]?.slice(0, 200) }, 'Failed to parse JSON tool call');
-      }
-    }
-
-    return toolCalls;
   }
 
   /**

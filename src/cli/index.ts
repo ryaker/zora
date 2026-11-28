@@ -91,7 +91,7 @@ function createProviders(config: ZoraConfig, policy: ZoraPolicy): LLMProvider[] 
         providers.push(new GeminiProvider({ config: pConfig, cwd: workspace }));
         break;
       case 'ollama':
-        providers.push(new OllamaProvider({ config: pConfig }));
+        providers.push(new OllamaProvider({ config: pConfig, cwd: workspace, policy }));
         break;
       case 'openai':
         providers.push(new OpenAIProvider({ config: pConfig }));

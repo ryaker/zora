@@ -99,6 +99,12 @@ Non-negotiable invariants:
   There is no `customTools` SDK option — passing one silently drops every tool.
   Tool input schemas are JSON Schema in Zora and must be converted to Zod before
   reaching `createSdkMcpServer()`.
+- **Non-SDK providers reuse the chain, not a copy of it.** `OllamaProvider` runs
+  its own tool loop (#254) and authorises every call with
+  `authorizeToolCall()` in `src/tools/enforced-tool-call.ts`, which consumes the
+  same `TaskContext.sdkHooks` and `canUseTool` and fails closed (no
+  `canUseTool` → deny). Zora tools reach the chain MCP-qualified, as on the SDK
+  path. Guarded by `tests/security/ollama-tool-enforcement.test.ts`.
 
 Built-in tool hooks, in registration order: `SensitiveFileGuard`, `ShellSafety`,
 `AuditLog`, `RateLimit`, `SecretRedact`, `IrreversibilityScorer`.

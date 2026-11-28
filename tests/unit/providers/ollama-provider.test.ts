@@ -102,9 +102,11 @@ describe('OllamaProvider', () => {
         events.push(event);
       }
 
-      expect(events.length).toBeGreaterThan(0);
-      expect(events[0]!.type).toBe('error');
-      expect((events[0]!.content as any).message).toContain('Ollama connection failed');
+      // #254: a turn.start precedes the request now; the error is still the outcome.
+      const error = events.find(e => e.type === 'error');
+      expect(error).toBeDefined();
+      expect((error!.content as any).message).toContain('Ollama connection failed');
+      expect(events.some(e => e.type === 'done')).toBe(false);
     });
   });
 
