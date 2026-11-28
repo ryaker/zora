@@ -664,6 +664,12 @@ export interface ApprovalTomlConfig {
   enabled?: boolean;
   /** Seconds to wait for an answer before denying. Default 300. */
   timeout_s?: number;
+  /**
+   * #265: who may answer, as `"<adapter>:<id>"` (e.g. `"slack:U0123"`,
+   * `"signal:+14155551234"`). Unset means every `trusted_admin` in
+   * channel-policy.toml, on every human channel adapter.
+   */
+  approvers?: string[];
 }
 
 // ─── MCP Configuration ──────────────────────────────────────────────

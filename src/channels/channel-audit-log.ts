@@ -24,7 +24,7 @@ export interface AuditEntry {
   adapter: string;
   sender: string;
   channelId: string;
-  action: 'intake_allowed' | 'intake_denied' | 'quarantine_flag' | 'tool_call' | 'budget_exhausted';
+  action: 'intake_allowed' | 'intake_denied' | 'quarantine_flag' | 'tool_call' | 'budget_exhausted' | 'approval_reply';
   status: 'ok' | 'blocked' | 'error';
   metadata?: Record<string, unknown>;
 }

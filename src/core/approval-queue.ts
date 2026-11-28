@@ -217,9 +217,17 @@ export class ApprovalQueue {
     return this._pending.size;
   }
 
-  /** Parse "/approve ZORA-XXXX allow" style messages. Returns null if not an approval command. */
+  /**
+   * Parse "approve ZORA-XXXX allow" style messages. Returns null if not an approval command.
+   *
+   * #265: the leading slash is optional. Slack treats a DM that starts with
+   * `/` as a slash command and refuses to send an unregistered one, so a
+   * `/approve` reply to Zora's Slack DM never arrived. The match is anchored
+   * at both ends: without the end anchor `allow-30m` matched as plain `allow`,
+   * because the alternation tried `allow` first.
+   */
   parseApprovalCommand(text: string): { token: string; decision: ApprovalDecision } | null {
-    const match = /^\/approve\s+(ZORA-[A-Z0-9]{4})\s+(allow|deny|allow-30m|allow-session)/i.exec(text.trim());
+    const match = /^\/?approve\s+(ZORA-[A-Z0-9]{4})\s+(allow-30m|allow-session|allow|deny)\s*$/i.exec(text.trim());
     if (!match) return null;
     return {
       token: match[1]!.toUpperCase(),
@@ -236,11 +244,13 @@ export class ApprovalQueue {
       `Risk: ${entry.score}/100 (${this._riskLabel(entry.score)})\n` +
       `Job: \`${entry.jobId}\`\n` +
       `Token: \`${entry.id}\`\n\n` +
+      // #265: shown without the slash, which Slack would swallow; the parser
+      // accepts it with or without.
       `Reply with:\n` +
-      `  /approve ${entry.id} allow — approve once\n` +
-      `  /approve ${entry.id} allow-30m — approve all similar (30 min)\n` +
-      `  /approve ${entry.id} allow-session — approve all this session\n` +
-      `  /approve ${entry.id} deny — block this action\n\n` +
+      `  approve ${entry.id} allow — approve once\n` +
+      `  approve ${entry.id} allow-30m — approve all similar (30 min)\n` +
+      `  approve ${entry.id} allow-session — approve all this session\n` +
+      `  approve ${entry.id} deny — block this action\n\n` +
       `Auto-denies in ${timeoutMin} minutes.`;
 
     return this._sendFn!(message);

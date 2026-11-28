@@ -15,6 +15,7 @@ import { ChannelPolicyGate } from './channel-policy-gate.js';
 import { CapabilityResolver } from './capability-resolver.js';
 import { QuarantineProcessor } from './quarantine-processor.js';
 import { ChannelAuditLog } from './channel-audit-log.js';
+import type { ChannelApprovalBridge } from './channel-approval-bridge.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('channel-manager');
@@ -37,6 +38,7 @@ export class ChannelManager {
   private readonly _resolver: CapabilityResolver;
   private readonly _quarantine: QuarantineProcessor;
   private readonly _audit: ChannelAuditLog | null;
+  private _approvals: ChannelApprovalBridge | null = null;
 
   constructor(
     orchestrator: TaskSubmittable,
@@ -99,6 +101,20 @@ export class ChannelManager {
   }
 
   /**
+   * #265: route approval replies (`approve ZORA-XXXX allow`, slash optional) to the
+   * ApprovalQueue. Checked after the policy gate, before quarantine: the
+   * command is parsed by a fixed regex and never reaches an LLM.
+   */
+  setApprovalBridge(bridge: ChannelApprovalBridge): void {
+    this._approvals = bridge;
+  }
+
+  /** All registered adapters — the approval bridge broadcasts over these. */
+  getAdapters(): IChannelAdapter[] {
+    return [...this._adapters.values()];
+  }
+
+  /**
    * Retrieve a registered adapter by name.
    * Used by WebhookServer to dispatch incoming webhook payloads.
    */
@@ -133,6 +149,24 @@ export class ChannelManager {
           metadata: { reason: 'policy_gate' }
         });
         return;
+      }
+
+      // 1b. #265: an approval reply from an approver is answered here and
+      // goes no further. Only gate-allowed senders get this far, and the
+      // bridge also checks the sender against the approver list.
+      if (this._approvals) {
+        const handled = await this._approvals.tryHandle(adapter, msg);
+        if (handled.consumed) {
+          await this._audit?.append({
+            adapter: adapter.name,
+            sender,
+            channelId,
+            action: 'approval_reply',
+            status: handled.accepted ? 'ok' : 'blocked',
+            metadata: {},
+          });
+          return;
+        }
       }
 
       // 2. Capability Resolver: Get permissions for the sender/channel

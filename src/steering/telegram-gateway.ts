@@ -231,7 +231,9 @@ export class TelegramGateway {
     /**
      * /approve ZORA-XXXX allow|deny|allow-30m|allow-session
      */
-    this._bot.onText(/\/approve\s+(.+)/, (msg, match) => {
+    // #265: approval questions now show the reply without a slash (Slack
+    // swallows `/approve`), so accept both spellings here too.
+    this._bot.onText(/^\/?approve\s+(.+)/i, (msg, match) => {
       const userId = msg.from?.id?.toString();
       if (!userId || !this._allowedUsers.has(userId)) return;
       if (!this._approvalQueue) return;
