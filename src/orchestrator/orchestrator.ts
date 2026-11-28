@@ -2468,7 +2468,11 @@ export class Orchestrator {
     ];
 
     // Wire existing memory tools (memory_search, memory_save, memory_forget)
-    const memoryTools = createMemoryTools(this._memoryManager, this._validationPipeline);
+    const memoryTools = createMemoryTools(
+      this._memoryManager,
+      this._validationPipeline,
+      this._graphClient,
+    );
 
     // Add recall_context tool for daily notes retrieval
     const recallContextTool: CustomToolDefinition = {

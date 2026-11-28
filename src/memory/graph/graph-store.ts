@@ -459,26 +459,41 @@ export class GraphStore {
 
   /** Memory IDs that mention an entity of this exact kind and name. */
   sourcesOf(name: string, kind: EntityKind, limit = 20): string[] {
+    return this.sourcesOfChecked(name, kind, limit).ids;
+  }
+
+  /** Like sourcesOf, but distinguishes a failed query (ok:false) from an empty one (#194c). */
+  sourcesOfChecked(name: string, kind: EntityKind, limit = 20): { ids: string[]; ok: boolean } {
     const anchor = exactId(name, MAX_PROP_LENGTH);
-    if (!anchor || !isEntityKind(kind)) return [];
-    const rows = this._query(
+    if (!anchor || !isEntityKind(kind)) return { ids: [], ok: true };
+    const rows = this._queryChecked(
       `MATCH (a:OntEntity {okey: $okey})-[r:EVIDENCED_BY]->(m:Memory) RETURN m.memId LIMIT ${this._maxRows}`,
       { okey: ontKey(kind, anchor) },
     );
-    return uniqueIds(rows, 'm.memId', limit);
+    return rows ? { ids: uniqueIds(rows, 'm.memId', limit), ok: true } : { ids: [], ok: false };
   }
 
   /** Memory IDs that assert exactly this (from, predicate, to) relation. */
   relationSources(from: EntityRecord, to: EntityRecord, predicate: string, limit = 20): string[] {
+    return this.relationSourcesChecked(from, to, predicate, limit).ids;
+  }
+
+  /** Like relationSources, but distinguishes a failed query from an empty one (#194c). */
+  relationSourcesChecked(
+    from: EntityRecord,
+    to: EntityRecord,
+    predicate: string,
+    limit = 20,
+  ): { ids: string[]; ok: boolean } {
     const f = exactId(from.name, MAX_PROP_LENGTH);
     const t = exactId(to.name, MAX_PROP_LENGTH);
     const p = exactId(predicate, MAX_PREDICATE);
-    if (!f || !t || !p || !isEntityKind(from.kind) || !isEntityKind(to.kind)) return [];
-    const rows = this._query(
+    if (!f || !t || !p || !isEntityKind(from.kind) || !isEntityKind(to.kind)) return { ids: [], ok: true };
+    const rows = this._queryChecked(
       `MATCH (a:Assertion {fromKey: $f, toKey: $t, predicate: $p}) RETURN a.memId LIMIT ${this._maxRows}`,
       { f: ontKey(from.kind, f), t: ontKey(to.kind, t), p },
     );
-    return uniqueIds(rows, 'a.memId', limit);
+    return rows ? { ids: uniqueIds(rows, 'a.memId', limit), ok: true } : { ids: [], ok: false };
   }
 
   /** Relate two entities, creating either endpoint if needed. */
@@ -944,6 +959,11 @@ export class GraphStore {
    * that cannot answer is strictly better than a graph that breaks the caller.
    */
   private _query(cypher: string, params?: CypherParams): Array<Record<string, unknown>> {
+    return this._queryChecked(cypher, params) ?? [];
+  }
+
+  /** Rows, or null when the query threw (so callers can tell failure from empty). */
+  private _queryChecked(cypher: string, params?: CypherParams): Array<Record<string, unknown>> | null {
     try {
       const result =
         params && Object.keys(params).length > 0
@@ -952,7 +972,7 @@ export class GraphStore {
       return result.rows;
     } catch (err) {
       log.debug({ err, cypher: cypher.slice(0, 200) }, 'Graph query failed; returning no rows');
-      return [];
+      return null;
     }
   }
 }

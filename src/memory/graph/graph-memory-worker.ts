@@ -139,12 +139,15 @@ async function runWorker(port: NonNullable<typeof parentPort>, data: GraphWorker
       case 'failuresForTool':
         return { op: 'failuresForTool', failures: store.failuresForTool(query.tool, query.limit) };
       case 'sourcesOf':
-        return { op: 'sourcesOf', memIds: store.sourcesOf(query.name, query.kind, query.limit) };
+        {
+          const r = store.sourcesOfChecked(query.name, query.kind, query.limit);
+          return { op: 'sourcesOf', memIds: r.ids, ok: r.ok };
+        }
       case 'relationSources':
-        return {
-          op: 'relationSources',
-          memIds: store.relationSources(query.from, query.to, query.predicate, query.limit),
-        };
+        {
+          const r = store.relationSourcesChecked(query.from, query.to, query.predicate, query.limit);
+          return { op: 'relationSources', memIds: r.ids, ok: r.ok };
+        }
       case 'stats':
         return { op: 'stats', stats: store.stats() };
     }
@@ -328,6 +331,32 @@ export class GraphMemoryClient {
   // ── Reads ─────────────────────────────────────────────────────────
 
   /** Memory IDs evidencing an entity. Empty unless the ontology flag is on. */
+  /**
+   * Failure-aware variant for retrieval (#194c): same result as sourcesOf, but
+   * THROWS when the query failed (worker down, timeout, store error) so callers
+   * can fall back instead of treating failure as "no evidence". [] means a genuine
+   * empty result. Legacy sourcesOf is unchanged.
+   */
+  async sourcesOfChecked(name: string, kind: EntityKind, limit = 20): Promise<string[]> {
+    if (!this._config.ontology) return [];
+    const r = await this._query({ op: 'sourcesOf', name, kind, limit });
+    if (r?.op !== 'sourcesOf' || r.ok === false) throw new Error('graph sourcesOf query failed');
+    return r.memIds;
+  }
+
+  /** Failure-aware relationSources; throws on failure, [] on genuine empty (#194c). */
+  async relationSourcesChecked(
+    from: EntityRecord,
+    to: EntityRecord,
+    predicate: string,
+    limit = 20,
+  ): Promise<string[]> {
+    if (!this._config.ontology) return [];
+    const r = await this._query({ op: 'relationSources', from, to, predicate, limit });
+    if (r?.op !== 'relationSources' || r.ok === false) throw new Error('graph relationSources query failed');
+    return r.memIds;
+  }
+
   async sourcesOf(name: string, kind: EntityKind, limit = 20): Promise<string[]> {
     if (!this._config.ontology) return [];
     const r = await this._query({ op: 'sourcesOf', name, kind, limit });

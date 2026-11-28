@@ -376,6 +376,14 @@ export class MemoryManager {
    * Searches structured memory items by query, ranked by salience.
    * Uses MiniSearch BM25+ scores composed with salience factors.
    */
+  /** Score one already-resolved item the same way searchMemory does (no BM25 term). */
+  scoreMemoryItem(item: MemoryItem, query: string, relevanceFloor = 0): SalienceScore {
+    // relevanceFloor lets a validated ontology match contribute relevance even with no
+    // query-word overlap; recency/frequency/trust still scale it (#194c).
+    const relevance = Math.max(this._scorer.relevanceScore(query, item), relevanceFloor);
+    return this._scorer.scoreItem(item, query, relevance);
+  }
+
   async searchMemory(query: string, limit?: number): Promise<SalienceScore[]> {
     const results = await this._structuredMemory.searchItemsWithScores(query);
     const scored = results.map(({ item, bm25Score }) =>
