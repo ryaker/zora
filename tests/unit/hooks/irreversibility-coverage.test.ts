@@ -24,7 +24,14 @@ const COVERED: Array<[string, string]> = [
   ['Read', 'read_file'],
   ['WebFetch', 'http_request'],
   ['Task', 'spawn_agent'],
-  ['mcp__zora-tools__send_message', 'send_message'],
+  // #265: Zora's own server speaks as Zora; a bare send_message does not.
+  ['mcp__zora-tools__send_message', 'send_as_zora'],
+  ['send_message', 'send_message'],
+  // #265: connector tools are classified by effect, not looked up by name.
+  ['mcp__gmail__send_email', 'send_message'],
+  ['mcp__x__post_tweet', 'send_message'],
+  ['mcp__drive__share_file', 'send_message'],
+  ['mcp__calendar__delete_event', 'remote_delete'],
   ['git_push', 'git_push'],
   ['rm', 'file_delete'],
   // #194c: retrieval is a read (~5), not an unscored unknown action.
@@ -41,13 +48,10 @@ const GAPS = [
   'mcp__zora-tools__graph_recall',
   'mcp__zora-tools__delegate_to_subagent',
   'mcp__zora-tools__list_subagents',
-  // Representative third-party MCP verbs from the OpenBot kinds (pay, credential,
-  // share, publish, send, delete) — none is recognized by name.
-  'mcp__gmail__send_email',
+  // Representative third-party MCP verbs from the OpenBot kinds. Send, share,
+  // publish and delete are classified by effect since #265; pay and credential
+  // are #200's human-only kinds and are not recognized yet.
   'mcp__stripe__create_refund',
-  'mcp__drive__share_file',
-  'mcp__x__post_tweet',
-  'mcp__calendar__delete_event',
   'mcp__vault__rotate_api_key',
 ];
 

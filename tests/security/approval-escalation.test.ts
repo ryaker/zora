@@ -72,7 +72,11 @@ describe('SEC-27 — a flagged tool call escalates to the approval queue', () =>
    * block that is untyped in config and so has to be attached the same way
    * `boot()` reads it.
    */
-  async function boot(opts: { approval?: Record<string, unknown>; autoApproveLowRisk?: boolean } = {}): Promise<{
+  async function boot(opts: {
+    approval?: Record<string, unknown>;
+    autoApproveLowRisk?: boolean;
+    mcpServers?: ZoraConfig['mcp'];
+  } = {}): Promise<{
     runner: ToolHookRunner;
     queue: ApprovalQueue;
   }> {
@@ -85,6 +89,9 @@ describe('SEC-27 — a flagged tool call escalates to the approval queue', () =>
     }
     if (opts.approval) {
       (config as unknown as Record<string, unknown>)['approval'] = opts.approval;
+    }
+    if (opts.mcpServers) {
+      config.mcp = opts.mcpServers;
     }
 
     orchestrator = new Orchestrator({
@@ -165,6 +172,41 @@ describe('SEC-27 — a flagged tool call escalates to the approval queue', () =>
    * nobody on the other end: with no send handler the queue auto-denies, which
    * is the same answer the hook gave before this gap.
    */
+  /**
+   * #265: with no `[approval]` block the queue is on, and turning it on must
+   * not by itself let anything through. Nothing can deliver the question, so
+   * the answer is the same flat deny the disabled default gave.
+   */
+  it('is enabled by default and still denies when nothing can deliver the request', async () => {
+    const { runner, queue } = await boot();
+
+    const result = await callFlaggedTool(runner, 'sec27-default-nobody');
+
+    expect(queue.isEnabled()).toBe(true);
+    expect(result.allow).toBe(false);
+    expect(result.reason).toMatch(/^approval_required:80/);
+  }, 40_000);
+
+  /**
+   * #265: boot() reads `[mcp.servers.<name>] acts_as` into the scorer. Zora
+   * speaking through its own bot runs; a connector acting as Richard asks.
+   */
+  it('lets a send through an acts_as = "zora" server run, and asks for any other', async () => {
+    const { runner, queue } = await boot({
+      approval: { enabled: true, timeout_s: 20 },
+      mcpServers: { servers: { 'zora-slack': { command: 'x', acts_as: 'zora' }, 'rich-gmail': { command: 'y' } } },
+    });
+    const { sent } = autoRespond(queue, 'deny');
+
+    const asZora = await runner.runBefore({ jobId: 'sec265-zora', tool: 'mcp__zora-slack__slack_send_message', arguments: {} });
+    expect(asZora.allow).toBe(true);
+    expect(sent, 'Zora talking as itself must not ask').toEqual([]);
+
+    const asRich = await runner.runBefore({ jobId: 'sec265-rich', tool: 'mcp__rich-gmail__send_email', arguments: {} });
+    expect(sent.length).toBe(1);
+    expect(asRich.allow).toBe(false);
+  }, 40_000);
+
   it('denies when approval is enabled but nothing can deliver the request', async () => {
     const { runner } = await boot({ approval: { enabled: true, timeout_s: 20 } });
 
@@ -175,12 +217,14 @@ describe('SEC-27 — a flagged tool call escalates to the approval queue', () =>
   }, 40_000);
 
   /**
-   * Default behaviour is unchanged. `approval.enabled` defaults to false, and a
-   * disabled queue must deny outright rather than block a task for five minutes
-   * waiting for a reply nobody was asked for.
+   * An explicitly disabled queue must deny outright rather than block a task
+   * for five minutes waiting for a reply nobody was asked for.
+   *
+   * #265: approval is now on by default, so "disabled" has to be asked for
+   * with `enabled = false`. The property guarded here is unchanged.
    */
   it('denies outright, without asking, when approval is disabled', async () => {
-    const { runner, queue } = await boot();
+    const { runner, queue } = await boot({ approval: { enabled: false } });
     const { sent } = autoRespond(queue, 'allow');
 
     const result = await callFlaggedTool(runner, 'sec27-disabled');
@@ -247,20 +291,25 @@ describe('SEC-27 — session-risk escalation bypasses the blanket allow', () => 
  * that only one of them had.
  */
 describe('SEC-27 — approvalConfigFrom falls back instead of weakening the gate', () => {
-  it('defaults to disabled when the block is absent or not a table', () => {
-    expect(approvalConfigFrom(undefined).enabled).toBe(false);
-    expect(approvalConfigFrom(null).enabled).toBe(false);
-    expect(approvalConfigFrom('yes').enabled).toBe(false);
-    expect(approvalConfigFrom(42).enabled).toBe(false);
+  // #265: approval is on by default. Disabling it is what has to be explicit,
+  // because "disabled" means a flagged action is a flat deny nobody can lift.
+  // Enabling it is still fail-closed: no transport, a timeout or a deny reply
+  // all deny (see the boot() cases above).
+  it('defaults to enabled when the block is absent or not a table', () => {
+    expect(approvalConfigFrom(undefined).enabled).toBe(true);
+    expect(approvalConfigFrom(null).enabled).toBe(true);
+    expect(approvalConfigFrom('yes').enabled).toBe(true);
+    expect(approvalConfigFrom(42).enabled).toBe(true);
+    expect(approvalConfigFrom({}).enabled).toBe(true);
   });
 
-  it('only enables on a real boolean true', () => {
+  it('only disables on a real boolean false', () => {
+    expect(approvalConfigFrom({ enabled: false }).enabled).toBe(false);
+    // A string is what a TOML typo produces. Refusing to guess keeps the
+    // default, and the default asks rather than letting anything through.
+    expect(approvalConfigFrom({ enabled: 'false' }).enabled).toBe(true);
+    expect(approvalConfigFrom({ enabled: 0 }).enabled).toBe(true);
     expect(approvalConfigFrom({ enabled: true }).enabled).toBe(true);
-    // A string is what a TOML typo produces. Truthy in JS, and enabling the
-    // gate on a typo is the benign direction — but so is refusing to guess.
-    expect(approvalConfigFrom({ enabled: 'true' }).enabled).toBe(false);
-    expect(approvalConfigFrom({ enabled: 1 }).enabled).toBe(false);
-    expect(approvalConfigFrom({}).enabled).toBe(false);
   });
 
   it('rejects a timeout large enough to make setTimeout fire immediately', () => {

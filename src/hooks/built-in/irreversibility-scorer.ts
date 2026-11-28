@@ -19,6 +19,7 @@ import { getGlobalForecaster } from '../../core/memory-risk-forecaster.js';
 import { getAgentPolicy, checkScoreLimit } from '../../core/project-policy.js';
 import { normalizeToolName } from '../../security/tool-names.js';
 import type { ApprovalQueue } from '../../core/approval-queue.js';
+import { ZORA_MCP_SERVER_NAME } from '../../tools/zora-mcp-server.js';
 
 const log = createLogger('irreversibility-scorer');
 
@@ -29,6 +30,14 @@ export interface IrreversibilityConfig {
     flag: number;      // default 65
     auto_deny: number; // default 95
   };
+  /**
+   * #265: MCP servers whose sends speak as Zora itself (its own Slack bot, its
+   * own Telegram bot), from `[mcp.servers.<name>] acts_as = "zora"`. A send
+   * through one of these is Zora conversing, not Zora posting as Richard, so it
+   * scores as `send_as_zora` and does not ask. Every other server is assumed to
+   * act as the user. `zora-tools` is always included.
+   */
+  selfIdentityServers?: readonly string[];
 }
 
 /**
@@ -101,10 +110,71 @@ const TOOL_ACTION_MAP: Record<string, string> = {
  * every name the SDK actually calls resolves to a scored category — a check
  * that fails loudly if the map drifts from the SDK's vocabulary again.
  */
-export function toolToAction(tool: string): string {
+export function toolToAction(tool: string, selfIdentityServers: readonly string[] = []): string {
   const normalized = normalizeToolName(tool);
-  return TOOL_ACTION_MAP[normalized] ?? normalized;
+  const mapped = TOOL_ACTION_MAP[normalized];
+  if (mapped === 'send_message') {
+    return isSelfIdentityServer(tool, selfIdentityServers) ? 'send_as_zora' : mapped;
+  }
+  if (mapped) return mapped;
+  // #265: classify unmapped tools by what they do. Before this, a connector's
+  // `send_email` or `delete_event` resolved to its own name, had no score and
+  // fell through to the 50-point default — under the flag threshold, so it ran
+  // without asking while Zora's own `send_message` (80) asked. A send through
+  // a connector that acts as Richard now asks; one that acts as Zora does not.
+  const effect = classifyByEffect(normalized);
+  if (effect === 'send') {
+    return isSelfIdentityServer(tool, selfIdentityServers) ? 'send_as_zora' : 'send_message';
+  }
+  if (effect === 'delete') return 'remote_delete';
+  return normalized;
 }
+
+/** Read-shaped verbs: a tool that starts with one of these never sends or deletes. */
+const READ_VERBS = new Set(['get', 'list', 'read', 'search', 'fetch', 'view', 'find', 'query', 'describe', 'show', 'download']);
+/** Verbs that put something in front of another person. Drafts are not sends. */
+const SEND_VERBS = new Set(['send', 'post', 'reply', 'forward', 'publish', 'tweet', 'share', 'invite', 'respond', 'schedule', 'broadcast']);
+/** Verbs that remove something outside the local filesystem. */
+// `remove` and `archive` are left out on purpose: `remove_label` and
+// `archive_thread` are everyday, reversible tidying, and asking about them is
+// the "approval for every little thing" this change exists to stop.
+const DELETE_VERBS = new Set(['delete', 'trash', 'purge', 'destroy', 'erase', 'unpublish']);
+
+/**
+ * #265: effect classification on a normalised tool name's `_`/`-` tokens.
+ * Deliberately conservative: a read verb anywhere in leading position wins, so
+ * `get_message` and `list_scheduled_posts` stay reads.
+ */
+export function classifyByEffect(normalized: string): 'send' | 'delete' | null {
+  const tokens = normalized.split(/[_\-.]+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  if (READ_VERBS.has(tokens[0]!)) return null;
+  // `slack_send_message`: the verb may follow a service prefix.
+  if (tokens.some((t) => DELETE_VERBS.has(t))) return 'delete';
+  if (tokens.some((t) => SEND_VERBS.has(t))) return 'send';
+  return null;
+}
+
+/** The server segment of `mcp__<server>__<tool>`, or undefined for a bare name. */
+function mcpServerOf(tool: string): string | undefined {
+  const parts = tool.trim().split('__');
+  return parts.length >= 3 && parts[0]!.toLowerCase() === 'mcp' ? parts[1]!.toLowerCase() : undefined;
+}
+
+/**
+ * #265: does this tool speak as Zora? Only an MCP-qualified name can: a bare
+ * name has no server, so there is nothing to vouch for its identity and it is
+ * treated as acting for the user.
+ */
+function isSelfIdentityServer(tool: string, selfIdentityServers: readonly string[]): boolean {
+  const server = mcpServerOf(tool);
+  if (!server) return false;
+  if (server === ZORA_TOOLS_SERVER) return true;
+  return selfIdentityServers.some((s) => s.toLowerCase() === server);
+}
+
+/** Zora's own MCP server: anything it sends is Zora speaking. */
+const ZORA_TOOLS_SERVER = ZORA_MCP_SERVER_NAME.toLowerCase();
 
 export class IrreversibilityScorerHook implements ToolHook {
   readonly name = 'irreversibility-scorer';
@@ -153,7 +223,7 @@ export class IrreversibilityScorerHook implements ToolHook {
     }
 
     const approved = await queue.request({
-      action: toolToAction(ctx.tool),
+      action: toolToAction(ctx.tool, this._config.selfIdentityServers),
       score,
       jobId: ctx.jobId,
       tool: ctx.tool,
@@ -170,7 +240,7 @@ export class IrreversibilityScorerHook implements ToolHook {
   }
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
-    const actionKey = toolToAction(ctx.tool);
+    const actionKey = toolToAction(ctx.tool, this._config.selfIdentityServers);
     const score = this._config.scores[actionKey] ?? 50;  // default 50 for unknown
 
     // Check project policy score ceiling FIRST — it may be tighter than global thresholds.
@@ -266,8 +336,16 @@ export const DEFAULT_IRREVERSIBILITY_SCORES: Record<string, number> = {
   shell_exec:             50,
   shell_exec_destructive: 90,
   send_message:           80,
+  // #265: Zora conversing as itself (its own bot in a channel, replying to
+  // Richard). Richard, 2026-11-28: talking to him in Slack should not need an
+  // approval on send; posting *as him* is what asks (send_message above).
+  send_as_zora:           10,
   spawn_agent:            15,
-  file_delete:            95,
+  // #265: was 95, which equals auto_deny, so a delete was refused even when a
+  // human said yes. Every comparable assistant (Claude Duet, OpenAI dots, Meta
+  // Muse) asks before deleting rather than refusing; 85 asks.
+  file_delete:            85,
+  remote_delete:          85,
   http_request:           30,
 };
 
