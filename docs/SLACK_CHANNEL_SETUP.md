@@ -34,3 +34,23 @@ role = "trusted_user"
 
 `SLACK_LIVE=1 SLACK_BOT_TOKEN=… SLACK_APP_TOKEN=… SLACK_TEST_CHANNEL=C… npx vitest run tests/integration/slack-live.test.ts`
 posts a message as the bot and verifies the Socket Mode connection. Skipped by default.
+
+## Running behind OneCLI (placeholder tokens)
+
+Zora does not need the real Slack tokens in its environment. Create a OneCLI
+agent for Zora, assign it the Slack bot and app secrets (host `slack.com`,
+header `Authorization`, with the Bearer prefix option on), then start the daemon
+with placeholders and the proxy settings OneCLI gives that agent:
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-onecli-managed
+export SLACK_APP_TOKEN=xapp-onecli-managed
+export HTTPS_PROXY=http://x:<agent-token>@<gateway-host>:10255
+export NODE_EXTRA_CA_CERTS=<path to the OneCLI gateway CA>
+zora-agent start
+```
+
+When `HTTPS_PROXY` is set the adapter routes both the Web API and the Socket
+Mode WebSocket through it (`slackProxyAgent`). Verified against a real
+workspace: `auth.test` and a Socket Mode connection succeed with placeholder
+tokens through the gateway.

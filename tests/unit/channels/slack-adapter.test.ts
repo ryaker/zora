@@ -92,3 +92,16 @@ describe('SlackAdapter', () => {
     expect(t.socket.disconnect).toHaveBeenCalled();
   });
 });
+
+describe('slackProxyAgent (#235)', () => {
+  it('returns undefined without proxy env', async () => {
+    const { slackProxyAgent } = await import('../../../src/channels/slack/slack-adapter.js');
+    expect(slackProxyAgent({})).toBeUndefined();
+  });
+
+  it('builds a proxy agent from HTTPS_PROXY (either case)', async () => {
+    const { slackProxyAgent } = await import('../../../src/channels/slack/slack-adapter.js');
+    expect(slackProxyAgent({ HTTPS_PROXY: 'http://x:y@localhost:10255' })).toBeDefined();
+    expect(slackProxyAgent({ https_proxy: 'http://localhost:10255' })).toBeDefined();
+  });
+});

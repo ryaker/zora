@@ -17,12 +17,15 @@
  * one mention and run the task twice.
  *
  * Credentials (bot token xoxb-…, app token xapp-…) are never read here; the
- * caller passes them in, and the daemon sources them from the environment that
- * OneCLI provisions.
+ * caller passes them in. Under OneCLI they are placeholders and the gateway
+ * injects the real tokens; if HTTPS_PROXY is set the SDK clients route through
+ * it (see slackProxyAgent).
  */
 
 import { SocketModeClient } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import type { Agent } from 'node:http';
 import { ChannelIdentity, ChannelMessage } from '../../types/channel.js';
 import { IChannelAdapter, SendOptions } from '../channel-adapter.js';
 import { createLogger } from '../../utils/logger.js';
@@ -59,6 +62,22 @@ const MAX_CHUNK = 3500;
 /** Remember recent message IDs so Slack redeliveries don't run a task twice. */
 const SEEN_LIMIT = 500;
 
+/**
+ * Build an HTTP(S) proxy agent from the standard proxy env vars, or undefined.
+ *
+ * Why: when Zora runs behind the OneCLI gateway (dogfooding on the M2 Air), the
+ * real Slack tokens never enter the process — it sends placeholder tokens and
+ * the gateway injects the real ones. Node's http/https/ws stack ignores
+ * HTTPS_PROXY on its own, so without an explicit agent the Slack calls would go
+ * direct and be rejected (invalid_auth). The SDKs reuse this agent for the
+ * Socket Mode WebSocket too. (#235)
+ */
+export function slackProxyAgent(env: NodeJS.ProcessEnv = process.env): Agent | undefined {
+  const url = env['HTTPS_PROXY'] ?? env['https_proxy'];
+  if (!url) return undefined;
+  return new HttpsProxyAgent(url);
+}
+
 export class SlackAdapter implements IChannelAdapter {
   readonly name = 'slack';
   private readonly _socket: SlackSocket;
@@ -68,8 +87,15 @@ export class SlackAdapter implements IChannelAdapter {
   private readonly _seen = new Set<string>();
 
   constructor(botToken: string, appToken: string, options: SlackAdapterOptions = {}) {
-    this._socket = options.socket ?? (new SocketModeClient({ appToken }) as unknown as SlackSocket);
-    this._web = options.web ?? (new WebClient(botToken) as unknown as SlackWeb);
+    const agent = slackProxyAgent();
+    this._socket =
+      options.socket ??
+      (new SocketModeClient({
+        appToken,
+        ...(agent ? { clientOptions: { agent } } : {}),
+      }) as unknown as SlackSocket);
+    this._web =
+      options.web ?? (new WebClient(botToken, agent ? { agent } : {}) as unknown as SlackWeb);
   }
 
   async start(): Promise<void> {
