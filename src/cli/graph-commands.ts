@@ -78,11 +78,10 @@ export async function showProvenance(client: GraphInspectClient, memId: string, 
 }
 
 export function registerGraphInspectCommands(
-  memory: Command,
+  graph: Command,
   makeClient: () => Promise<GraphInspectClient> = () => GraphMemoryClient.create(graphConfigFromEnv()),
   out: (line: string) => void = console.log,
 ): void {
-  const graph = memory.command('graph').description('Inspect the auto-ontology (read-only; needs ZORA_GRAPH_MEMORY=1 ZORA_GRAPH_ONTOLOGY=1)');
 
   const run = async (fn: (c: GraphInspectClient) => Promise<string[]>): Promise<void> => {
     const client = await makeClient();

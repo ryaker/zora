@@ -46,7 +46,7 @@ describe('memory graph inspect (#242)', () => {
     const client = fake();
     const lines: string[] = [];
     const program = new Command().exitOverride();
-    registerGraphInspectCommands(program.command('memory'), async () => client, l => lines.push(l));
+    registerGraphInspectCommands(program.command('memory').command('graph'), async () => client, l => lines.push(l));
     await program.parseAsync(['node', 'x', 'memory', 'graph', 'provenance', 'm1']);
     expect(client.memoryProvenance).toHaveBeenCalledWith('m1', 50);
     expect(client.close).toHaveBeenCalledTimes(1);
