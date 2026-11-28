@@ -17,7 +17,12 @@
 export interface ActionGrant {
   /** Stable id, written to the log with every action it covers. */
   id: string;
-  /** Action key, as classified by PolicyEngine (e.g. `git_push`). */
+  /**
+   * Action key, as classified by PolicyEngine (e.g. `git_push`).
+   * WARNING: only git_push has constraint matching. A grant for any other action
+   * covers EVERY instance of it for the job, i.e. it is a blanket for that action.
+   * Add constraints for an action here before granting it from a submitter.
+   */
   action: string;
   /** git_push only: branch globs (`*` wildcard) the push may target. Required for git_push. */
   branches?: string[];
@@ -50,6 +55,9 @@ export function parseGitPush(command: string): { remote: string; branches: strin
   }
   if (positional.length < 2) return null; // bare `git push` / no explicit branch
   const [remote, ...refspecs] = positional as [string, ...string[]];
+  // Review (#271): only a configured remote *name* counts. A URL or path as the
+  // "remote" would push the repo to an arbitrary host with no prompt.
+  if (!/^[A-Za-z0-9._-]+$/.test(remote) || remote.startsWith('-')) return null;
   const branches: string[] = [];
   for (const spec of refspecs) {
     if (spec.startsWith('+') || spec.startsWith(':')) return null; // force / delete
