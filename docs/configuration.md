@@ -612,3 +612,15 @@ enabled = false
 tools = []
 audit_dry_runs = true
 ```
+
+## `[advisor]` (consult_advisor tool)
+
+Off by default. When `enabled = true` and a second, non-rank-1 `claude-sdk` provider is configured, the executor (e.g. Ollama) gets a `consult_advisor` tool. It makes one tool-less frontier call and returns text; the advisor never acts. Arguments pass through the normal PreToolUse hooks (secret redaction), advice is scanned by LeakDetector, and each call is audited.
+
+```toml
+[advisor]
+enabled = true
+model = "claude-fable-5-2"   # default
+max_calls_per_task = 3       # default
+max_calls_per_day = 20       # default
+```

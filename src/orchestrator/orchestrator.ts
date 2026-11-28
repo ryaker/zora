@@ -62,6 +62,7 @@ import { MemoryManager } from '../memory/memory-manager.js';
 import { ExtractionPipeline } from '../memory/extraction-pipeline.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { createGraphTools } from '../tools/graph-tools.js';
+import { createAdvisorTool, advisorJobContext, ADVISOR_SYSTEM_PROMPT } from '../tools/advisor-tool.js';
 import { GraphMemoryClient, graphConfigFromEnv, OntologyExtractor, ONTOLOGY_SYSTEM_PROMPT, enrichMemoriesWithOntology } from '../memory/graph/index.js';
 import { createSkillTools } from '../tools/skill-tool.js';
 import { createSubagentTools } from '../tools/subagent-tool.js';
@@ -1609,6 +1610,8 @@ export class Orchestrator {
     // ERR-20: remember which provider is running this job so cancelTask(jobId)
     // has something to abort. Rebound on every failover hop.
     this._activeJobProviders.set(taskContext.jobId, provider);
+    // #261: bind the job id for the advisor tool's per-task call cap.
+    advisorJobContext.enterWith(taskContext.jobId);
 
     try {
       try {
@@ -2560,7 +2563,48 @@ export class Orchestrator {
     // whose backing store is not there.
     const graphTools = this._graphClient ? createGraphTools(this._graphClient) : [];
 
-    return [...permissionTools, ...memoryTools, ...graphTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools];
+
+    // #261: consult_advisor. Registered only when enabled AND a claude-sdk
+    // provider exists that is not the rank-1 provider (a frontier model
+    // advising itself is pointless). Tool-less single turn; see advisor-tool.ts.
+    const advisorTools: CustomToolDefinition[] = [];
+    const advisorCfg = this._config.advisor;
+    if (advisorCfg?.enabled) {
+      const ranked = [...(this._config.providers ?? [])].filter(p => p.enabled).sort((a, b) => a.rank - b.rank);
+      const frontier = ranked.slice(1).find(p => p.type === 'claude-sdk');
+      if (frontier) {
+        advisorTools.push(createAdvisorTool({
+          config: advisorCfg,
+          leakDetector: this._leakDetector,
+          ask: (prompt, model) => new ProviderPromptRunner({
+            selectProvider: (t) => this._router.selectProvider(t),
+            modelPreference: frontier.name,
+            modelOverride: model,
+            systemPrompt: ADVISOR_SYSTEM_PROMPT,
+            jobLabel: 'advisor',
+            disableTools: true,
+            maxTurns: 1,
+            canUseTool: this._policyEngine.createCanUseTool(),
+            hooks: buildSdkHooks(this._toolHookRunner, () => 'advisor'),
+            timeoutMs: 120_000,
+          }).run(prompt),
+          audit: (e) => {
+            void this._auditLogger.log({
+              jobId: e.jobId,
+              eventType: 'tool_invocation',
+              timestamp: new Date().toISOString(),
+              provider: frontier.name,
+              toolName: 'consult_advisor',
+              parameters: { model: e.model, promptChars: e.promptChars },
+              result: { outcome: e.outcome, outputChars: e.outputChars },
+            });
+          },
+        }));
+      } else {
+        log.warn('[advisor] enabled but no non-primary claude-sdk provider is configured; consult_advisor not registered');
+      }
+    }
+    return [...permissionTools, ...memoryTools, ...graphTools, recallContextTool, ...skillTools, planWorkflowTool, ...subagentTools, ...spawnTools, ...advisorTools];
   }
 
   /**

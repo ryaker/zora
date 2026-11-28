@@ -36,6 +36,8 @@ export interface ProviderPromptRunnerOptions {
   fallbackProviders?: () => LLMProvider[];
   /** Provider name to prefer (Router `modelPreference`), e.g. agent.heartbeat_provider. */
   modelPreference?: string;
+  /** #261: model id for claude-sdk (advisor). */
+  modelOverride?: string;
   systemPrompt: string;
   /** Stable label for audit/rate-limit attribution ('heartbeat', 'compress', …). */
   jobLabel: string;
@@ -73,6 +75,7 @@ export class ProviderPromptRunner implements PromptRunner {
       sdkHooks: o.hooks,
       disableTools: o.disableTools,
       modelPreference: o.modelPreference,
+      modelOverride: o.modelOverride,
     };
 
     const first = await o.selectProvider(task);

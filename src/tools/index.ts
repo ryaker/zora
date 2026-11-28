@@ -10,3 +10,4 @@ export * from './memory-tools.js';
 export * from './tool-factory.js';
 export * from './planning-tool.js';
 export * from './subagent-tool.js';
+export * from './advisor-tool.js';
