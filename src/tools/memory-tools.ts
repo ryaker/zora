@@ -151,8 +151,34 @@ export const LOW_CONFIDENCE_SCORE = 0.15;
 const GRAPH_RELEVANCE_FLOOR = 0.5;
 
 /** Case-insensitive mention check: re-validates against CURRENT item content. */
-function mentions(item: MemoryItem, name: string): boolean {
-  return item.summary.toLowerCase().includes(name.toLowerCase());
+function mentions(item: MemoryItem, names: readonly string[]): boolean {
+  const text = item.summary.toLowerCase();
+  return names.some(n => text.includes(n.toLowerCase()));
+}
+
+/** Caller-supplied aliases per entity (#245): bounded so a long list cannot widen matching unboundedly. */
+const MAX_ALIASES = 5;
+const MAX_ALIAS_LENGTH = 100;
+
+/**
+ * Names that count as "this entity is still mentioned": the canonical name plus
+ * optional aliases ("Sparrow" for SparrowDB). Aliases only widen the stale-evidence
+ * check; the graph still finds candidates by the exact canonical (kind, name), so an
+ * alias can never pull in a memory the graph did not already link to the entity.
+ * Aliases shorter than 3 chars are ignored: they match too much text.
+ */
+function evidenceNames(raw: unknown, canonical: string): string[] {
+  const out = [canonical];
+  const aliases = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).aliases : undefined;
+  if (Array.isArray(aliases)) {
+    for (const a of aliases) {
+      if (out.length > MAX_ALIASES) break;
+      if (typeof a !== 'string') continue;
+      const t = a.trim();
+      if (t.length >= 3 && t.length <= MAX_ALIAS_LENGTH && !out.includes(t)) out.push(t);
+    }
+  }
+  return out;
 }
 
 function parseEntity(raw: unknown): EntityRecord | null {
@@ -202,6 +228,11 @@ function createMemorySearchTool(
           properties: {
             name: { type: 'string' },
             kind: { type: 'string', enum: ['person', 'project', 'tool', 'concept'] },
+            aliases: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional other names the memory text may use for this entity (e.g. "Sparrow" for SparrowDB). Only widens the still-mentioned check.',
+            },
           },
         },
         relation: {
@@ -257,17 +288,17 @@ function createMemorySearchTool(
         const from = parseEntity(rel?.from);
         const to = parseEntity(rel?.to);
         const predicate = typeof rel?.predicate === 'string' ? rel.predicate.trim() : '';
-        const cands: Array<{ id: string; names: string[] }> = [];
+        const cands: Array<{ id: string; names: string[][] }> = [];
         try {
           let budget = MAX_GRAPH_CANDIDATES;
           if (entity) {
             const ids = await graph.sourcesOfChecked(entity.name, entity.kind, budget);
-            for (const id of ids.slice(0, budget)) cands.push({ id, names: [entity.name] });
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [evidenceNames(input.entity, entity.name)] });
             budget -= Math.min(ids.length, budget);
           }
           if (from && to && predicate && budget > 0) {
             const ids = await graph.relationSourcesChecked(from, to, predicate, budget);
-            for (const id of ids.slice(0, budget)) cands.push({ id, names: [from.name, to.name] });
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [evidenceNames(rel?.from, from.name), evidenceNames(rel?.to, to.name)] });
           }
         } catch {
           cands.length = 0; // partial failure => lexical-only, per documented fallback
