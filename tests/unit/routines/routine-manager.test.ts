@@ -231,6 +231,35 @@ prompt = "say hello"
     });
   });
 
+  describe('does (#202)', () => {
+    it('notify routines submit with the notify tool allowlist; act/absent submit none', async () => {
+      await manager.runRoutine({ routine: { name: 'n', schedule: '* * * * *', does: 'notify' }, task: { prompt: 'p' } });
+      const notifyCall = submitTaskMock.mock.calls.at(-1)![0];
+      expect(notifyCall.toolAllowlist).toEqual(expect.arrayContaining(['read', 'memory_search']));
+      expect(notifyCall.toolAllowlist).not.toEqual(expect.arrayContaining(['bash']));
+      for (const does of ['act', undefined] as const) {
+        await manager.runRoutine({ routine: { name: 'a', schedule: '* * * * *', does }, task: { prompt: 'p' } });
+        expect(submitTaskMock.mock.calls.at(-1)![0].toolAllowlist).toBeUndefined();
+      }
+    });
+
+    it.each(['"nofity"', '"ACT"', '5'])('rejects invalid does (%s) at load', async (does) => {
+      await fs.mkdir(path.join(testDir, 'routines'), { recursive: true });
+      const toml = `[routine]\nname = "bad"\nschedule = "* * * * *"\ndoes = ${does}\n[task]\nprompt = "x"\n`;
+      await fs.writeFile(path.join(testDir, 'routines', 'bad.toml'), toml, 'utf8');
+      await manager.init();
+      expect(manager.scheduledCount).toBe(0);
+    });
+
+    it('loads does = "notify" from toml', async () => {
+      await fs.mkdir(path.join(testDir, 'routines'), { recursive: true });
+      const toml = `[routine]\nname = "ok"\nschedule = "* * * * *"\ndoes = "notify"\n[task]\nprompt = "x"\n`;
+      await fs.writeFile(path.join(testDir, 'routines', 'ok.toml'), toml, 'utf8');
+      await manager.init();
+      expect(manager.scheduledCount).toBe(1);
+    });
+  });
+
   it('passes model_preference to submitTask via runRoutine', async () => {
     const definition: RoutineDefinition = {
       routine: { name: 'r-model', schedule: '* * * * *', model_preference: 'claude-haiku' },

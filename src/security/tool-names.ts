@@ -172,3 +172,17 @@ export const DESTRUCTIVE_TOOL_NAMES = [
   'rm',
   'mv',
 ] as const;
+
+/**
+ * Tools a `does = "notify"` routine may call (#202): read the filesystem, read
+ * memory, and tell the user. Deliberately no shell, write, network-fetch or
+ * subagent-spawn tool — a notify routine observes and reports, it never acts.
+ * Enforced through the per-job capability token's `allowedTools`, not a prompt hint.
+ */
+export const NOTIFY_ROUTINE_TOOLS = [
+  ...READ_TOOL_ALIASES,
+  'memory_search',
+  'graph_recall',
+  'recall_context',
+  'notify_user',
+] as const;

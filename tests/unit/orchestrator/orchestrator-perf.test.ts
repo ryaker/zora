@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { Orchestrator } from '../../../src/orchestrator/orchestrator.js';
+import { createCapabilityToken } from '../../../src/security/capability-tokens.js';
 import { DEFAULT_CONFIG } from '../../../src/config/defaults.js';
 import { MockProvider } from '../../fixtures/mock-provider.js';
 import type { TaskContext, ZoraConfig, ZoraPolicy } from '../../../src/types.js';
@@ -517,6 +518,22 @@ describe('PERF-06 — custom tools built once at boot', () => {
     const a = tools(orchestrator)._buildTokenAwareCanUseTool('job-a');
     const b = tools(orchestrator)._buildTokenAwareCanUseTool('job-b');
     expect(a).not.toBe(b);
+  }, 30_000);
+
+  it('#202: a job whose token carries a tool allowlist is denied tools outside it, before the policy engine', async () => {
+    const o = orchestrator as unknown as {
+      _activeTokens: Map<string, unknown>;
+      _policy: ZoraPolicy;
+      _buildTokenAwareCanUseTool(id: string): (t: string, i: Record<string, unknown>, o: { signal: AbortSignal }) => Promise<{ behavior: string; message?: string }>;
+    };
+    o._activeTokens.set('job-notify', createCapabilityToken('job-notify', o._policy, { allowedTools: ['read', 'memory_search'] }));
+    const canUse = o._buildTokenAwareCanUseTool('job-notify');
+    const signal = new AbortController().signal;
+    for (const denied of ['Bash', 'Write', 'WebFetch', 'mcp__zora-tools__memory_save']) {
+      const r = await canUse(denied, { command: 'ls', path: '/tmp/x' }, { signal });
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/not in token's allowed tools/);
+    }
   }, 30_000);
 
   it('exposes the same tool names as a fresh build', () => {

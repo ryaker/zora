@@ -313,6 +313,8 @@ export interface TaskContext {
   modelPreference?: string; // per-routine override (provider name)
   maxCostTier?: CostTier;   // cost ceiling for routing (e.g. 'included' skips 'premium')
   maxTurns?: number;
+  /** #202: tool allowlist for this job (from a `does = "notify"` routine). Persisted so a resumed job keeps it. */
+  toolAllowlist?: string[];
   timeout?: number;
   /** ERR-09: Hard recovery budget — tracks retry and turn limits */
   errorBudget?: ErrorBudget;
@@ -696,7 +698,15 @@ export interface RoutineConfig {
    * (silently ignoring it would make a "stop when done" routine run forever).
    */
   until?: RoutineUntil;
+  /**
+   * What the routine may do (#202). "act" (default) = unchanged. "notify" = read
+   * and message tools only, enforced by the per-job capability token's
+   * allowedTools, not a prompt hint. Invalid values reject the routine.
+   */
+  does?: RoutineDoes;
 }
+
+export type RoutineDoes = 'act' | 'notify';
 
 export interface RoutineUntil {
   /** Stop once a run's result text contains this (case-sensitive, 1–200 chars). */

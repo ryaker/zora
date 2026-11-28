@@ -159,3 +159,21 @@ describe('isTokenExpired', () => {
     expect(isTokenExpired(token)).toBe(true);
   });
 });
+
+describe('NOTIFY_ROUTINE_TOOLS (#202)', () => {
+  it('allows read/memory tools in SDK and MCP spellings, denies shell/write/network/spawn', async () => {
+    const { NOTIFY_ROUTINE_TOOLS } = await import('../../../src/security/tool-names.js');
+    const token = createCapabilityToken('job-notify', makePolicy(), { allowedTools: [...NOTIFY_ROUTINE_TOOLS] });
+    for (const ok of ['Read', 'Grep', 'Glob', 'mcp__zora-tools__memory_search', 'mcp__zora-tools__graph_recall']) {
+      expect(enforceCapability(token, { type: 'tool', target: ok }).allowed).toBe(true);
+    }
+    for (const bad of ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'mcp__zora-tools__memory_save', 'mcp__zora-tools__delegate_to_subagent']) {
+      expect(enforceCapability(token, { type: 'tool', target: bad }).allowed).toBe(false);
+    }
+  });
+
+  it('a token without an allowlist stays open (act routines unchanged)', () => {
+    const token = createCapabilityToken('job-act', makePolicy());
+    expect(enforceCapability(token, { type: 'tool', target: 'Bash' }).allowed).toBe(true);
+  });
+});
