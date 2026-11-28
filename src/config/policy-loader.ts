@@ -56,6 +56,8 @@ export function parsePolicy(raw: Record<string, unknown>): ZoraPolicy {
       irreversible: (actPol?.['irreversible'] as string[]) ?? [],
       always_flag: (actPol?.['always_flag'] as string[]) ?? [],
       scores: (actPol?.['scores'] as Record<string, number>) ?? undefined,
+      // #200: unset keeps the scorer's default human-only kinds.
+      human_only: Array.isArray(actPol?.['human_only']) ? (actPol!['human_only'] as string[]) : undefined,
       thresholds: {
         warn: (actPol?.['thresholds'] as Record<string, number> | undefined)?.['warn'] ?? 40,
         flag: (actPol?.['thresholds'] as Record<string, number> | undefined)?.['flag'] ?? 65,
