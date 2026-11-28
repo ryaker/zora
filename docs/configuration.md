@@ -454,6 +454,7 @@ The policy file controls what the agent is allowed to do. It is enforced by the 
 | `reversible` | string[] | `[]` | Action categories considered reversible (informational). |
 | `irreversible` | string[] | `[]` | Action categories considered irreversible (informational). |
 | `always_flag` | string[] | `[]` | Action categories that always require human approval. Use `"*"` to flag everything. |
+| `human_only` | string[] | `["credential_change", "money_movement"]` | Action kinds Zora never performs, even with approval; it tells you what to do yourself instead. Credential changes include connector tools like `change_password` or `rotate_api_key` and shell `passwd`. Money movement means transfers, wires, withdrawals, payouts and trades. Payments are not on the list: they ask (`payment`, score 90). See `docs/adr/ADR-009-human-only-actions.md`. |
 
 **Action categories** (auto-classified by the PolicyEngine):
 

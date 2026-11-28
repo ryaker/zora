@@ -178,7 +178,7 @@ in `docs/reviews/2026-08-code-review.md`.
 | Config + policy reference | `docs/configuration.md` |
 | Writing a provider | `docs/provider-guide.md` |
 | Runtime safety layer | `docs/advanced/security-runtime.md` |
-| Architecture decisions | `docs/adr/ADR-001`–`ADR-008` |
+| Architecture decisions | `docs/adr/ADR-001`–`ADR-009` |
 | Architecture (TOGAF, ontologies) | `docs/architecture/` |
 | Signal channel setup | `docs/SIGNAL_CHANNEL_SETUP.md` |
 | E2E / cross-LLM evaluation | `docs/testing/e2e-cross-llm-evaluation.md` |

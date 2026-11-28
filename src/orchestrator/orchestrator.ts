@@ -938,6 +938,7 @@ export class Orchestrator {
     const irreversibilityScorer = new IrreversibilityScorerHook({
       scores: { ...DEFAULT_IRREVERSIBILITY_SCORES, ...(this._policy.actions.scores ?? {}) },
       thresholds: this._policy.actions.thresholds ?? DEFAULT_IRREVERSIBILITY_THRESHOLDS,
+      ...(this._policy.actions.human_only ? { humanOnly: this._policy.actions.human_only } : {}),
       selfIdentityServers: Object.entries(this._config.mcp?.servers ?? {})
         .filter(([, entry]) => entry.acts_as === 'zora')
         .map(([name]) => name),

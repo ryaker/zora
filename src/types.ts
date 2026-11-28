@@ -785,6 +785,12 @@ export interface ActionsPolicy {
     flag: number;
     auto_deny: number;
   };
+  /**
+   * #200: action kinds Zora never performs, even with approval — Richard does
+   * them himself. Defaults to `["credential_change", "money_movement"]`. See
+   * docs/adr/ADR-009-human-only-actions.md.
+   */
+  human_only?: string[];
 }
 
 export interface NetworkPolicy {

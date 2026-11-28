@@ -38,7 +38,20 @@ export interface IrreversibilityConfig {
    * act as the user. `zora-tools` is always included.
    */
   selfIdentityServers?: readonly string[];
+  /**
+   * #200: action kinds that are denied outright, with no approval path, and
+   * handed back to Richard. Unset means DEFAULT_HUMAN_ONLY_KINDS.
+   */
+  humanOnly?: readonly string[];
 }
+
+/**
+ * #200: the never list. Claude Duet refuses trading securities and moving
+ * money between accounts even with approval; OpenAI dots keeps password
+ * changes with the user. Payments are not on it: those products ask first,
+ * and so does Zora (`payment` scores 90).
+ */
+export const DEFAULT_HUMAN_ONLY_KINDS: readonly string[] = ['credential_change', 'money_movement'];
 
 /**
  * Tool name → action key, for the `[actions.scores]` lookup.
@@ -123,6 +136,7 @@ export function toolToAction(tool: string, selfIdentityServers: readonly string[
   // without asking while Zora's own `send_message` (80) asked. A send through
   // a connector that acts as Richard now asks; one that acts as Zora does not.
   const effect = classifyByEffect(normalized);
+  if (effect === 'credential_change' || effect === 'money_movement' || effect === 'payment') return effect;
   if (effect === 'send') {
     return isSelfIdentityServer(tool, selfIdentityServers) ? 'send_as_zora' : 'send_message';
   }
@@ -134,6 +148,21 @@ export function toolToAction(tool: string, selfIdentityServers: readonly string[
 const READ_VERBS = new Set(['get', 'list', 'read', 'search', 'fetch', 'view', 'find', 'query', 'describe', 'show', 'download']);
 /** Verbs that put something in front of another person. Drafts are not sends. */
 const SEND_VERBS = new Set(['send', 'post', 'reply', 'forward', 'publish', 'tweet', 'share', 'invite', 'respond', 'schedule', 'broadcast']);
+/** #200: moving money or trading — never, even with approval. */
+const MONEY_MOVEMENT_TOKENS = new Set(['wire', 'withdraw', 'withdrawal', 'payout', 'trade', 'trading']);
+/** `transfer` alone is also a file or ownership transfer; it needs a money noun. */
+const MONEY_NOUNS = new Set(['funds', 'fund', 'money', 'balance', 'bank', 'cash', 'crypto', 'usd', 'ach']);
+/** #200: what a credential is called, and the verbs that change one. */
+const CREDENTIAL_TOKENS = new Set(['password', 'passwd', 'passphrase', '2fa', 'mfa', 'totp', 'otp', 'credential', 'credentials', 'apikey', 'recovery']);
+/** Two-word credential names (`api_key`, `access_token`), matched on the joined name. */
+const CREDENTIAL_PAIRS = /(^|_)(api|ssh|access|refresh|secret|private|signing)_(key|token)s?($|_)/;
+const CREDENTIAL_CHANGE_VERBS = new Set(['change', 'reset', 'rotate', 'set', 'update', 'create', 'revoke', 'regenerate', 'disable', 'enable', 'add']);
+/** #200: spending money. Asks (score 90), as in every comparable assistant. */
+const PAYMENT_TOKENS = new Set(['pay', 'payment', 'purchase', 'checkout', 'refund', 'buy', 'donate']);
+
+/** #200: shell commands that change a login credential. */
+const SHELL_CREDENTIAL_CHANGE = /(^|[;&|]\s*)(sudo\s+)?(passwd|chpasswd|usermod\s+(-p|--password))\b/;
+
 /** Verbs that remove something outside the local filesystem. */
 // `remove` and `archive` are left out on purpose: `remove_label` and
 // `archive_thread` are everyday, reversible tidying, and asking about them is
@@ -145,10 +174,24 @@ const DELETE_VERBS = new Set(['delete', 'trash', 'purge', 'destroy', 'erase', 'u
  * Deliberately conservative: a read verb anywhere in leading position wins, so
  * `get_message` and `list_scheduled_posts` stay reads.
  */
-export function classifyByEffect(normalized: string): 'send' | 'delete' | null {
+export function classifyByEffect(
+  normalized: string,
+): 'send' | 'delete' | 'credential_change' | 'money_movement' | 'payment' | null {
   const tokens = normalized.split(/[_\-.]+/).filter(Boolean);
   if (tokens.length === 0) return null;
   if (READ_VERBS.has(tokens[0]!)) return null;
+  // #200: checked before send/delete so `send_wire_transfer` is money moving,
+  // not a message, and `delete_api_key` is a credential change.
+  if (tokens.some((t) => MONEY_MOVEMENT_TOKENS.has(t))
+    || (tokens.includes('transfer') && tokens.some((t) => MONEY_NOUNS.has(t)))) {
+    return 'money_movement';
+  }
+  const namesCredential = tokens.some((t) => CREDENTIAL_TOKENS.has(t)) || CREDENTIAL_PAIRS.test(tokens.join('_'));
+  if (namesCredential
+    && tokens.some((t) => CREDENTIAL_CHANGE_VERBS.has(t) || DELETE_VERBS.has(t))) {
+    return 'credential_change';
+  }
+  if (tokens.some((t) => PAYMENT_TOKENS.has(t))) return 'payment';
   // `slack_send_message`: the verb may follow a service prefix.
   if (tokens.some((t) => DELETE_VERBS.has(t))) return 'delete';
   if (tokens.some((t) => SEND_VERBS.has(t))) return 'send';
@@ -240,7 +283,24 @@ export class IrreversibilityScorerHook implements ToolHook {
   }
 
   async run(ctx: ToolCallContext): Promise<ToolHookResult> {
-    const actionKey = toolToAction(ctx.tool, this._config.selfIdentityServers);
+    let actionKey = toolToAction(ctx.tool, this._config.selfIdentityServers);
+    // #200: `passwd` and friends change a credential from the shell.
+    if (actionKey === 'shell_exec' && typeof ctx.arguments?.['command'] === 'string'
+      && SHELL_CREDENTIAL_CHANGE.test(ctx.arguments['command'])) {
+      actionKey = 'credential_change';
+    }
+
+    // #200: human-only kinds are refused before scoring, so no score, no
+    // blanket window and no approval can let them through. The reason tells
+    // the model to hand the step back to Richard rather than retry it.
+    const humanOnly = this._config.humanOnly ?? DEFAULT_HUMAN_ONLY_KINDS;
+    if (humanOnly.includes(actionKey)) {
+      log.warn({ tool: ctx.tool, kind: actionKey, jobId: ctx.jobId }, 'Human-only action refused');
+      return {
+        allow: false,
+        reason: `human_only:${actionKey} — Zora never does this, even with approval. Tell Richard exactly what needs doing so he can do it himself.`,
+      };
+    }
     const score = this._config.scores[actionKey] ?? 50;  // default 50 for unknown
 
     // Check project policy score ceiling FIRST — it may be tighter than global thresholds.
@@ -346,6 +406,9 @@ export const DEFAULT_IRREVERSIBILITY_SCORES: Record<string, number> = {
   // Muse) asks before deleting rather than refusing; 85 asks.
   file_delete:            85,
   remote_delete:          85,
+  // #200: asks. credential_change and money_movement are not scored: they
+  // are human-only and refused before scoring (DEFAULT_HUMAN_ONLY_KINDS).
+  payment:                90,
   http_request:           30,
 };
 
