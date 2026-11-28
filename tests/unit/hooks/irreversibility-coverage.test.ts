@@ -27,6 +27,9 @@ const COVERED: Array<[string, string]> = [
   ['mcp__zora-tools__send_message', 'send_message'],
   ['git_push', 'git_push'],
   ['rm', 'file_delete'],
+  // #194c: retrieval is a read (~5), not an unscored unknown action.
+  ['mcp__zora-tools__memory_search', 'read_file'],
+  ['mcp__zora-tools__recall_context', 'read_file'],
 ];
 
 // Names with no mapping: they resolve to themselves, which has no entry in the
@@ -35,7 +38,6 @@ const GAPS = [
   // Zora's own tools (src/tools)
   'mcp__zora-tools__memory_save',
   'mcp__zora-tools__memory_forget',
-  'mcp__zora-tools__memory_search',
   'mcp__zora-tools__graph_recall',
   'mcp__zora-tools__delegate_to_subagent',
   'mcp__zora-tools__list_subagents',

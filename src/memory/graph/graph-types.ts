@@ -234,8 +234,10 @@ export type GraphQueryResult =
   | { op: 'relatedTasks'; tasks: TaskResult[] }
   | { op: 'decisionChain'; decisions: DecisionResult[] }
   | { op: 'failuresForTool'; failures: FailureResult[] }
-  | { op: 'sourcesOf'; memIds: string[] }
-  | { op: 'relationSources'; memIds: string[] }
+  // `ok: false` marks a query that FAILED underneath (vs a genuine empty result);
+  // set only by the failure-aware path used by retrieval (#194c).
+  | { op: 'sourcesOf'; memIds: string[]; ok?: boolean }
+  | { op: 'relationSources'; memIds: string[]; ok?: boolean }
   | { op: 'stats'; stats: GraphStats };
 
 /** Main thread → worker. */

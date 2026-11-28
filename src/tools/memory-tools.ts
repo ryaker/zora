@@ -12,6 +12,8 @@ import type { MemoryManager } from '../memory/memory-manager.js';
 import type { StructuredMemory } from '../memory/structured-memory.js';
 import type { ValidationPipeline } from '../memory/validation-pipeline.js';
 import type { MemoryItem, MemoryItemType, SourceType } from '../memory/memory-types.js';
+import type { GraphMemoryClient } from '../memory/graph/graph-memory-worker.js';
+import { isEntityKind, type EntityRecord } from '../memory/graph/graph-types.js';
 
 const VALID_TYPES: MemoryItemType[] = ['profile', 'event', 'knowledge', 'behavior', 'skill', 'tool'];
 const VALID_SOURCE_TYPES: SourceType[] = ['user_instruction', 'agent_analysis', 'tool_output'];
@@ -22,12 +24,13 @@ const VALID_SOURCE_TYPES: SourceType[] = ['user_instruction', 'agent_analysis', 
 export function createMemoryTools(
   memoryManager: MemoryManager,
   validationPipeline: ValidationPipeline,
+  graph?: GraphMemoryClient | null,
 ): CustomToolDefinition[] {
   const structuredMemory = memoryManager.structuredMemory;
 
   return [
     createMemorySaveTool(structuredMemory, validationPipeline),
-    createMemorySearchTool(memoryManager),
+    createMemorySearchTool(memoryManager, graph ?? null),
     createMemoryForgetTool(memoryManager),
   ];
 }
@@ -118,7 +121,43 @@ function createMemorySaveTool(
   };
 }
 
-function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinition {
+/** Cap on graph-expanded candidates per search, across entity + relation lookups (#194c). */
+const MAX_GRAPH_CANDIDATES = 20;
+
+/** Structured-memory identity shape; anything else from the graph is dropped (#194c). */
+const MEMORY_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Lexical hits connected to the requested entity/relation are multiplied by this
+ * (#194c). The ontology is a relevance signal, not a gate: retrieval never needs
+ * a permission check, so there is no source-eligibility policy (Richard, #184 c).
+ */
+const GRAPH_BOOST = 1.25;
+
+/**
+ * Relevance an ontology-validated match contributes when its text shares no query
+ * words, so a positive `min_score` does not discard exactly the matches the graph
+ * exists to find. Still scaled by recency/frequency/source trust; hits stay
+ * provisional, not verified facts (#194c).
+ */
+const GRAPH_RELEVANCE_FLOOR = 0.5;
+
+/** Case-insensitive mention check: re-validates against CURRENT item content. */
+function mentions(item: MemoryItem, name: string): boolean {
+  return item.summary.toLowerCase().includes(name.toLowerCase());
+}
+
+function parseEntity(raw: unknown): EntityRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.name !== 'string' || r.name.trim() === '' || !isEntityKind(r.kind)) return null;
+  return { name: r.name.trim(), kind: r.kind };
+}
+
+function createMemorySearchTool(
+  memoryManager: MemoryManager,
+  graph: GraphMemoryClient | null,
+): CustomToolDefinition {
   return {
     name: 'memory_search',
     description:
@@ -146,6 +185,28 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
           type: 'number',
           description: 'Minimum salience score threshold (0-1 range typical).',
         },
+        entity: {
+          type: 'object',
+          description:
+            'Optional (#194c): also return PROVISIONAL candidate memories linked to this entity, e.g. {"name":"Zora","kind":"project"}. ' +
+            'Candidates are re-checked against current content but are not verified facts. Ignored unless ontology memory is enabled.',
+          properties: {
+            name: { type: 'string' },
+            kind: { type: 'string', enum: ['person', 'project', 'tool', 'concept'] },
+          },
+        },
+        relation: {
+          type: 'object',
+          description:
+            'Optional (#194c): also return PROVISIONAL candidate memories linked to this relation (both entities must appear in current content), e.g. ' +
+            '{"from":{"name":"Zora","kind":"project"},"to":{"name":"SparrowDB","kind":"tool"},"predicate":"uses"}. ' +
+            'Ignored unless ontology memory is enabled.',
+          properties: {
+            from: { type: 'object' },
+            to: { type: 'object' },
+            predicate: { type: 'string' },
+          },
+        },
       },
     },
     handler: async (input: Record<string, unknown>): Promise<unknown> => {
@@ -172,31 +233,85 @@ function createMemorySearchTool(memoryManager: MemoryManager): CustomToolDefinit
         });
       }
 
-      // Apply min_score filter
-      if (minScore !== undefined) {
-        scores = scores.filter(s => s.score >= minScore);
+      // #194c: entity/relation-aware ranking. The graph only proposes memory IDs; each
+      // must resolve through the same read path as a lexical hit (peekItem: archived or
+      // forgotten items don't resolve) and match the type filter. No visibility gate:
+      // retrieval is not an authorization point (#184 c). Graph hits are provisional
+      // relevance signals: lexical hits they connect to are boosted, graph-only hits are
+      // scored like any item and compete for the same limit and min_score.
+      // One shared candidate budget; any graph failure discards ALL graph candidates.
+      const graphScored: Array<{ itemId: string; score: number }> = [];
+      const graphIds = new Set<string>();
+      if (graph?.ontologyEnabled) {
+        const entity = parseEntity(input.entity);
+        const rel = input.relation as Record<string, unknown> | undefined;
+        const from = parseEntity(rel?.from);
+        const to = parseEntity(rel?.to);
+        const predicate = typeof rel?.predicate === 'string' ? rel.predicate.trim() : '';
+        const cands: Array<{ id: string; names: string[] }> = [];
+        try {
+          let budget = MAX_GRAPH_CANDIDATES;
+          if (entity) {
+            const ids = await graph.sourcesOfChecked(entity.name, entity.kind, budget);
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [entity.name] });
+            budget -= Math.min(ids.length, budget);
+          }
+          if (from && to && predicate && budget > 0) {
+            const ids = await graph.relationSourcesChecked(from, to, predicate, budget);
+            for (const id of ids.slice(0, budget)) cands.push({ id, names: [from.name, to.name] });
+          }
+        } catch {
+          cands.length = 0; // partial failure => lexical-only, per documented fallback
+        }
+        const lexicalIds = new Set(scores.map(s => s.itemId));
+        for (const { id, names } of cands) {
+          if (typeof id !== 'string' || !MEMORY_ID_RE.test(id) || graphIds.has(id)) continue;
+          // Lexical hits were already resolved above; others resolve via peekItem.
+          const item = itemMap.get(id) ?? await memoryManager.structuredMemory.peekItem(id);
+          if (!item) continue;
+          if (typeFilter && item.type !== typeFilter) continue;
+          if (!names.every(n => mentions(item, n))) continue; // stale-evidence guard
+          graphIds.add(id);
+          if (!lexicalIds.has(id)) {
+            itemMap.set(id, item);
+            graphScored.push({ itemId: id, score: memoryManager.scoreMemoryItem(item, query, GRAPH_RELEVANCE_FLOOR).score });
+          }
+        }
       }
 
-      // Trim to limit
-      scores = scores.slice(0, limit);
+      // Boost lexical hits connected to the requested entity/relation, add graph-only
+      // hits, then apply min_score uniformly and enforce the single caller limit.
+      const merged = [
+        ...scores.map(s => ({ itemId: s.itemId, score: graphIds.has(s.itemId) ? s.score * GRAPH_BOOST : s.score })),
+        ...graphScored,
+      ];
+      scores = merged
+        .filter(s => minScore === undefined || s.score >= minScore)
+        .sort((x, y) => y.score - x.score)
+        .slice(0, limit) as typeof scores;
 
       if (scores.length === 0) {
         return { results: [], message: 'No matching memories found.' };
       }
 
-      // Map results using the already-built itemMap
       const results = scores.map(s => {
         const item = itemMap.get(s.itemId);
-        return item
-          ? {
-              id: item.id,
-              content: item.summary,
-              type: item.type,
-              tags: item.tags,
-              score: Number(s.score.toFixed(3)),
-              created: item.created_at,
-            }
-          : null;
+        if (!item) return null;
+        const base: Record<string, unknown> = {
+          id: item.id,
+          content: item.summary,
+          type: item.type,
+          tags: item.tags,
+          score: Number(s.score.toFixed(3)),
+          created: item.created_at,
+          // Source type is returned as data; tool_output is labelled, never excluded.
+          source_type: item.source_type,
+        };
+        if (graphIds.has(item.id)) {
+          base.via = 'graph';
+          base.provisional = true; // relevance candidate; not a verified fact or citation grant
+        }
+        return base;
       }).filter(Boolean);
 
       return { results, count: results.length };
