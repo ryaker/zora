@@ -131,7 +131,20 @@ npm run test:e2e:real      # same, against real providers
 npm run dev            # tsx src/index.ts
 ```
 
-Before opening a PR: `npm run lint` and `npm run test:unit` must pass.
+Before opening a PR: `npm run lint` and `npm run test:unit` must pass. For a runtime
+change, also boot Zora per `.claude/skills/verify/SKILL.md` (throwaway `HOME`, never the real
+`~/.zora`).
+
+## Reviews and Merging
+
+`REVIEW.md` holds the review standards, the verdict format, and the **human-only areas**:
+auth and credentials, the quarantine screening step, budget and spend rules, and the review
+rules themselves. A PR touching one of those is never merged by an agent; it gets
+`needs-richard`. Any other PR may be squash-merged by Claude or zora-reviewer once the review
+is clean and CI is green. `.claude/skills/steward/SKILL.md` has the PR upkeep rules and
+`.claude/approvals.yml` the same gates in Claude Approvals form (observe mode, not yet live).
+This section is repeated here because local `/code-review` reads `CLAUDE.md` but not
+`REVIEW.md`.
 
 ## The Tracker
 

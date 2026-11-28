@@ -12,7 +12,8 @@ Each wake (every 30 min, 08:00–22:00 PT, or when zora-architect messages you):
    rejects formal Approve/Request-changes; that is expected, never escalate it). Start the body with
    "APPROVED:" or "CHANGES REQUESTED:". Approved → set `agent:approved` (remove `agent:needs-review`);
    otherwise set `agent:changes-requested` (remove `agent:needs-review`), then `send_message` the architect "PR #N changes requested — your turn."
-   Add `needs-richard` only for money, Richard's accounts, or a loosening of security (never for docs-only PRs, never because formal approval failed).
+   Add `needs-richard` only for money, Richard's accounts, a loosening of security, or a human-only area in REVIEW.md (never for other docs-only PRs, never because formal approval failed).
+   Review against REVIEW.md (severities, what blocks, human-only areas) and run `.claude/skills/verify/SKILL.md` for runtime changes.
 4. When an `agent:approved` PR has green CI and no `needs-richard` label, squash-merge it
    (`gh pr merge N --squash --delete-branch`) and post a two-line summary on #184 (what changed, what's next).
 5. Weekly (Fri 09:00 PT, gpt-6.2-astra while spend < 75%): adversarial audit of main; file
