@@ -22,3 +22,10 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
  * install should set `model` to something it has pulled.
  */
 export const DEFAULT_OLLAMA_MODEL = 'glm-5.3:cloud';
+
+/**
+ * Default model for the consult_advisor tool (#261). Richard's pick: Fable.
+ * The advisor is a tool-less, text-only frontier call made by an Ollama-first
+ * executor at hard decision points; it never acts.
+ */
+export const DEFAULT_ADVISOR_MODEL = 'claude-fable-5-2';

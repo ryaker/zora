@@ -311,6 +311,8 @@ export interface TaskContext {
   memoryContext: string[];
   history: AgentEvent[];
   modelPreference?: string; // per-routine override (provider name)
+  /** #261: per-call model id, honoured by claude-sdk only (advisor). */
+  modelOverride?: string;
   maxCostTier?: CostTier;   // cost ceiling for routing (e.g. 'included' skips 'premium')
   maxTurns?: number;
   timeout?: number;
@@ -644,6 +646,8 @@ export interface ZoraConfig {
   mcp?: McpConfig;
   /** SEC-27/#265: human-in-the-loop gate; see ApprovalTomlConfig. */
   approval?: ApprovalTomlConfig;
+  /** #261: consult_advisor tool config. */
+  advisor?: AdvisorConfig;
   /** ORCH-12: Lifecycle hook definitions from [[hooks]] config sections */
   hooks?: HookConfigEntry[];
   /** Per-project identity config — name, color, icon for multi-instance differentiation */
@@ -822,4 +826,18 @@ export interface WorkerCapabilityToken {
   maxExecutionTime: number;
   createdAt: Date;
   expiresAt: Date;
+}
+
+/**
+ * #261: `[advisor]` block. Off unless `enabled = true`. Ollama (or any rank-1
+ * provider) stays in charge; the advisor is a tool-less frontier consult.
+ */
+export interface AdvisorConfig {
+  enabled?: boolean;
+  /** Defaults to DEFAULT_ADVISOR_MODEL. */
+  model?: string;
+  /** Default 3. */
+  max_calls_per_task?: number;
+  /** Default 20. */
+  max_calls_per_day?: number;
 }

@@ -401,7 +401,7 @@ export class ClaudeProvider implements LLMProvider {
       // SDK-04: default to the current Opus generation. 'claude-sonnet-4-6' is
       // two generations back — it still works, but new installs were getting a
       // previous-generation default.
-      model: this._config.model ?? DEFAULT_CLAUDE_MODEL,
+      model: task.modelOverride ?? this._config.model ?? DEFAULT_CLAUDE_MODEL,
       cwd: this._cwd,
       maxTurns: task.maxTurns ?? this._config.max_turns ?? 200,
       // Prefer the per-task system prompt, falling back to the provider default.
